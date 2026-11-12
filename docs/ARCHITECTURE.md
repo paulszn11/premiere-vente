@@ -26,6 +26,21 @@ Le cahier des charges (§ 14.1) demande de séparer cinq blocs. Voici ce qui exi
                                                  └── (service gratuit) ────┴──────────────────────────────┘
 ```
 
+### Modèle multijoueur retenu (précisé par le propriétaire du projet)
+
+1. L'hôte lance le jeu sur son ordinateur et ouvre son monde : le serveur démarre chez lui (dans le navigateur ou avec le programme compagnon).
+2. Les autres joueurs entrent le **code privé** du monde et rejoignent la même partie (10 joueurs au maximum).
+3. Quand l'hôte quitte ou éteint son ordinateur, le monde s'arrête : tout le monde est déconnecté proprement, et le monde est sauvegardé chez l'hôte.
+4. À la prochaine connexion de l'hôte, tout le monde retrouve le monde grâce aux sauvegardes : positions et progression de chaque joueur, objets déplacés, constructions…
+
+### Le monde (phase 2)
+
+Le monde mesure 16 km × 16 km, est inspiré du Zimbabwe et fermé par des montagnes frontalières (voir la carte dans `docs/PHASE-2.md`). Il est entièrement calculé à partir de la graine (`src/shared/geography.ts`) : le relief et les biomes ne se transmettent jamais sur le réseau. Seuls les changements du monde (objets déplacés, constructions…) devront l'être, et seront sauvegardés par l'hôte.
+
+**Principe du jeu :** chaque joueur apparaît au hasard, à au moins 4 km des autres quand c'est possible. Aucune carte ne montre les autres joueurs : se retrouver est très difficile (`src/shared/spawn.ts`).
+
+À 8 km de l'origine, la précision des nombres à virgule utilisés par la carte graphique et la physique reste de l'ordre du millimètre. Il n'y a donc pas de tremblement visible, et pas besoin de recentrer le monde autour du joueur.
+
 ## 2. Technologies retenues
 
 | Domaine | Choix | Raisons | Alternatives écartées |
@@ -45,7 +60,8 @@ Le cahier des charges (§ 14.1) demande de séparer cinq blocs. Voici ce qui exi
 
 | Fichier | Taille | Compressé (gzip) |
 | --- | --- | --- |
-| Code du jeu + Babylon.js | 1,25 Mo | 283 Ko |
+| Code du jeu + Babylon.js | 1,29 Mo | 302 Ko |
+| Fil de calcul du terrain | 12 Ko | — |
 | Moteur physique (WebAssembly) | 3,08 Mo | 1,19 Mo |
 
 Le moteur physique est servi comme fichier `.wasm` séparé (et non intégré en texte base64, comme le fait le paquet « compat » de Rapier). C'est environ 30 % plus léger à télécharger, et le navigateur le compile pendant le téléchargement. Le service worker garde ensuite tout en mémoire locale.
@@ -56,7 +72,8 @@ Le moteur physique est servi comme fichier `.wasm` séparé (et non intégré en
 2. **Déterminisme.** Le relief, les arbres et le point d'apparition sont calculés à partir de la graine du monde avec des opérations qui donnent le même résultat au bit près sur tous les navigateurs (pas de `sin`, `cos`, `pow` dans la génération). Le monde n'a donc jamais besoin d'être transmis : seule la graine l'est. Un test vérifie que deux simulations identiques donnent des états identiques au bit près.
 3. **Le sol affiché = le sol physique.** Les triangles du terrain affiché sont découpés exactement comme ceux du moteur physique (vérifié par un test automatique).
 4. **Monde continu par morceaux (chunks) de 64 m**, chargés progressivement autour du joueur dans une limite de temps par image, avec plusieurs niveaux de détail et des « jupes » qui masquent les fissures entre morceaux.
-5. **Physique détaillée seulement près du joueur** (3 × 3 chunks), comme le demande le § 14.5.
+5. **Physique détaillée seulement près du joueur** (3 × 3 chunks), comme le demande le § 14.5. Les objets déplaçables n'existent physiquement que dans cette zone ; ailleurs, seule leur position est mémorisée.
+8. **Génération hors du fil principal.** Le terrain et la flore sont calculés dans un fil séparé (`terrain-worker.ts`). Les hauteurs physiques produites sont réutilisées par la simulation, ce qui évite les saccades sur téléphone.
 6. **Qualité adaptative** : niveau choisi d'après l'appareil, puis résolution ajustée automatiquement si la fluidité baisse.
 7. **Le client ne fait pas foi** (préparé pour la phase 8) : messages validés, commandes arrondies sur une grille fixe identique des deux côtés, rythme des commandes limité, tentatives de connexion limitées.
 
@@ -87,4 +104,6 @@ Le moteur physique est servi comme fichier `.wasm` séparé (et non intégré en
 
 ## 6. Décisions encore ouvertes
 
-Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : la liste des biomes, les dimensions du monde, le catalogue des créatures, les matériaux, le commerce, les véhicules, la réapparition, la durée de conservation des corps, le secours médical, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.
+Décisions prises depuis (12/11/2026) : biomes inspirés du Zimbabwe, monde de 16 km × 16 km, apparition au hasard loin des autres joueurs, 10 joueurs au maximum.
+
+Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux, le commerce, les véhicules, la réapparition, la durée de conservation des corps, le secours médical, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.

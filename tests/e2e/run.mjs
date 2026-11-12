@@ -243,7 +243,7 @@ async function touchScenario(browser) {
   const dev = await page.evaluate(() => window.__game.device);
   check('Téléphone détecté comme appareil tactile', dev.touch && dev.mobile, `qualité auto ${await page.evaluate(() => window.__game.autoPreset)}`);
   await startGame(page);
-  check('Les commandes tactiles s’affichent', await page.isVisible('[data-touch="jump"]'));
+  check('Les commandes tactiles s’affichent (sauter, courir, accroupir, prendre, lancer)', (await Promise.all(['jump', 'sprint', 'crouch', 'interact', 'throw'].map((b) => page.isVisible(`[data-touch="${b}"]`)))).every(Boolean));
   const vp = page.viewportSize();
   const cdp = await ctx.newCDPSession(page);
 
@@ -371,6 +371,183 @@ async function benchScenario(browser) {
   await ctx.close();
 }
 
+async function phase2Scenario(browser) {
+  console.log('\n— Phase 2 : monde du Zimbabwe, nage, escalade, objets');
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  await ctx.addInitScript(() => {
+    if (!localStorage.getItem('baz.settings.v1')) localStorage.setItem('baz.settings.v1', JSON.stringify({ worldSeed: 20261112, spawnSeed: 1, quality: 'low', adaptiveResolution: false }));
+  });
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'phase 2');
+  await page.goto(BASE);
+  await startGame(page);
+  let st = await sess(page);
+  check('Apparition au hasard dans le monde de 16 km', Math.abs(st.state.x) < 7100 && Math.abs(st.state.z) < 7100 && Math.hypot(st.state.x, st.state.z) > 50, `point (${Math.round(st.state.x)}, ${Math.round(st.state.z)}), biome ${st.biome}`);
+  check('Le terrain est calculé dans un fil séparé', st.jobsWorkers === true);
+
+  const settle = async () => {
+    await waitFor(page, () => window.__game.session().world.pending === 0, null, 60000).catch(() => undefined);
+    await sleep(400);
+  };
+
+  // Téléportation dans chaque région.
+  const tours = [
+    ['plateau', 'plateau'],
+    ['miombo', 'miombo'],
+    ['vallee', 'vallee'],
+    ['hautes_terres', 'hautes_terres'],
+    ['lowveld', 'lowveld'],
+    ['kalahari', 'kalahari'],
+    ['matobo', 'matobo'],
+  ];
+  for (const [id, biome] of tours) {
+    await page.evaluate((d) => window.__game.teleport(d), id);
+    await settle();
+    await waitFor(page, () => window.__game.session().state.grounded, null, 20000).catch(() => undefined);
+    st = await sess(page);
+    check(`Téléportation : ${id}`, st.biome === biome, `biome ${st.biome}, sol ${st.state.surface}, ${st.world.chunks} chunks, ${st.world.trees} arbres`);
+    await page.screenshot({ path: `${OUT}biome-${id}.png` });
+  }
+
+  // Nage et plongée.
+  await page.evaluate(() => window.__game.teleport('lac'));
+  await settle();
+  await sleep(1500);
+  st = await sess(page);
+  check('Dans le lac, on nage', st.state.mode === 1, `mode ${st.state.mode}, y ${st.state.y.toFixed(2)}`);
+  await page.screenshot({ path: `${OUT}lac-surface.png` });
+  const y0 = st.state.y;
+  await page.keyboard.down('KeyC');
+  await sleep(2500);
+  st = await sess(page);
+  await page.screenshot({ path: `${OUT}lac-plongee.png` });
+  await page.keyboard.up('KeyC');
+  check('Plonger fait descendre et consomme le souffle', st.state.y < y0 - 1 && st.state.breath < 100, `y ${st.state.y.toFixed(1)}, souffle ${Math.round(st.state.breath)}`);
+  check('La barre de souffle s’affiche sous l’eau', await page.isVisible('#status .bar.breath'));
+  await page.keyboard.down('Space');
+  await sleep(3000);
+  await page.keyboard.up('Space');
+
+  // Escalade d'une paroi de granit.
+  await page.evaluate(() => window.__game.teleport('kopje'));
+  await settle();
+  await waitFor(page, () => window.__game.session().state.grounded, null, 20000).catch(() => undefined);
+  await page.keyboard.down('KeyW');
+  let climbing = false;
+  let startY = 0;
+  for (let i = 0; i < 30 && !climbing; i++) {
+    await sleep(150);
+    await page.keyboard.press('Space');
+    st = await sess(page);
+    if (st.state.mode === 2) {
+      climbing = true;
+      startY = st.state.y;
+    }
+  }
+  check('Face à une paroi de granit, Espace fait grimper', climbing, climbing ? `y ${startY.toFixed(1)}` : 'paroi non atteinte');
+  if (climbing) {
+    await sleep(2500);
+    st = await sess(page);
+    await page.screenshot({ path: `${OUT}escalade.png` });
+    check('En grimpant, on monte et l’endurance baisse', st.state.y > startY + 0.8 && st.state.stamina < 100, `+${(st.state.y - startY).toFixed(1)} m, endurance ${Math.round(st.state.stamina)}`);
+  }
+  await page.keyboard.up('KeyW');
+  await page.keyboard.press('KeyC');
+  await sleep(1500);
+
+  // Accroupissement.
+  await page.evaluate(() => window.__game.teleport('plateau'));
+  await settle();
+  await waitFor(page, () => window.__game.session().state.grounded, null, 20000).catch(() => undefined);
+  await page.keyboard.down('KeyC');
+  await sleep(500);
+  const crouched = (await sess(page)).state.crouched;
+  await page.keyboard.up('KeyC');
+  await sleep(500);
+  check('C : s’accroupir, puis se relever', crouched && !(await sess(page)).state.crouched);
+
+  // Endurance visible en courant.
+  await page.keyboard.down('ShiftLeft');
+  await page.keyboard.down('KeyW');
+  await sleep(1500);
+  const barVisible = await page.isVisible('#status .bar.stamina');
+  await page.keyboard.up('KeyW');
+  await page.keyboard.up('ShiftLeft');
+  check('La barre d’endurance s’affiche en courant', barVisible);
+
+  // Objets : trouver une pierre, la prendre, la poser, la lancer.
+  await page.evaluate(() => window.__game.teleport('matobo'));
+  await settle();
+  await waitFor(page, () => window.__game.session().state.grounded, null, 20000).catch(() => undefined);
+  st = await sess(page);
+  const stones = st.props.filter((p) => p.kind === 'pierre').sort((a, b) => Math.hypot(a.x - st.state.x, a.z - st.state.z) - Math.hypot(b.x - st.state.x, b.z - st.state.z));
+  check('Des objets déplaçables existent autour du joueur', st.props.length > 0, `${st.props.length} objets, ${stones.length} pierres`);
+  // On essaie les pierres les plus proches jusqu'à en viser une (relief, rochers…).
+  let stone = null;
+  for (const candidate of stones.slice(0, 8)) {
+    await page.evaluate((p) => window.__game.place(p.x - 1.1, p.z), candidate);
+    await sleep(700);
+    const now = (await sess(page)).props.find((p) => p.id === candidate.id);
+    if (!now) continue;
+    await page.evaluate((p) => window.__game.lookAt(p.x, p.y, p.z), now);
+    await sleep(300);
+    if ((await sess(page)).target?.id === candidate.id) {
+      stone = candidate;
+      break;
+    }
+  }
+  const promptText = (await page.textContent('#prompt')) ?? '';
+  check('Viser une pierre affiche « prendre »', stone !== null && /prendre/.test(promptText), promptText);
+  if (stone) {
+    await page.keyboard.press('KeyE');
+    await sleep(500);
+    st = await sess(page);
+    check('E : prendre la pierre', st.held?.id === stone.id);
+    await page.keyboard.press('KeyE');
+    await sleep(800);
+    check('E : la poser', (await sess(page)).held === null);
+    // Attendre que la pierre s'immobilise, puis la viser à nouveau (plusieurs essais).
+    let last = null;
+    for (let i = 0; i < 20; i++) {
+      const p = (await sess(page)).props.find((q) => q.id === stone.id);
+      if (last && p && Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z) < 0.01) break;
+      last = p;
+      await sleep(250);
+    }
+    let regrabbed = false;
+    for (let attempt = 0; attempt < 4 && !regrabbed; attempt++) {
+      const p = (await sess(page)).props.find((q) => q.id === stone.id);
+      if (!p) break;
+      if (attempt > 0) {
+        await page.evaluate((q) => window.__game.place(q.x - 1.1, q.z), p);
+        await sleep(600);
+      }
+      await page.evaluate((q) => window.__game.lookAt(q.x, q.y, q.z), p);
+      await sleep(300);
+      if ((await sess(page)).target?.id !== stone.id) continue;
+      await page.keyboard.press('KeyE');
+      await sleep(400);
+      regrabbed = (await sess(page)).held?.id === stone.id;
+    }
+    check('E : la reprendre', regrabbed);
+    await page.evaluate(() => {
+      const s = window.__game.session();
+      window.__game.lookAt(s.state.x + Math.sin(s.yaw) * 10, s.state.y + 3, s.state.z + Math.cos(s.yaw) * 10);
+    });
+    await sleep(300);
+    const before = (await sess(page)).props.find((p) => p.id === stone.id);
+    await page.mouse.down();
+    await sleep(120);
+    await page.mouse.up();
+    await sleep(1500);
+    const after = (await sess(page)).props.find((p) => p.id === stone.id);
+    const thrown = after && before ? Math.hypot(after.x - before.x, after.z - before.z) : 0;
+    check('Clic gauche : lancer la pierre', thrown > 3, `${thrown.toFixed(1)} m`);
+  }
+  check('Aucune erreur dans la console (phase 2)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+}
+
 async function webgpuScenario() {
   console.log('\n— WebGPU (expérimental)');
   const browser = await chromium.launch({
@@ -399,7 +576,7 @@ async function webgpuScenario() {
   await browser.close();
 }
 
-// --only=ordinateur,telephone,manette,performance,captures,webgpu pour ne lancer que certains scénarios.
+// --only=ordinateur,telephone,manette,phase2,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -411,6 +588,7 @@ try {
   if (want('telephone')) await touchScenario(browser);
   if (want('manette')) await gamepadScenario(browser);
   if (want('performance')) await benchScenario(browser);
+  if (want('phase2')) await phase2Scenario(browser);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();

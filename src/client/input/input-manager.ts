@@ -248,6 +248,9 @@ export class InputManager {
     if (!t) return false;
     if (action === 'jump') return t.jumpHeld;
     if (action === 'sprint') return t.sprintOn;
+    if (action === 'crouch') return t.crouchOn;
+    if (action === 'interact') return t.interactHeld;
+    if (action === 'throw') return t.throwHeld;
     return false;
   }
 

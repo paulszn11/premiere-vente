@@ -1,14 +1,17 @@
-Bienvenue au Zimbabwe — test de performance (version 0.1.0)
-Date : 12/11/2026 21:08:22
+Bienvenue au Zimbabwe — test de performance (version 0.2.0)
+Date : 12/11/2026 22:13:38
 Appareil : Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36
 Écran : 800×450 · fenêtre 800×450 · rapport de pixels 1
 Processeurs : 4 · mémoire : 16 Go · ordinateur
 Moteur : WebGL 2 · GPU : ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)
 
-Qualité  IPS moy.  1 % bas  ms méd./95 %   Résolution  Chunks  Arbres  Appels
-Basse    37.1      21.6     25.8 / 33.9    800×450     21      99      12
-Moyenne  26.9      20.0     36.6 / 46.3    800×450     37      384     18
-Haute    19.6      14.4     50.5 / 61.4    800×450     97      388     38
-Ultra    16.5      12.9     59.2 / 73.1    800×450     177     680     63
+Qualité  IPS moy.  1 % bas  ms méd./95 %   Calcul ms   Résolution  Chunks  Arbres  Appels
+Basse    40.1      30.1     24.3 / 30.0    0.5 / 0.8   800×450     21      66      17
+Moyenne  22.4      15.6     44.7 / 56.8    0.7 / 2.5   800×450     37      456     22
+Haute    15.3      11.9     64.2 / 73.8    0.8 / 2.1   800×450     97      332     42
+Ultra    11.4      8.9      85.8 / 101.1   1.2 / 3.4   800×450     177     757     64
+
+Calcul ms : temps passé par le processeur pour préparer une image (simulation, commandes de dessin).
+Le travail de la puce graphique n’y est pas compté : si les IPS baissent alors que ce temps reste faible, c’est elle qui limite.
 
 Attention : rendu logiciel (pas de carte graphique utilisée), chiffres non représentatifs.

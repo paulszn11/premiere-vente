@@ -2,7 +2,7 @@
 // Les codes clavier utilisent la position physique de la touche (event.code) :
 // « KeyW » correspond à la touche Z d'un clavier AZERTY.
 
-export const ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'crouch', 'interact', 'pause', 'perf'] as const;
+export const ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'crouch', 'interact', 'throw', 'pause', 'perf'] as const;
 export type Action = (typeof ACTIONS)[number];
 export type Bindings = Record<Action, string[]>;
 
@@ -11,10 +11,11 @@ export const ACTION_LABELS: Record<Action, string> = {
   back: 'Reculer',
   left: 'Aller à gauche',
   right: 'Aller à droite',
-  jump: 'Sauter',
-  sprint: 'Courir (maintenir)',
-  crouch: "S'accroupir (phase 2)",
-  interact: 'Interagir (phase 2)',
+  jump: 'Sauter · grimper (face à une paroi) · monter (nage)',
+  sprint: 'Courir · nager vite (maintenir)',
+  crouch: "S'accroupir · plonger (nage) · lâcher (escalade)",
+  interact: 'Prendre · poser · traîner un objet',
+  throw: "Lancer l'objet porté",
   pause: 'Menu / pause',
   perf: 'Infos de performance',
 };
@@ -31,6 +32,7 @@ export function defaultBindings(): Bindings {
     sprint: ['ShiftLeft', 'Pad:10'],
     crouch: ['KeyC', 'Pad:1'],
     interact: ['KeyE', 'Pad:2'],
+    throw: ['Mouse0', 'Pad:7'],
     pause: ['Escape', 'Pad:9'],
     perf: ['F3', 'Pad:8'],
   };

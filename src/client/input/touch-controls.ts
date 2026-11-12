@@ -10,6 +10,9 @@ export class TouchControls {
   lookDY = 0;
   jumpHeld = false;
   sprintOn = false;
+  crouchOn = false;
+  interactHeld = false;
+  throwHeld = false;
   private joyId: number | null = null;
   private joyOrigin = { x: 0, y: 0 };
   private lookId: number | null = null;
@@ -17,6 +20,7 @@ export class TouchControls {
   private readonly base: HTMLElement;
   private readonly knob: HTMLElement;
   private readonly sprintBtn: HTMLElement;
+  private readonly crouchBtn: HTMLElement;
 
   constructor(
     private readonly root: HTMLElement,
@@ -25,6 +29,7 @@ export class TouchControls {
     this.base = root.querySelector('.joy-base')!;
     this.knob = root.querySelector('.joy-knob')!;
     this.sprintBtn = root.querySelector('[data-touch="sprint"]')!;
+    this.crouchBtn = root.querySelector('[data-touch="crouch"]')!;
     root.addEventListener('pointerdown', this.onDown);
     root.addEventListener('pointermove', this.onMove);
     root.addEventListener('pointerup', this.onUp);
@@ -38,6 +43,18 @@ export class TouchControls {
         this.sprintOn = !this.sprintOn;
         this.sprintBtn.classList.toggle('on', this.sprintOn);
       }
+    });
+    this.bindButton('crouch', (down) => {
+      if (down) {
+        this.crouchOn = !this.crouchOn;
+        this.crouchBtn.classList.toggle('on', this.crouchOn);
+      }
+    });
+    this.bindButton('interact', (down) => {
+      this.interactHeld = down;
+    });
+    this.bindButton('throw', (down) => {
+      this.throwHeld = down;
     });
     this.bindButton('menu', (down) => {
       if (down) this.onMenu();
@@ -79,6 +96,8 @@ export class TouchControls {
     this.lookDX = 0;
     this.lookDY = 0;
     this.jumpHeld = false;
+    this.interactHeld = false;
+    this.throwHeld = false;
     this.base.hidden = true;
   }
 

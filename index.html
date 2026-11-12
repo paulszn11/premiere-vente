@@ -18,12 +18,23 @@
     <div id="hud" hidden>
       <div id="crosshair" aria-hidden="true"></div>
       <div id="click-hint" hidden>Cliquez dans le jeu pour jouer</div>
+      <div id="prompt" hidden></div>
+      <div id="message" role="status" hidden></div>
+      <div id="status">
+        <div class="bar stamina" hidden><span></span></div>
+        <div class="bar breath" hidden><span></span></div>
+      </div>
       <pre id="perf" hidden></pre>
     </div>
+
+    <div id="rotate-hint" hidden>Tournez votre téléphone à l'horizontale pour mieux voir.</div>
 
     <div id="touch" hidden>
       <div class="joy-base" hidden><div class="joy-knob"></div></div>
       <button type="button" class="tbtn" data-touch="menu" aria-label="Menu">☰</button>
+      <button type="button" class="tbtn" data-touch="interact">Prendre</button>
+      <button type="button" class="tbtn" data-touch="throw">Lancer</button>
+      <button type="button" class="tbtn" data-touch="crouch">Accroupir</button>
       <button type="button" class="tbtn" data-touch="sprint">Courir</button>
       <button type="button" class="tbtn big" data-touch="jump">Sauter</button>
     </div>
@@ -38,7 +49,7 @@
     <section id="screen-home" class="screen" hidden>
       <div class="panel">
         <h1>Bienvenue au Zimbabwe</h1>
-        <p class="sub">Prototype — phase 1 : scène 3D, commandes et performances</p>
+        <p class="sub">Prototype — phase 2 : monde inspiré du Zimbabwe et déplacements</p>
         <div class="menu">
           <button type="button" id="btn-play" class="primary">Jouer</button>
           <button type="button" id="btn-new-world">Nouveau monde</button>
@@ -60,7 +71,7 @@
           <button type="button" id="btn-pause-settings">Réglages</button>
           <button type="button" id="btn-quit">Quitter la partie</button>
         </div>
-        <p class="note">Le monde n'est pas encore sauvegardé (prévu en phase 8) : en quittant, vous repartirez du point de départ.</p>
+        <p class="note">Votre position est gardée dans ce navigateur. Le reste du monde (objets déplacés…) sera sauvegardé à partir de la phase 8.</p>
       </div>
     </section>
 

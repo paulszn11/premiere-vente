@@ -47,8 +47,10 @@ export interface Settings {
   invertY: boolean;
   showPerf: boolean;
   bindings: Bindings;
-  /** Graine du monde local (phase 1 : un seul monde, sans sauvegarde de la partie). */
+  /** Graine du monde local (un seul monde en solo ; sauvegardes complètes en phase 8). */
   worldSeed: number | null;
+  /** Graine du point d'apparition du joueur dans ce monde (au hasard, loin des autres en multijoueur). */
+  spawnSeed: number | null;
 }
 
 const STORAGE_KEY = 'baz.settings.v1';
@@ -69,6 +71,7 @@ export function defaultSettings(): Settings {
     showPerf: false,
     bindings: defaultBindings(),
     worldSeed: null,
+    spawnSeed: null,
   };
 }
 
@@ -84,7 +87,8 @@ export function normalizeSettings(raw: unknown): Settings {
   const quality = (['auto', ...PRESET_ORDER] as string[]).includes(r.quality as string) ? (r.quality as QualityMode) : d.quality;
   const backend = (['auto', 'webgl2', 'webgpu'] as string[]).includes(r.backend as string) ? (r.backend as BackendChoice) : d.backend;
   const viewChunks = r.viewChunks === null || r.viewChunks === undefined ? null : Math.round(num(r.viewChunks, 1, 10, 3));
-  const seed = typeof r.worldSeed === 'number' && Number.isInteger(r.worldSeed) && r.worldSeed >= 0 && r.worldSeed <= 0xffffffff ? r.worldSeed : null;
+  const validSeed = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 0xffffffff ? v : null);
+  const seed = validSeed(r.worldSeed);
   return {
     version: 1,
     quality,
@@ -100,6 +104,7 @@ export function normalizeSettings(raw: unknown): Settings {
     showPerf: typeof r.showPerf === 'boolean' ? r.showPerf : d.showPerf,
     bindings: normalizeBindings(r.bindings),
     worldSeed: seed,
+    spawnSeed: validSeed(r.spawnSeed),
   };
 }
 

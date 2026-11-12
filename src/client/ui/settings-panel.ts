@@ -12,6 +12,8 @@ export interface SettingsPanelDeps {
   activeBackend: ActiveBackend;
   getSettings: () => Settings;
   update: (patch: Partial<Settings>) => void;
+  /** Outils de test (téléportation), disponibles pendant une partie. */
+  testTools?: (() => { destinations: Array<{ id: string; label: string }>; info: string; onTeleport: (id: string) => void } | null) | undefined;
 }
 
 function esc(s: string): string {
@@ -54,6 +56,15 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     return `<div class="bind"><span class="bind-label">${esc(ACTION_LABELS[a])}</span><span class="chips">${chips || '<em>aucune</em>'}</span><button type="button" class="add${adding ? ' waiting' : ''}" data-add="${a}">${adding ? 'Appuyez sur une touche… (Échap : annuler)' : '+ Ajouter'}</button></div>`;
   }).join('');
 
+  const tools = deps.testTools?.() ?? null;
+  const testSection = tools
+    ? `<h3>Outils de test (temporaires)</h3>
+    <p class="note">Pour essayer rapidement chaque région. Ces outils seront retirés ou réservés à l'hôte en multijoueur, puisque se retrouver doit rester difficile.</p>
+    <label class="row"><span>Aller à</span><select id="set-dest">${tools.destinations.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
+    <button type="button" id="set-go">Y aller</button>
+    <p class="note" id="set-pos">${esc(tools.info)}</p>`
+    : '';
+
   deps.root.innerHTML = `
     <h3>Graphismes</h3>
     <label class="row"><span>Qualité</span><select id="set-quality">${qualityOptions}</select></label>
@@ -73,6 +84,7 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     <button type="button" id="set-reset-binds">Réinitialiser les commandes</button>
     <h3>Affichage</h3>
     ${check('set-perf', 'Afficher les infos de performance (touche F3)', s.showPerf)}
+    ${testSection}
   `;
 
   const root = deps.root;
@@ -95,6 +107,10 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     renderSettings(deps);
   });
   root.querySelector('#set-reload')?.addEventListener('click', () => location.reload());
+  root.querySelector('#set-go')?.addEventListener('click', () => {
+    const sel = root.querySelector<HTMLSelectElement>('#set-dest');
+    if (sel && tools) tools.onTeleport(sel.value);
+  });
   live('set-scale', pct, 'renderScale');
   live('set-fov', (v) => `${v}°`, 'fov');
   live('set-mouse', mult, 'mouseSensitivity');

@@ -5,7 +5,7 @@ import { PhysicsWorld, initPhysics } from '../../src/shared/physics';
 import { mulberry32 } from '../../src/shared/rng';
 import { LocalSimulation } from '../../src/shared/simulation';
 import { Terrain } from '../../src/shared/terrain';
-import { treesInChunk } from '../../src/shared/vegetation';
+import { SPECIES, floraInChunk } from '../../src/shared/vegetation';
 import { FlatTerrain, SlopeTerrain, cmd } from './helpers';
 
 beforeAll(async () => {
@@ -122,9 +122,13 @@ describe('pentes et obstacles', () => {
     const t = new Terrain(2026);
     let found = null as null | { x: number; z: number; r: number };
     for (let cx = -3; cx <= 3 && !found; cx++) {
-      for (const tr of treesInChunk(t, cx, 2)) {
-        found = { x: tr.x, z: tr.z, r: 0.22 * tr.scale };
-        break;
+      for (let cz = -3; cz <= 3 && !found; cz++) {
+        for (const tr of floraInChunk(t, cx, cz).trees) {
+          if (tr.species === 'baobab') continue;
+          // Terrain dégagé devant l'arbre (pas d'autre obstacle sur 4 m).
+          found = { x: tr.x, z: tr.z, r: SPECIES[tr.species].trunkRadius * tr.scale };
+          break;
+        }
       }
     }
     expect(found).not.toBeNull();
