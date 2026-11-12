@@ -53,6 +53,10 @@ export function detectDevice(): DeviceInfo {
 export function suggestPreset(d: DeviceInfo): QualityPreset {
   if (d.softwareRenderer) return 'low';
   if (d.mobile) {
+    // iPhone / iPad : Safari annonce 4 processeurs et cache la mémoire, ce qui ne dit rien de
+    // l'appareil. Mesuré sur un iPhone réel (12/11/2026) : 60 images/s à tous les niveaux, Ultra
+    // compris. « Haute » plutôt qu'« Ultra » pour ménager la batterie et la chauffe.
+    if (/Apple GPU/i.test(d.gpu)) return 'high';
     if ((d.memoryGb !== null && d.memoryGb <= 3) || d.cores <= 4) return 'low';
     return 'medium';
   }

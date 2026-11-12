@@ -1,6 +1,25 @@
 # Phase 1 — Architecture et prototype
 
-**Statut : validée par le propriétaire du projet le 12/11/2026.** Les rapports du test de performance sur appareils réels n'ont pas encore été reçus ; ils restent utiles pour ajuster les qualités par défaut (procédure plus bas).
+**Statut : validée par le propriétaire du projet le 12/11/2026.**
+
+## Résultats sur appareil réel
+
+**iPhone (Safari, WebGL 2, « Apple GPU »), 12/11/2026, en portrait :**
+
+```
+Qualité  IPS moy.  1 % bas  ms méd./95 %   Résolution  Chunks  Arbres  Appels
+Basse    59.9      58.8     17.0 / 17.0    393×647     21      99      9
+Moyenne  59.4      52.6     17.0 / 17.0    589×970     37      384     13
+Haute    60.0      58.8     17.0 / 17.0    786×1294    97      388     23
+Ultra    60.0      58.8     17.0 / 17.0    1179×1941   177     697     36
+```
+
+Lecture :
+- 60 images par seconde à tous les niveaux, Ultra compris à la résolution native. C'est le maximum autorisé par Safari sur iPhone, et la fluidité est très stable.
+- Le test plafonne à 60 et ne montre donc pas la marge restante. Le rapport indique désormais aussi le temps de calcul par image (« Calcul ms »), qui montre la marge du processeur. La charge de la puce graphique, elle, ne se mesure pas directement dans un navigateur.
+- Conséquence : la qualité automatique passe de Basse à **Haute** sur iPhone et iPad. Safari annonce 4 processeurs et cache la mémoire, ce qui trompait la détection. Ultra reste disponible dans les réglages ; Haute ménage la batterie et la chauffe sur de longues parties, ce qu'un test d'une minute ne mesure pas.
+
+Encore utiles : un téléphone Android et un ordinateur.
 
 ## Objectif
 

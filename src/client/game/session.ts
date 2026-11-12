@@ -38,6 +38,8 @@ export class GameSession {
   readonly camera: FreeCamera;
   readonly world: WorldView;
   readonly perf = new PerfMonitor();
+  /** Temps de calcul de chaque image côté processeur (simulation + préparation du rendu). */
+  readonly cpuPerf = new PerfMonitor();
   readonly adaptive = new AdaptiveResolution();
   yaw = 0;
   pitch = 0;
@@ -50,6 +52,7 @@ export class GameSession {
   private lastHud = 0;
   private seq = 0;
   private benchRunner: BenchRunner | null = null;
+  private lastCpuMs = 0;
   private lastUnlockAt = -1e9;
   private running = false;
 
@@ -161,7 +164,9 @@ export class GameSession {
     if (this.benchRunner) {
       this.benchRunner(dt * 1000, now);
       this.scene.render();
+      this.lastCpuMs = performance.now() - now;
       this.perf.frame(dt * 1000);
+      this.cpuPerf.frame(this.lastCpuMs);
       return;
     }
 
@@ -192,6 +197,8 @@ export class GameSession {
     this.camera.rotation.set(this.pitch, this.yaw, 0);
     this.world.update(x, y, z, this.opts.device.mobile ? 4 : 6);
     this.scene.render();
+    this.lastCpuMs = performance.now() - now;
+    this.cpuPerf.frame(this.lastCpuMs);
 
     const ms = dt * 1000;
     this.perf.frame(ms);
@@ -209,8 +216,9 @@ export class GameSession {
     const s = this.sim?.state;
     const settings = this.opts.getSettings();
     const scale = Math.round(settings.renderScale * (settings.adaptiveResolution ? this.adaptive.scale : 1) * 100);
+    const cpu = this.cpuPerf.stats();
     const lines = [
-      `IPS ${st.fps.toFixed(1)} (1 % bas ${st.fpsLow1.toFixed(1)}) · ${st.msMedian.toFixed(1)} ms (95 % : ${st.msP95.toFixed(1)})`,
+      `IPS ${st.fps.toFixed(1)} (1 % bas ${st.fpsLow1.toFixed(1)}) · ${st.msMedian.toFixed(1)} ms (95 % : ${st.msP95.toFixed(1)}) · calcul ${cpu.msMedian.toFixed(1)} ms`,
       `${BACKEND_LABELS[this.opts.backend]} · qualité ${PRESET_LABELS[this.preset]}${settings.quality === 'auto' ? ' (auto)' : ''} · ${this.opts.engine.getRenderWidth()}×${this.opts.engine.getRenderHeight()} (${scale} %)`,
       `Chunks ${w.chunks}${w.pending ? ` (+${w.pending})` : ''} · arbres ${w.trees} · appels ${this.instr.drawCallsCounter.current} · sommets ${Math.round(w.vertices / 1000)} k`,
     ];
@@ -233,6 +241,7 @@ export class GameSession {
       let phaseStart = performance.now();
       let loadingS = 0;
       let frameTimes: number[] = [];
+      let cpuTimes: number[] = [];
       let drawSum = 0;
       let t = 0;
       let camY = spawn.y + 3;
@@ -283,17 +292,22 @@ export class GameSession {
             phase = 'measure';
             phaseStart = now;
             frameTimes = [];
+            cpuTimes = [];
             drawSum = 0;
           }
         } else {
           frameTimes.push(ms);
+          cpuTimes.push(this.lastCpuMs);
           drawSum += this.instr.drawCallsCounter.current;
           const remaining = BENCH_MEASURE_S - (now - phaseStart) / 1000;
           if (remaining <= 0) {
             const w = this.world.stats();
+            const cpu = computeStats(cpuTimes);
             results.push({
               preset: presets[index]!,
               ...computeStats(frameTimes),
+              cpuMedian: cpu.msMedian,
+              cpuP95: cpu.msP95,
               drawCalls: drawSum / Math.max(1, frameTimes.length),
               chunks: w.chunks,
               trees: w.trees,

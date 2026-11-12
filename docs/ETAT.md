@@ -4,7 +4,7 @@ Mis à jour le 12/11/2026 — version 0.1.0. **Phase 1 validée par le propriét
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).
-- **Appareil réel** : à vérifier sur un vrai téléphone, une tablette et un ordinateur. Aucun rapport du test de performance sur appareil réel n'a encore été reçu : les qualités par défaut restent celles de la détection automatique.
+- **Appareil réel** : à vérifier sur un vrai téléphone, une tablette et un ordinateur. Premier rapport reçu : iPhone, 60 images/s à tous les niveaux (voir `docs/PHASE-1.md`). Restent à mesurer : un téléphone Android et un ordinateur.
 
 ## Terminé (phase 1)
 
@@ -23,12 +23,12 @@ Légende des tests :
 | Commandes tactiles : joystick, regard en glissant, boutons Sauter / Courir / Menu | 2.2 | Auto (tactile simulé) · Appareil réel |
 | Manette (sticks, boutons, Start = pause) | 2.2 | Auto (manette simulée) · Appareil réel |
 | Commandes personnalisables (clavier, souris, boutons de manette) | 2.2 | Auto |
-| Niveaux de qualité Basse / Moyenne / Haute / Ultra, choix automatique selon l'appareil | 2.3, 14 | Auto · Appareil réel |
+| Niveaux de qualité Basse / Moyenne / Haute / Ultra, choix automatique selon l'appareil (Haute sur iPhone et iPad) | 2.3, 14 | Auto · Appareil réel (iPhone) |
 | Résolution adaptative (baisse si le jeu ralentit, remonte ensuite) | 2.3 | Auto |
 | Réglages : qualité, distance d'affichage, résolution, champ de vision, sensibilités, axe inversé | 2.3 | Auto |
 | Réglages conservés dans le navigateur | 3.3 (paramètres individuels) | Auto |
 | Infos de performance en jeu (F3) | 14 | Auto |
-| Test de performance intégré, sur 4 niveaux, avec rapport copiable | 16 (phase 1) | Auto · **Appareil réel (à faire)** |
+| Test de performance intégré, sur 4 niveaux, avec rapport copiable (IPS et temps de calcul) | 16 (phase 1) | Auto · Appareil réel (iPhone) |
 | WebGL 2 par défaut, WebGPU en option avec repli automatique | 14.1 | Auto (WebGPU logiciel) · Appareil réel |
 | Installable comme application (manifeste, service worker, icônes), mises à jour automatiques | 2.1, 15 | Appareil réel |
 | Pause automatique quand l'application passe en arrière-plan | — | Auto (partiel) |
@@ -51,7 +51,7 @@ Préparation de la phase 2 (monde et déplacements), en attente des décisions s
 
 | Phase | Contenu |
 | --- | --- |
-| 1 (suivi) | Rapports du test de performance sur vos appareils, dès que possible, pour ajuster les qualités par défaut |
+| 1 (suivi) | Rapports du test de performance sur un téléphone Android et un ordinateur, pour ajuster les qualités par défaut |
 | 2 | Biomes prototypes, équilibre, fatigue liée au déplacement, influence du terrain (boue, neige), escalade, chutes avec blessures, nage, interactions avec les objets, accroupissement |
 | 3 | Santé, énergie, fatigue, blessures localisées, sac à dos physique, objets manipulables et transportables à deux mains |
 | 4 | Récolte, outils, matériaux, recettes, fabrication physique, qualité et usure |

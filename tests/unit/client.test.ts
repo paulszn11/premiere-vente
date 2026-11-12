@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { type DeviceInfo, suggestPreset } from '../../src/client/device';
 import { addBinding, codeLabel, defaultBindings, normalizeBindings, removeBinding } from '../../src/client/input/bindings';
 import { AdaptiveResolution, computeStats } from '../../src/client/perf/perf-monitor';
 import { buildTerrainMesh } from '../../src/client/render/terrain-mesh';
@@ -89,6 +90,22 @@ describe('réglages et commandes', () => {
     expect(codeLabel('Space')).toBe('Espace');
     expect(codeLabel('Mouse2')).toBe('Clic droit');
     expect(codeLabel('Pad:0')).toBe('Manette A / Croix');
+  });
+});
+
+describe('qualité choisie automatiquement', () => {
+  const base: DeviceInfo = { mobile: false, touch: false, cores: 8, memoryGb: 8, dpr: 1, gpu: 'Intel(R) UHD Graphics', softwareRenderer: false, screen: '1920×1080' };
+  it('iPhone (mesuré à 60 images/s en Ultra) : Haute', () => {
+    expect(suggestPreset({ ...base, mobile: true, touch: true, cores: 4, memoryGb: null, dpr: 3, gpu: 'Apple GPU', screen: '393×852' })).toBe('high');
+  });
+  it('téléphones Android : selon la mémoire et les processeurs', () => {
+    expect(suggestPreset({ ...base, mobile: true, touch: true, cores: 8, memoryGb: 8, gpu: 'Adreno (TM) 740' })).toBe('medium');
+    expect(suggestPreset({ ...base, mobile: true, touch: true, cores: 4, memoryGb: 2, gpu: 'Mali-G52' })).toBe('low');
+  });
+  it('ordinateurs et rendu logiciel', () => {
+    expect(suggestPreset(base)).toBe('medium');
+    expect(suggestPreset({ ...base, gpu: 'NVIDIA GeForce RTX 4060' })).toBe('high');
+    expect(suggestPreset({ ...base, gpu: 'SwiftShader', softwareRenderer: true })).toBe('low');
   });
 });
 

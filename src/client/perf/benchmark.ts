@@ -16,6 +16,9 @@ export const BENCH_MAX_LOADING_S = 12;
 
 export interface BenchResult extends FrameStats {
   preset: QualityPreset;
+  /** Temps de calcul d'une image côté processeur (médiane et 95e centile), en ms. */
+  cpuMedian: number;
+  cpuP95: number;
   drawCalls: number;
   chunks: number;
   trees: number;
@@ -50,13 +53,18 @@ export function formatReport(r: BenchReport): string {
     `Processeurs : ${d.cores} · mémoire : ${d.memoryGb !== null ? `${d.memoryGb} Go` : 'inconnue'} · ${d.mobile ? 'mobile' : 'ordinateur'}${d.touch ? ', tactile' : ''}`,
     `Moteur : ${BACKEND_LABELS[r.backend]} · GPU : ${d.gpu}`,
     '',
-    `${pad('Qualité', 9)}${pad('IPS moy.', 10)}${pad('1 % bas', 9)}${pad('ms méd./95 %', 15)}${pad('Résolution', 12)}${pad('Chunks', 8)}${pad('Arbres', 8)}Appels`,
+    `${pad('Qualité', 9)}${pad('IPS moy.', 10)}${pad('1 % bas', 9)}${pad('ms méd./95 %', 15)}${pad('Calcul ms', 12)}${pad('Résolution', 12)}${pad('Chunks', 8)}${pad('Arbres', 8)}Appels`,
   ];
   for (const x of r.results) {
     lines.push(
-      `${pad(PRESET_LABELS[x.preset], 9)}${pad(x.fps.toFixed(1), 10)}${pad(x.fpsLow1.toFixed(1), 9)}${pad(`${x.msMedian.toFixed(1)} / ${x.msP95.toFixed(1)}`, 15)}${pad(`${x.renderWidth}×${x.renderHeight}`, 12)}${pad(String(x.chunks), 8)}${pad(String(x.trees), 8)}${Math.round(x.drawCalls)}`,
+      `${pad(PRESET_LABELS[x.preset], 9)}${pad(x.fps.toFixed(1), 10)}${pad(x.fpsLow1.toFixed(1), 9)}${pad(`${x.msMedian.toFixed(1)} / ${x.msP95.toFixed(1)}`, 15)}${pad(`${x.cpuMedian.toFixed(1)} / ${x.cpuP95.toFixed(1)}`, 12)}${pad(`${x.renderWidth}×${x.renderHeight}`, 12)}${pad(String(x.chunks), 8)}${pad(String(x.trees), 8)}${Math.round(x.drawCalls)}`,
     );
   }
+  lines.push(
+    '',
+    'Calcul ms : temps passé par le processeur pour préparer une image (simulation, commandes de dessin).',
+    'Le travail de la puce graphique n’y est pas compté : si les IPS baissent alors que ce temps reste faible, c’est elle qui limite.',
+  );
   if (r.cancelled) lines.push('', 'Test interrompu avant la fin.');
   if (d.softwareRenderer) lines.push('', 'Attention : rendu logiciel (pas de carte graphique utilisée), chiffres non représentatifs.');
   return lines.join('\n');
