@@ -148,10 +148,16 @@ export function stepMovement(phys: PhysicsWorld, collider: RAPIER.Collider, s: M
   s.z += m.z;
   collider.setTranslation({ x: s.x, y: s.y + PLAYER_CENTER_Y, z: s.z });
 
-  // 4. La vitesse suit le déplacement réel : un mur ou une pente trop raide absorbe l'élan.
-  if (dt > 0) {
-    s.vx = m.x / dt;
-    s.vz = m.z / dt;
+  // 4. Un obstacle (mur, tronc, pente trop raide) absorbe l'élan : si le déplacement
+  //    horizontal réel est nettement plus court que voulu, la vitesse suit le déplacement réel.
+  //    Sur une pente franchissable, le déplacement est un peu plus court : l'élan est conservé.
+  const desiredH = Math.sqrt(dx * dx + dz * dz);
+  if (dt > 0 && desiredH > 1e-6) {
+    const actualH = Math.sqrt(m.x * m.x + m.z * m.z);
+    if (actualH < desiredH * 0.6) {
+      s.vx = m.x / dt;
+      s.vz = m.z / dt;
+    }
   }
   if (grounded) {
     if (s.vy < 0) s.vy = 0;

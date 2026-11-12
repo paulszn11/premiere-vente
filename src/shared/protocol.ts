@@ -68,11 +68,24 @@ function isNum(v: unknown, limit: number): v is number {
   return typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= limit;
 }
 
+/** Caractères de contrôle et caractères invisibles ou de direction de texte, retirés des pseudonymes. */
+const INVISIBLE_CHARS = new RegExp(
+  `[${[
+    [0x00, 0x1f],
+    [0x7f, 0x9f],
+    [0x200b, 0x200f],
+    [0x2028, 0x202e],
+    [0x2066, 0x2069],
+  ]
+    .map(([a, b]) => `${String.fromCharCode(a!)}-${String.fromCharCode(b!)}`)
+    .join('')}]`,
+  'g',
+);
+
 /** Nettoie un pseudonyme : supprime les caractères de contrôle, réduit les espaces. */
 export function sanitizePlayerName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
-  // eslint-disable-next-line no-control-regex
-  const s = raw.replace(/[\u0000-\u001f\u007f-\u009f​-‏ -‮⁦-⁩]/g, '').replace(/\s+/g, ' ').trim();
+  const s = raw.replace(INVISIBLE_CHARS, '').replace(/\s+/g, ' ').trim();
   const chars = Array.from(s);
   if (chars.length < 1 || chars.length > PLAYER_NAME_MAX) return null;
   return s;

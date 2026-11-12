@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0d1110" />
+    <meta name="description" content="Bienvenue au Zimbabwe — jeu 3D de survie, d'exploration, de construction et d'horreur (prototype)." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>Bienvenue au Zimbabwe</title>
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  </head>
+  <body>
+    <canvas id="game" tabindex="0" aria-label="Vue du jeu"></canvas>
+
+    <div id="hud" hidden>
+      <div id="crosshair" aria-hidden="true"></div>
+      <div id="click-hint" hidden>Cliquez dans le jeu pour jouer</div>
+      <pre id="perf" hidden></pre>
+    </div>
+
+    <div id="touch" hidden>
+      <div class="joy-base" hidden><div class="joy-knob"></div></div>
+      <button type="button" class="tbtn" data-touch="menu" aria-label="Menu">☰</button>
+      <button type="button" class="tbtn" data-touch="sprint">Courir</button>
+      <button type="button" class="tbtn big" data-touch="jump">Sauter</button>
+    </div>
+
+    <section id="screen-loading" class="screen">
+      <div class="panel">
+        <h1>Bienvenue au Zimbabwe</h1>
+        <p id="loading-text">Chargement…</p>
+      </div>
+    </section>
+
+    <section id="screen-home" class="screen" hidden>
+      <div class="panel">
+        <h1>Bienvenue au Zimbabwe</h1>
+        <p class="sub">Prototype — phase 1 : scène 3D, commandes et performances</p>
+        <div class="menu">
+          <button type="button" id="btn-play" class="primary">Jouer</button>
+          <button type="button" id="btn-new-world">Nouveau monde</button>
+          <button type="button" id="btn-bench">Test de performance</button>
+          <button type="button" id="btn-settings">Réglages</button>
+          <button type="button" id="btn-install" hidden>Installer l'application</button>
+        </div>
+        <p class="note" id="home-world"></p>
+        <p class="note" id="home-info"></p>
+        <p class="note" id="home-controls"></p>
+      </div>
+    </section>
+
+    <section id="screen-pause" class="screen overlay" hidden>
+      <div class="panel">
+        <h2>Pause</h2>
+        <div class="menu">
+          <button type="button" id="btn-resume" class="primary">Reprendre</button>
+          <button type="button" id="btn-pause-settings">Réglages</button>
+          <button type="button" id="btn-quit">Quitter la partie</button>
+        </div>
+        <p class="note">Le monde n'est pas encore sauvegardé (prévu en phase 8) : en quittant, vous repartirez du point de départ.</p>
+      </div>
+    </section>
+
+    <section id="screen-settings" class="screen overlay" hidden>
+      <div class="panel wide">
+        <div class="panel-head">
+          <h2>Réglages</h2>
+          <button type="button" id="btn-settings-close">Fermer</button>
+        </div>
+        <div id="settings-body"></div>
+      </div>
+    </section>
+
+    <section id="screen-bench" class="screen overlay" hidden>
+      <div class="panel wide">
+        <h2>Test de performance</h2>
+        <div id="bench-running">
+          <p id="bench-progress">Préparation…</p>
+          <p class="note">Environ une minute. La caméra fait le tour d'un monde fixe, pour chaque niveau de qualité.</p>
+          <button type="button" id="btn-bench-cancel">Annuler</button>
+        </div>
+        <div id="bench-result" hidden>
+          <pre id="bench-report"></pre>
+          <div class="menu row-buttons">
+            <button type="button" id="btn-bench-copy" class="primary">Copier les résultats</button>
+            <button type="button" id="btn-bench-close">Fermer</button>
+          </div>
+          <p class="note">Envoyez ces résultats pour ajuster la qualité par défaut de votre appareil.</p>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast" role="status" hidden></div>
+
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>

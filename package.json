@@ -14,10 +14,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:e2e": "node tests/e2e/run.mjs",
-    "check": "npm run typecheck && npm test && npm run build && npm run test:e2e"
+    "check": "npm run typecheck && npm test && npm run build && npm run test:e2e",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.33.3",
+    "@dimforge/rapier3d": "0.21.0",
     "@dimforge/rapier3d-compat": "0.21.0"
   },
   "devDependencies": {

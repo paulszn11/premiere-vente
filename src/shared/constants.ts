@@ -42,7 +42,7 @@ export const MOVE = {
   airAccel: 1.5,
   gravity: 9.81,
   jumpSpeed: 3.6,
-  groundStick: 1,
+  groundStick: 0,
   terminalSpeed: 55,
   maxSlopeClimbDeg: 45,
   minSlopeSlideDeg: 50,
