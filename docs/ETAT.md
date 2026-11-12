@@ -1,10 +1,10 @@
 # État des fonctionnalités
 
-Mis à jour le 12/11/2026 — version 0.1.0 (phase 1).
+Mis à jour le 12/11/2026 — version 0.1.0. **Phase 1 validée par le propriétaire du projet le 12/11/2026.**
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).
-- **Appareil réel** : reste à vérifier sur un vrai téléphone, une tablette et un ordinateur. Aucune fonctionnalité n'est considérée comme validée tant que ce n'est pas fait.
+- **Appareil réel** : à vérifier sur un vrai téléphone, une tablette et un ordinateur. Aucun rapport du test de performance sur appareil réel n'a encore été reçu : les qualités par défaut restent celles de la détection automatique.
 
 ## Terminé (phase 1)
 
@@ -45,13 +45,13 @@ Légende des tests :
 
 ## En cours
 
-Rien : la phase 1 attend les tests sur appareils réels (voir `docs/PHASE-1.md`).
+Préparation de la phase 2 (monde et déplacements), en attente des décisions sur les biomes.
 
 ## Restant
 
 | Phase | Contenu |
 | --- | --- |
-| 1 (validation) | Tests de performance sur vos appareils, réglage des qualités par défaut |
+| 1 (suivi) | Rapports du test de performance sur vos appareils, dès que possible, pour ajuster les qualités par défaut |
 | 2 | Biomes prototypes, équilibre, fatigue liée au déplacement, influence du terrain (boue, neige), escalade, chutes avec blessures, nage, interactions avec les objets, accroupissement |
 | 3 | Santé, énergie, fatigue, blessures localisées, sac à dos physique, objets manipulables et transportables à deux mains |
 | 4 | Récolte, outils, matériaux, recettes, fabrication physique, qualité et usure |

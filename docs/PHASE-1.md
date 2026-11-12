@@ -1,5 +1,7 @@
 # Phase 1 — Architecture et prototype
 
+**Statut : validée par le propriétaire du projet le 12/11/2026.** Les rapports du test de performance sur appareils réels n'ont pas encore été reçus ; ils restent utiles pour ajuster les qualités par défaut (procédure plus bas).
+
 ## Objectif
 
 Selon le cahier des charges : choix définitif du moteur et des technologies, mise en place du projet, première scène 3D, contrôles à la première personne, test de performances sur différents appareils.
