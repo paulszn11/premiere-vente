@@ -115,6 +115,18 @@ const INV_WIDTH = 1 / 1900;
 const INV_LAKE_EDGE = 1 / 700;
 const INV_BORDER = 1 / 900;
 export const KOPJE_CELL = 260;
+const D = Math.SQRT1_2;
+/** Huit directions possibles du côté en pente douce d'un kopje. */
+const GENTLE_DIRS: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [D, D],
+  [0, 1],
+  [-D, D],
+  [-1, 0],
+  [-D, -D],
+  [0, -1],
+  [D, -D],
+];
 
 /** Grandes lignes du monde, utilisées aussi pour les outils de test (téléportation). */
 export const LANDMARKS = {
@@ -262,10 +274,19 @@ export class Geography {
         const kz = (cz + 0.2 + (((hsh >>> 24) & 0xff) / 256) * 0.6) * KOPJE_CELL;
         const h2 = hash32(this.seed, cx, cz, 0x6b6f71);
         const radius = 35 + ((h2 & 0xff) / 255) * 85;
-        const height = 14 + (((h2 >>> 8) & 0xff) / 255) * 50;
+        // Hauteur limitée par la largeur : pas d'aiguille impossible.
+        const height = Math.min(14 + (((h2 >>> 8) & 0xff) / 255) * 50, radius * 0.9);
         const elong = 0.7 + (((h2 >>> 16) & 0xff) / 255) * 0.6;
-        const ux = (x - kx) / radius;
-        const uz = (z - kz) / (radius * elong);
+        const ox = x - kx;
+        const oz = z - kz;
+        // Chaque kopje a un côté en pente douce (on y monte à pied, comme sur les dômes de
+        // granit des Matobo) ; les autres côtés restent raides, pour l'escalade.
+        const g = GENTLE_DIRS[(h2 >>> 24) & 7]!;
+        const dist = Math.sqrt(ox * ox + oz * oz);
+        const cosA = dist > 1e-6 ? (ox * g[0] + oz * g[1]) / dist : 0;
+        const stretch = 1 + (Math.min(3, 250 / radius) - 1) * smoothstep(0.3, 0.95, cosA);
+        const ux = ox / (radius * stretch);
+        const uz = oz / (radius * elong * stretch);
         const t2 = ux * ux + uz * uz;
         if (t2 >= 1) continue;
         const prof = smoothstep(1, 0.45, Math.sqrt(t2));

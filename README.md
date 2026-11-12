@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 2 terminée côté code et tests automatiques, à valider sur vos appareils.** Le prototype contient :
+**État : phase 2 terminée et vérifiée (69 tests unitaires, 87 vérifications dans le navigateur).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -63,7 +63,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,performance,captures,webgpu` ne lance que certains scénarios.
+- `--only=ordinateur,telephone,manette,phase2,verification,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 

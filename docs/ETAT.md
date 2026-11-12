@@ -2,7 +2,7 @@
 
 Mis à jour le 12/11/2026, version 0.2.0.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
-- **Phase 2 :** terminée côté code et tests automatiques, en attente de validation sur vos appareils.
+- **Phase 2 :** terminée et vérifiée en profondeur le 12/11/2026 (69 tests unitaires, 87 vérifications navigateur). Reste à l'essayer sur vos appareils.
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).
@@ -28,7 +28,7 @@ Légende des tests :
 | Fonctionnalité | Section du cahier | Tests |
 | --- | --- | --- |
 | Monde de 16 km × 16 km inspiré du Zimbabwe, 11 biomes à la géographie logique, montagnes frontalières | 3, 4.1 | Auto |
-| Fleuves (Zambèze, Limpopo) et grand lac, kopjes de granit, zones humides | 4.1, 4.3 | Auto |
+| Fleuves (Zambèze, Limpopo) et grand lac, kopjes de granit (chacun avec un côté praticable), zones humides | 4.1, 4.3 | Auto |
 | Flore par biome (8 espèces), buissons, rochers en équilibre, termitières, collisions | 5, 4.1 | Auto |
 | Sols : herbe, terre, sable, boue, roche, granite, neige, eau (vitesse, adhérence, pente, amorti) | 5 (terrain dynamique), 7 | Auto |
 | Accroupissement, avec vérification de la place au-dessus de la tête | 7.4 | Auto |
@@ -36,7 +36,7 @@ Légende des tests :
 | Équilibre et trébuchement | 7.4 | Auto |
 | Chutes selon hauteur, vitesse, sol et posture (4 niveaux ; blessures en phase 3) | 7.6 | Auto |
 | Nage (flottaison, effort), plongée (souffle, visibilité selon la profondeur), courants | 7.7 | Auto |
-| Escalade des parois rocheuses (endurance, passage du rebord, lâcher, saut en arrière) | 7.5 | Auto |
+| Escalade des parois rocheuses (dès 41° sur le granite, endurance, passage du rebord, lâcher, saut en arrière) | 7.5 | Auto (y compris un vrai kopje) |
 | Objets : prendre, porter à une ou deux mains, poser, lancer, traîner, pousser, mémoriser leur position | 6.2, 7 | Auto |
 | Apparition au hasard, loin des autres joueurs (principe du jeu) | 3.2, 11 | Auto |
 | Effets de caméra (marche, atterrissage, accroupi, trébuchement, course, nage) | 13 | Auto (partiel) |

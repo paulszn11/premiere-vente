@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { MOVE, PHYS_CHUNK_RADIUS, STAMINA, SWIM, TICK_DT, WATER_LEVEL } from '../../src/shared/constants';
 import { BTN_CROUCH, BTN_JUMP, BTN_SPRINT, MODE_CLIMB, MODE_SWIM, MODE_WALK, type MoveState, makeState, quantizeInput, stepMovement } from '../../src/shared/movement';
 import { GROUP_TERRAIN, PhysicsWorld, RAPIER, TERRAIN_GROUPS, initPhysics } from '../../src/shared/physics';
-import type { Terrain } from '../../src/shared/terrain';
+import { Terrain } from '../../src/shared/terrain';
 import { CliffTerrain, FlatTerrain, FnTerrain, cmd } from './helpers';
 
 beforeAll(async () => {
@@ -249,5 +249,66 @@ describe('escalade', () => {
     w.run(1, 1, 0, BTN_JUMP, YAW_EAST);
     expect(w.state.mode).toBe(MODE_WALK);
     expect(w.state.vy).toBeGreaterThan(0);
+  });
+});
+
+describe('escalade sur le vrai relief', () => {
+  it('le flanc raide d’un vrai kopje se gravit jusqu’au rebord (endurance maintenue pour le test)', () => {
+    const t = new Terrain(20261112);
+    const slopeAt = (x: number, z: number) => Math.hypot(t.heightAt(x + 0.5, z) - t.heightAt(x - 0.5, z), t.heightAt(x, z + 0.5) - t.heightAt(x, z - 0.5));
+    // Un sommet de kopje, puis la direction la plus raide et le pied de ce flanc.
+    let found: null | { bx: number; bz: number; yaw: number; topY: number; edgeY: number } = null;
+    for (let x = -5600; x < -3000 && !found; x += 12) {
+      for (let z = -5000; z < -1800 && !found; z += 12) {
+        if (t.sampleInto(x, z).kopje < 0.99) continue;
+        for (let k = 0; k < 16 && !found; k++) {
+          const a = (k / 16) * Math.PI * 2;
+          const dx = Math.sin(a);
+          const dz = Math.cos(a);
+          let maxSlope = 0;
+          let edgeY = 0;
+          let r = 0;
+          let reachedFoot = false;
+          for (r = 1; r < 150; r += 0.5) {
+            const sl = slopeAt(x + dx * r, z + dz * r);
+            if (sl > 1.15 && edgeY === 0) edgeY = t.heightAt(x + dx * r, z + dz * r);
+            maxSlope = Math.max(maxSlope, sl);
+            if (maxSlope > 1.15 && sl < 0.5) {
+              reachedFoot = true;
+              break;
+            }
+          }
+          if (!reachedFoot || maxSlope < 1.3 || edgeY === 0) continue;
+          const bx = x + dx * (r + 1);
+          const bz = z + dz * (r + 1);
+          if (t.heightAt(bx, bz) < 2) continue;
+          found = { bx, bz, yaw: Math.atan2(-dx, -dz), topY: t.heightAt(x, z), edgeY };
+        }
+      }
+    }
+    expect(found, 'flanc raide trouvé').not.toBeNull();
+    const f = found!;
+    const w = world(t, f.bx, t.heightAt(f.bx, f.bz) + 0.1, f.bz);
+    const fx = Math.sin(f.yaw);
+    const fz = Math.cos(f.yaw);
+    w.run(40, 0, 0, 0, f.yaw);
+    const startY = w.state.y;
+    let climbing = false;
+    for (let i = 0; i < 1200 && !climbing; i++) {
+      w.run(1, fx, fz, i % 15 === 14 ? BTN_JUMP : 0, f.yaw);
+      climbing = w.state.mode === MODE_CLIMB;
+    }
+    expect(climbing, 's’accroche au flanc').toBe(true);
+    let ticks = 0;
+    while (w.state.mode === MODE_CLIMB && ticks < 9000) {
+      w.state.stamina = 100;
+      w.run(1, fx, fz, 0, f.yaw);
+      ticks++;
+    }
+    w.run(120, fx, fz, 0, f.yaw);
+    expect(w.state.mode).toBe(MODE_WALK);
+    // Le joueur a franchi le haut de la partie raide : il est au-dessus du rebord.
+    expect(w.state.y).toBeGreaterThan(f.edgeY - 1.5);
+    expect(w.state.y - startY).toBeGreaterThan(5);
   });
 });

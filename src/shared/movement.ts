@@ -245,15 +245,29 @@ interface Wall {
   distance: number;
 }
 
-/** Cherche une paroi escaladable devant le joueur (à hauteur de poitrine, puis de taille). */
+/** Normale verticale maximale d'une paroi escaladable, selon la roche (sans zone morte avec la marche). */
+const CLIMBABLE_NY_GRANITE = 0.755; // à partir de 41° (on ne marche plus au-delà de 42° sur le granite)
+
+/** Cherche une paroi escaladable devant le joueur (à hauteur de poitrine, de taille, puis de genou). */
 function probeWall(phys: PhysicsWorld, s: MoveState, dirX: number, dirZ: number): Wall | null {
-  for (const h of [1.2, 0.7]) {
-    const ray = new RAPIER.Ray({ x: s.x, y: s.y + h, z: s.z }, { x: dirX, y: 0, z: dirZ });
+  for (const h of [1.2, 0.7, 0.35]) {
+    const ox = s.x;
+    const oy = s.y + h;
+    const oz = s.z;
+    const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dirX, y: 0, z: dirZ });
     const hit = phys.world.castRayAndGetNormal(ray, PLAYER_RADIUS + CLIMB.reach, true, undefined, QUERY_TERRAIN);
     if (!hit) continue;
     const n = hit.normal;
-    if (n.y > CLIMB.maxNormalY) continue;
     if (n.x * dirX + n.z * dirZ > -0.3) continue;
+    // Rochers isolés et granite : escaladables dès 41° ; roche : dès 44°.
+    let maxNy: number = CLIMB.maxNormalY;
+    if (hit.collider.shapeType() !== RAPIER.ShapeType.HeightField) maxNy = CLIMBABLE_NY_GRANITE;
+    else if (n.y > CLIMB.maxNormalY) {
+      const px = ox + dirX * hit.timeOfImpact;
+      const pz = oz + dirZ * hit.timeOfImpact;
+      if (surfaceOf(phys.terrain.sampleInto(px, pz), n.y) === 'granite') maxNy = CLIMBABLE_NY_GRANITE;
+    }
+    if (n.y > maxNy) continue;
     return { nx: n.x, ny: n.y, nz: n.z, distance: hit.timeOfImpact };
   }
   return null;

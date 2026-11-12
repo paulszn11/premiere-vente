@@ -1,6 +1,6 @@
 # Phase 2 — Monde et déplacements
 
-**Statut : terminée côté code et tests automatiques. Il reste à la valider sur vos appareils.**
+**Statut : terminée et vérifiée en profondeur (12/11/2026). Elle reste à essayer sur vos appareils.**
 
 ## Décisions prises avec vous
 
@@ -46,7 +46,7 @@ Les limites entre régions sont déformées par du bruit pour paraître naturell
 | Équilibre | Un demi-tour brusque en pleine course, une descente raide en courant ou un sol glissant peuvent faire trébucher |
 | Chutes | La gravité dépend de la vitesse d'impact (donc de la hauteur), du sol et de la posture (s'accroupir à l'atterrissage amortit), sur 4 niveaux : trébucher, légère, grave, mortelle. Les blessures elles-mêmes arrivent en phase 3 |
 | Nage et plongée | On flotte la tête hors de l'eau. On nage, plus vite en forçant. On plonge en regardant vers le bas ou avec « S'accroupir ». Le souffle dure 30 s. Le Zambèze et le Limpopo ont du courant. L'eau s'assombrit et se trouble avec la profondeur |
-| Escalade | Toute paroi trop raide pour marcher (plus de 44°) s'escalade : saut face à la paroi, déplacement dans les 4 directions, endurance, passage du rebord en haut. On lâche avec « S'accroupir » ou on saute en arrière ; on tombe si l'endurance est épuisée |
+| Escalade | Toute paroi trop raide pour marcher s'escalade (dès 41° sur le granite, 44° sur la roche) : saut face à la paroi, déplacement dans les 4 directions, endurance, passage du rebord en haut. On lâche avec « S'accroupir » ou on saute en arrière ; on tombe si l'endurance est épuisée |
 | Objets | Pierres, bûches et troncs. Les objets légers se portent à une main, ceux de plus de 8 kg à deux mains (lent, sans course ni saut), ceux de plus de 60 kg ne peuvent que se traîner. On peut poser, lancer (plus loin si l'objet est léger), pousser un gros tronc en marchant et enjamber les petits objets. Un objet déplacé reste là où on l'a laissé |
 | Apparition | Au hasard dans le monde. La position est reprise à la partie suivante, sur ce navigateur |
 | Caméra | Balancement de la marche, plongeon à l'atterrissage, hauteur des yeux accroupi, secousse en trébuchant, champ de vision un peu plus large en courant, flottement en nageant |
@@ -54,12 +54,37 @@ Les limites entre régions sont déformées par du bruit pour paraître naturell
 | Commandes | Nouvelles actions « Lancer » (clic gauche, RT) et boutons tactiles Accroupir, Prendre, Lancer |
 | Outils de test | Réglages → « Outils de test » : téléportation vers chaque région, le lac (nage) et une paroi de granit (escalade) |
 
+## Vérification complète avant validation
+
+À votre demande, j'ai tout revérifié, au-delà des tests habituels :
+
+| Vérification | Résultat |
+| --- | --- |
+| Le site publié est identique à la version testée (mêmes empreintes de fichiers) et le fil de calcul y est bien servi | OK |
+| Réglages enregistrés par la version de la phase 1 : repris, nouvelle action « Lancer » ajoutée | OK |
+| Les 12 destinations de test : bon biome, joueur au-dessus du sol (jamais dans la roche), nage dans le lac | OK |
+| 24 téléportations d'affilée : pas de fuite (36 objets 3D et 21 Mo avant comme après) | OK |
+| Entrer à pied dans le fleuve, nager, revenir et reprendre pied | OK |
+| Chute réelle de 15 m : signalée comme grave | OK |
+| Frontière : impossible de sortir du monde (arrêt à 3,5 m du bord) | OK |
+| Noyade au fond du lac (14,6 m) : alerte, puis remontée en 17 s et retour du souffle | OK |
+| Quitter, recharger, « Jouer » : reprise exactement au même endroit | OK |
+| Manette (X prend, RT lance, B s'accroupit) et tactile (Prendre, Lancer, Accroupir) | OK |
+| Téléphone en portrait : conseil de le tourner | OK |
+| Kopjes : au moins un côté praticable à pied (testé sur 30 kopjes) | OK après correction |
+| Escalade du flanc raide d'un vrai kopje jusqu'au rebord | OK après correction |
+
+Trois défauts trouvés et corrigés pendant cette vérification :
+- **Des sommets de kopjes étaient inaccessibles.** 35 kopjes sur 80 n'avaient aucun côté praticable à pied, et leurs parois (jusqu'à 55 m) dépassaient de loin ce que l'endurance permet. Chaque kopje a maintenant un côté en pente douce, comme les dômes de granit réels, tandis que les autres côtés restent raides pour l'escalade. Leur hauteur est aussi limitée par leur largeur.
+- **Il existait une zone morte entre la marche et l'escalade.** Sur le granite, on ne marche plus au-delà de 42°, mais l'escalade ne commençait qu'à 44° : on restait bloqué. L'escalade commence désormais dès 41° sur le granite et sur les rochers isolés, et dès 44° sur la roche. Une détection de paroi à hauteur de genou s'ajoute à celles de la poitrine et de la taille.
+- **L'endurance en escalade était trop punitive à l'arrêt.** Rester accroché immobile coûte maintenant 3 points par seconde, grimper 9 : on peut souffler un peu sur la paroi.
+
 ## Tests automatiques
 
 | Suite | Résultat |
 | --- | --- |
-| `npm test` (Vitest) : géographie (régions au bon endroit, fleuves en eau, frontière), sols, accroupi, endurance, équilibre, chutes, nage, plongée, courant, sortie de l'eau, escalade, objets (prendre, porter, lancer, traîner, pousser, mémoriser), apparitions éloignées | **67 / 67** |
-| `npm run test:e2e -- --webgpu` (Chromium) : tout le scénario de la phase 1, plus téléportation dans 7 régions, nage, plongée, escalade d'un vrai kopje, accroupi, barres d'endurance et de souffle, prendre, poser, reprendre et lancer une pierre | **57 / 57** |
+| `npm test` (Vitest) : géographie (régions au bon endroit, fleuves en eau, frontière, kopjes accessibles), sols, accroupi, endurance, équilibre, chutes, nage, plongée, courant, sortie de l'eau, escalade (y compris un vrai kopje jusqu'au rebord), objets (prendre, porter, lancer, traîner, pousser, mémoriser), apparitions éloignées | **69 / 69** |
+| `npm run test:e2e -- --webgpu --only=ordinateur,telephone,manette,phase2,verification,performance,captures,webgpu` (Chromium) : phase 1, régions, nage, plongée, escalade, objets, et toute la vérification complète ci-dessus | **87 / 87** |
 
 Problèmes trouvés par les tests et corrigés :
 - **On restait bloqué au pied d'un kopje sans pouvoir grimper.** Entre la pente maximale de marche (42°) et le seuil d'escalade (55°), il y avait un trou. Désormais, tout ce qui ne se marche pas s'escalade.

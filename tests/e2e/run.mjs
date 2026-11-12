@@ -548,6 +548,337 @@ async function phase2Scenario(browser) {
   await ctx.close();
 }
 
+const QA_SETTINGS = { worldSeed: 20261112, spawnSeed: 1, quality: 'low', adaptiveResolution: false };
+const DEST_BIOMES = {
+  plateau: 'plateau',
+  miombo: 'miombo',
+  vlei: 'vlei',
+  vallee: 'vallee',
+  fleuve: 'fleuve',
+  lac: null,
+  escarpement: 'escarpement',
+  kopje: null,
+  matobo: 'matobo',
+  hautes_terres: 'hautes_terres',
+  lowveld: 'lowveld',
+  kalahari: 'kalahari',
+};
+
+async function settle(page) {
+  await waitFor(page, () => window.__game.session().world.pending === 0, null, 60000).catch(() => undefined);
+  await sleep(300);
+}
+
+/** Place le joueur devant une pierre proche et la vise ; retourne son identifiant ou null. */
+async function aimAtNearestStone(page) {
+  const st = await sess(page);
+  const stones = st.props.filter((p) => p.kind === 'pierre').sort((a, b) => Math.hypot(a.x - st.state.x, a.z - st.state.z) - Math.hypot(b.x - st.state.x, b.z - st.state.z));
+  for (const candidate of stones.slice(0, 10)) {
+    await page.evaluate((p) => window.__game.place(p.x - 1.1, p.z), candidate);
+    await sleep(700);
+    const now = (await sess(page)).props.find((p) => p.id === candidate.id);
+    if (!now) continue;
+    await page.evaluate((p) => window.__game.lookAt(p.x, p.y, p.z), now);
+    await sleep(300);
+    if ((await sess(page)).target?.id === candidate.id) return candidate.id;
+  }
+  return null;
+}
+
+async function qaScenario(browser) {
+  console.log('\n— Vérification complète de la phase 2');
+  const ctx = await browser.newContext({ viewport: { width: 800, height: 450 } });
+  await ctx.addInitScript(() => {
+    if (sessionStorage.getItem('qa-init')) return;
+    sessionStorage.setItem('qa-init', '1');
+    // Réglages enregistrés par la version de la phase 1 (sans « Lancer » ni graine d'apparition).
+    localStorage.setItem(
+      'baz.settings.v1',
+      JSON.stringify({
+        version: 1,
+        quality: 'low',
+        backend: 'auto',
+        renderScale: 1,
+        adaptiveResolution: false,
+        viewChunks: null,
+        fov: 70,
+        mouseSensitivity: 1,
+        touchSensitivity: 1,
+        gamepadSensitivity: 1,
+        invertY: false,
+        showPerf: false,
+        bindings: { forward: ['KeyW', 'ArrowUp'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'], jump: ['Space'], sprint: ['ShiftLeft'], crouch: ['KeyC'], interact: ['KeyE'], pause: ['Escape'], perf: ['F3'] },
+        worldSeed: 20261112,
+      }),
+    );
+  });
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'vérification');
+  await page.goto(BASE);
+  await waitFor(page, () => window.__game && window.__game.screen() === 'home', null, 60000);
+  const old = await page.evaluate(() => window.__game.settings());
+  check('Réglages de la phase 1 repris (nouvelle action « Lancer » ajoutée)', old.bindings.throw?.includes('Mouse0') && old.quality === 'low' && old.worldSeed === 20261112);
+  await startGame(page);
+  check('La partie démarre avec ces anciens réglages', (await page.evaluate(() => window.__game.settings().spawnSeed)) !== null);
+
+  // Toutes les destinations de test, deux tours (le second sert à vérifier la mémoire).
+  let meshesAfterFirst = 0;
+  let heapAfterFirst = 0;
+  for (let round = 0; round < 2; round++) {
+    for (const [id, biome] of Object.entries(DEST_BIOMES)) {
+      await page.evaluate((d) => window.__game.teleport(d), id);
+      await settle(page);
+      await sleep(400);
+      const r = await page.evaluate(() => {
+        const sim = window.__game.sim();
+        const s = sim.state;
+        return { y: s.y, ground: sim.terrain.heightAt(s.x, s.z), mode: s.mode, finite: Number.isFinite(s.x + s.y + s.z), biome: window.__game.session().biome };
+      });
+      if (round === 0) {
+        const okBiome = biome ? r.biome === biome : true;
+        const okPlace = r.finite && r.y >= r.ground - 0.05;
+        const okMode = id === 'lac' ? r.mode === 1 : true;
+        check(`Destination « ${id} » : bon biome, au-dessus du sol${id === 'lac' ? ', en train de nager' : ''}`, okBiome && okPlace && okMode, `biome ${r.biome}, pieds ${(r.y - r.ground).toFixed(2)} m au-dessus du sol, mode ${r.mode}`);
+      }
+    }
+    const res = await page.evaluate(() => ({ meshes: window.__game.session().meshes, heap: performance.memory ? performance.memory.usedJSHeapSize : 0, chunks: window.__game.session().world.chunks }));
+    if (round === 0) {
+      meshesAfterFirst = res.meshes;
+      heapAfterFirst = res.heap;
+    } else {
+      check(
+        'Pas de fuite après 24 téléportations (objets 3D et mémoire stables)',
+        res.meshes <= meshesAfterFirst + 10 && (heapAfterFirst === 0 || res.heap < heapAfterFirst * 1.5) && res.chunks <= 30,
+        `${meshesAfterFirst} → ${res.meshes} objets 3D, mémoire ${Math.round(heapAfterFirst / 1e6)} → ${Math.round(res.heap / 1e6)} Mo, ${res.chunks} chunks`,
+      );
+    }
+  }
+
+  // Entrer dans le fleuve à pied, nager, puis ressortir.
+  await page.evaluate(() => window.__game.teleport('fleuve'));
+  await settle(page);
+  const toWater = await page.evaluate(() => {
+    const sim = window.__game.sim();
+    const s = sim.state;
+    let best = null;
+    for (let k = 0; k < 32; k++) {
+      const a = (k / 32) * Math.PI * 2;
+      for (let r = 4; r < 200; r += 4) {
+        const x = s.x + Math.sin(a) * r;
+        const z = s.z + Math.cos(a) * r;
+        if (sim.terrain.heightAt(x, z) < -2) {
+          if (!best || r < best.r) best = { r, a };
+          break;
+        }
+      }
+    }
+    if (best) {
+      const g = window.__game.session();
+      window.__game.lookAt(s.x + Math.sin(best.a) * 10, s.y + 1.62, s.z + Math.cos(best.a) * 10);
+    }
+    return best;
+  });
+  let swam = false;
+  let back = false;
+  if (toWater) {
+    await page.keyboard.down('KeyW');
+    for (let i = 0; i < 120 && !swam; i++) {
+      await sleep(500);
+      swam = (await sess(page)).state.mode === 1;
+    }
+    await page.keyboard.up('KeyW');
+    if (swam) {
+      await page.evaluate(() => {
+        const g = window.__game.session();
+        const s = g.state;
+        window.__game.lookAt(s.x - Math.sin(g.yaw) * 10, s.y + 1.62, s.z - Math.cos(g.yaw) * 10);
+      });
+      await page.keyboard.down('KeyW');
+      for (let i = 0; i < 180 && !back; i++) {
+        await sleep(500);
+        const st = (await sess(page)).state;
+        back = st.mode === 0 && st.y > 0;
+      }
+      await page.keyboard.up('KeyW');
+    }
+  }
+  check('Entrer à pied dans le fleuve fait nager', swam, toWater ? `eau à ${toWater.r} m` : 'pas d’eau trouvée');
+  check('Revenir vers la rive fait reprendre pied', back);
+
+  // Chute réelle de 15 m sur le plateau.
+  await page.evaluate(() => window.__game.teleport('plateau'));
+  await settle(page);
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    const s = sim.state;
+    sim.teleport(s.x, s.y + 15, s.z);
+  });
+  await sleep(3500);
+  const fallMsg = (await page.textContent('#message')) ?? '';
+  check('Une chute de 15 m est signalée comme grave', /Chute violente/.test(fallMsg), fallMsg);
+
+  // Frontière : impossible de sortir du monde.
+  const border = await page.evaluate(async () => {
+    const sim = window.__game.sim();
+    const x = 7985;
+    const z = 1500;
+    sim.teleport(x, sim.terrain.heightAt(x, z) + 1, z);
+    window.__game.session();
+    return { biome: sim.terrain.sampleInto(x, z).biome };
+  });
+  await page.evaluate(() => {
+    const s = window.__game.session().state;
+    window.__game.lookAt(s.x + 50, s.y + 1.62, s.z);
+  });
+  await page.keyboard.down('ShiftLeft');
+  await page.keyboard.down('KeyW');
+  await sleep(4000);
+  await page.keyboard.up('KeyW');
+  await page.keyboard.up('ShiftLeft');
+  const edge = (await sess(page)).state;
+  check('La frontière arrête le joueur (montagnes + mur invisible)', edge.x < 8000 && border.biome === 'frontiere', `x = ${edge.x.toFixed(2)}, biome ${border.biome}`);
+
+  // Noyade : rester sous l'eau plus de 30 s.
+  await page.evaluate(() => window.__game.teleport('lac'));
+  await settle(page);
+  await page.keyboard.down('KeyC');
+  let drown = '';
+  for (let i = 0; i < 90 && !/air/.test(drown); i++) {
+    await sleep(500);
+    drown = (await page.textContent('#message')) ?? '';
+  }
+  await page.keyboard.up('KeyC');
+  const breath = (await sess(page)).state.breath;
+  check('Sous l’eau trop longtemps : « Vous manquez d’air »', /manquez d’air/.test(drown) && breath === 0, `souffle ${Math.round(breath)}`);
+  // Remonter depuis le fond du lac (une douzaine de mètres) prend du temps.
+  const depth = -(await sess(page)).state.y;
+  await page.keyboard.down('Space');
+  let recovered = false;
+  const t0 = Date.now();
+  for (let i = 0; i < 90 && !recovered; i++) {
+    await sleep(500);
+    recovered = (await sess(page)).state.breath > 50;
+  }
+  await page.keyboard.up('Space');
+  check('En remontant à la surface, le souffle revient', recovered, `remontée depuis ${depth.toFixed(1)} m en ${Math.round((Date.now() - t0) / 1000)} s`);
+
+  // Reprise de la position après avoir quitté et rechargé.
+  await page.evaluate(() => window.__game.teleport('miombo'));
+  await settle(page);
+  await page.keyboard.down('KeyW');
+  await sleep(1500);
+  await page.keyboard.up('KeyW');
+  await sleep(500);
+  const before = (await sess(page)).state;
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000);
+  await page.click('#btn-quit');
+  await waitFor(page, () => window.__game.screen() === 'home', null, 10000);
+  await page.reload();
+  await startGame(page);
+  const after = (await sess(page)).state;
+  const drift = Math.hypot(after.x - before.x, after.z - before.z);
+  check('Après avoir quitté puis rechargé, « Jouer » reprend au même endroit', drift < 1.5, `écart ${drift.toFixed(2)} m`);
+  check('Aucune erreur dans la console (vérification)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+
+  // Manette : X prend, RT lance, B accroupit.
+  const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
+  await padCtx.addInitScript((settings) => {
+    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
+    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
+    navigator.getGamepads = () => [window.__pad, null, null, null];
+  }, QA_SETTINGS);
+  const padPage = await padCtx.newPage();
+  const padErrors = watchErrors(padPage, 'manette (objets)');
+  await padPage.goto(BASE);
+  await startGame(padPage);
+  await padPage.evaluate(() => window.__game.teleport('matobo'));
+  await settle(padPage);
+  const press = async (i, ms = 150) => {
+    await padPage.evaluate((b) => (window.__pad.buttons[b] = { pressed: true, touched: true, value: 1 }), i);
+    await sleep(ms);
+    await padPage.evaluate((b) => (window.__pad.buttons[b] = { pressed: false, touched: false, value: 0 }), i);
+    await sleep(200);
+  };
+  const padStone = await aimAtNearestStone(padPage);
+  if (padStone) {
+    await press(2);
+    const held = (await sess(padPage)).held?.id === padStone;
+    await padPage.evaluate(() => {
+      const s = window.__game.session();
+      window.__game.lookAt(s.state.x + Math.sin(s.yaw) * 10, s.state.y + 3, s.state.z + Math.cos(s.yaw) * 10);
+    });
+    const p0 = (await sess(padPage)).props.find((p) => p.id === padStone);
+    await press(7);
+    await sleep(1500);
+    const p1 = (await sess(padPage)).props.find((p) => p.id === padStone);
+    check('Manette : X prend la pierre, RT la lance', held && p0 && p1 && Math.hypot(p1.x - p0.x, p1.z - p0.z) > 3, `${p0 && p1 ? Math.hypot(p1.x - p0.x, p1.z - p0.z).toFixed(1) : '?'} m`);
+  } else {
+    check('Manette : X prend la pierre, RT la lance', false, 'aucune pierre visable');
+  }
+  await padPage.evaluate(() => (window.__pad.buttons[1] = { pressed: true, touched: true, value: 1 }));
+  await sleep(500);
+  const padCrouch = (await sess(padPage)).state.crouched;
+  await padPage.evaluate(() => (window.__pad.buttons[1] = { pressed: false, touched: false, value: 0 }));
+  check('Manette : B fait s’accroupir', padCrouch);
+  check('Aucune erreur dans la console (manette, objets)', padErrors.length === 0, padErrors.slice(0, 3).join(' | '));
+  await padCtx.close();
+
+  // Tactile : Prendre, Lancer, Accroupir ; conseil de rotation en portrait.
+  const touchCtx = await browser.newContext({ ...devices['Pixel 7 landscape'] });
+  await touchCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const tPage = await touchCtx.newPage();
+  const tErrors = watchErrors(tPage, 'tactile (objets)');
+  await tPage.goto(BASE);
+  await startGame(tPage);
+  const cdp = await touchCtx.newCDPSession(tPage);
+  const tap = async (sel, ms = 150) => {
+    const b = await tPage.locator(sel).boundingBox();
+    const x = Math.round(b.x + b.width / 2);
+    const y = Math.round(b.y + b.height / 2);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 9 }] });
+    await sleep(ms);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+  };
+  await tPage.evaluate(() => window.__game.teleport('matobo'));
+  await settle(tPage);
+  const tStone = await aimAtNearestStone(tPage);
+  if (tStone) {
+    await tap('[data-touch="interact"]');
+    const held = (await sess(tPage)).held?.id === tStone;
+    await tPage.evaluate(() => {
+      const s = window.__game.session();
+      window.__game.lookAt(s.state.x + Math.sin(s.yaw) * 10, s.state.y + 3, s.state.z + Math.cos(s.yaw) * 10);
+    });
+    const p0 = (await sess(tPage)).props.find((p) => p.id === tStone);
+    await tap('[data-touch="throw"]');
+    await sleep(1500);
+    const p1 = (await sess(tPage)).props.find((p) => p.id === tStone);
+    check('Tactile : « Prendre » puis « Lancer »', held && p0 && p1 && Math.hypot(p1.x - p0.x, p1.z - p0.z) > 3);
+  } else {
+    check('Tactile : « Prendre » puis « Lancer »', false, 'aucune pierre visable');
+  }
+  await tap('[data-touch="crouch"]');
+  await sleep(300);
+  const tCrouch = (await sess(tPage)).state.crouched;
+  await tap('[data-touch="crouch"]');
+  await sleep(500);
+  check('Tactile : « Accroupir » s’active puis se désactive', tCrouch && !(await sess(tPage)).state.crouched);
+  check('Aucune erreur dans la console (tactile, objets)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  await touchCtx.close();
+
+  const portraitCtx = await browser.newContext({ ...devices['Pixel 7'] });
+  await portraitCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const pPage = await portraitCtx.newPage();
+  await pPage.goto(BASE);
+  await startGame(pPage);
+  check('Téléphone en portrait : conseil de le tourner à l’horizontale', await pPage.isVisible('#rotate-hint'));
+  await portraitCtx.close();
+}
+
 async function webgpuScenario() {
   console.log('\n— WebGPU (expérimental)');
   const browser = await chromium.launch({
@@ -576,7 +907,7 @@ async function webgpuScenario() {
   await browser.close();
 }
 
-// --only=ordinateur,telephone,manette,phase2,performance,captures,webgpu pour ne lancer que certains scénarios.
+// --only=ordinateur,telephone,manette,phase2,verification,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -589,6 +920,7 @@ try {
   if (want('manette')) await gamepadScenario(browser);
   if (want('performance')) await benchScenario(browser);
   if (want('phase2')) await phase2Scenario(browser);
+  if (want('verification')) await qaScenario(browser);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();

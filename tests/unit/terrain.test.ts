@@ -143,6 +143,37 @@ describe('géographie inspirée du Zimbabwe (16 km × 16 km)', () => {
   });
 });
 
+describe('kopjes', () => {
+  it('chaque kopje a au moins un côté praticable à pied (pente < 42°)', () => {
+    const t = new Terrain(SEED);
+    const tops: Array<[number, number]> = [];
+    for (let x = -5600; x < -3000 && tops.length < 30; x += 12) {
+      for (let z = -5000; z < -1800 && tops.length < 30; z += 12) {
+        if (t.sampleInto(x, z).kopje >= 0.99 && !tops.some(([a, b]) => Math.hypot(a - x, b - z) < 200)) tops.push([x, z]);
+      }
+    }
+    expect(tops.length).toBeGreaterThan(15);
+    for (const [x0, z0] of tops) {
+      let best = Infinity;
+      for (let k = 0; k < 16 && best > 0.9; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        let prev = t.heightAt(x0, z0);
+        let maxSlope = 0;
+        for (let r = 2; r < 400; r += 2) {
+          const x = x0 + Math.cos(a) * r;
+          const z = z0 + Math.sin(a) * r;
+          const h = t.heightAt(x, z);
+          maxSlope = Math.max(maxSlope, Math.abs(prev - h) / 2);
+          prev = h;
+          if (t.sampleInto(x, z).kopje < 0.02) break;
+        }
+        best = Math.min(best, maxSlope);
+      }
+      expect(best, `kopje en (${x0}, ${z0})`).toBeLessThanOrEqual(0.9);
+    }
+  });
+});
+
 describe('le sol physique coïncide avec le relief', () => {
   it('rayons verticaux : altitude physique = surface triangulée (hors arbres et rochers)', () => {
     const t = new Terrain(31337);

@@ -429,6 +429,7 @@ async function boot(): Promise<void> {
         target: session.sim ? session.sim.props.target(session.sim.state, session.yaw, session.pitch) : null,
         biome: session.sim ? session.terrain.sampleInto(session.sim.state.x, session.sim.state.z).biome : null,
         jobsWorkers: session.jobs.usesWorkers,
+        meshes: session.scene.meshes.length,
       },
     teleport: (id: string) => session?.teleport(id) ?? false,
     /** Simulation complète (diagnostic). */

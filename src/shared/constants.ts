@@ -69,8 +69,9 @@ export const STAMINA = {
   max: 100,
   sprintDrain: 11,
   jumpCost: 6,
-  climbDrain: 7,
-  climbMoveDrain: 4,
+  /** Rester accroché immobile coûte peu ; grimper coûte davantage. */
+  climbDrain: 3,
+  climbMoveDrain: 6,
   swimDrain: 1.5,
   fastSwimDrain: 9,
   heavyCarryDrain: 2,
