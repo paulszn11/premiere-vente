@@ -1,0 +1,28 @@
+{
+  "name": "bienvenue-au-zimbabwe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Jeu 3D de survie, exploration, construction et horreur multijoueur (prototype phase 1).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "check": "npm run typecheck && npm test && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "@babylonjs/core": "9.33.3",
+    "@dimforge/rapier3d-compat": "0.21.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}
