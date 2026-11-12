@@ -14,7 +14,7 @@ Pour l'instant, le jeu est solo (le multijoueur arrive en phase 8) et les graphi
 
 ## Jouer
 
-Site : https://bienvenue-au-zimbabwe-astrinova.vercel.app
+Site : https://bienvenue-au-zimbabwe.vercel.app
 
 Tant que la protection Vercel est activée, il faut être connecté à son compte Vercel pour ouvrir le site. Pour l'ouvrir à tout le monde, allez dans le projet Vercel, Settings, puis Deployment Protection.
 
