@@ -5,13 +5,26 @@
 
 import { CHUNK_SIZE, WATER_LEVEL } from './constants';
 import type { BiomeId } from './geography';
-import { type Container, bagTotalMass } from './inventory';
+import { type Container, type ItemMeta, type ItemStack, bagTotalMass } from './inventory';
 import { ITEMS, type ItemId } from './items';
+import type { NodeKind } from './resources';
 import { hash32 } from './rng';
 import type { Terrain } from './terrain';
 import { floraInChunk } from './vegetation';
 
-export type PropKind = 'pierre' | 'buche' | 'tronc' | 'baton' | 'chiffon' | 'aloes' | 'fruit_baobab' | 'figue' | 'muhacha' | 'sac' | 'corps';
+/** Objets transportables : leur type est aussi leur identifiant dans le catalogue. */
+export type ItemPropKind = Exclude<ItemId, never>;
+export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer';
+
+/** État d'un foyer. */
+export interface FireState {
+  lit: boolean;
+  /** Secondes de combustion restantes. */
+  fuel: number;
+  /** Objet posé sur le feu (pot d'eau, pot cru) et temps de cuisson écoulé. */
+  pot: ItemStack | null;
+  cook: number;
+}
 export type Handling = 'une-main' | 'deux-mains' | 'trainer';
 
 export interface PropDef {
@@ -29,47 +42,73 @@ export interface PropDef {
   dynamic?: boolean;
   /** Sac posé ou corps : ce qu'il contient. */
   container?: Container;
-  /** Corps : pas de simulation où il a été vidé (il disparaît ensuite). */
+  /** Corps : temps du monde où il a été vidé (il disparaît ensuite). */
   emptiedAt?: number;
+  /** Outil ou objet fabriqué : qualité, durabilité, améliorations ; pot : eau. */
+  meta?: ItemMeta;
+  /** Gisement ou foyer : immobile. */
+  fixed?: boolean;
+  /** Taille d'un gisement (mètres). */
+  size?: number;
+  fire?: FireState;
 }
 
-export const PROP_LABELS: Record<PropKind, string> = {
-  pierre: 'pierre',
-  buche: 'bûche',
+const OTHER_LABELS = {
   tronc: 'tronc',
-  baton: 'bâton',
-  chiffon: 'chiffon',
-  aloes: 'aloès',
-  fruit_baobab: 'fruit du baobab',
-  figue: 'figue sauvage',
-  muhacha: 'muhacha',
   sac: 'sac à dos',
   corps: 'corps',
+  bloc_quartz: 'bloc de quartz',
+  touffe_herbe: 'touffe d’herbes sèches',
+  gisement_argile: 'gisement d’argile',
+  filon_fer: 'affleurement de minerai de fer',
+  gravier_or: 'gravier aurifère',
+  foyer: 'foyer',
+} as const;
+
+export const PROP_LABELS: Record<PropKind, string> = {
+  ...(Object.fromEntries(Object.values(ITEMS).map((d) => [d.id, d.label])) as Record<ItemId, string>),
+  aloes: 'aloès',
+  ...OTHER_LABELS,
 };
+
+const FEMININE = new Set<string>(['tronc_', 'touffe_herbe']);
 
 /** « la pierre », « le bâton », « l'aloès ». */
 export function propWithArticle(kind: PropKind): string {
-  if (kind === 'aloes') return "l'aloès";
-  const fem = kind === 'pierre' || kind === 'buche' || kind === 'figue';
-  return `${fem ? 'la' : 'le'} ${PROP_LABELS[kind]}`;
+  const label = PROP_LABELS[kind];
+  if (/^[aeéèêiïoôuh]/i.test(label) && kind !== 'herbe' && kind !== 'hache') return `l'${label}`;
+  const fem = kind in ITEMS ? ITEMS[kind as ItemId].feminine : FEMININE.has(kind);
+  return `${fem ? 'la' : 'le'} ${label}`;
 }
 
-export const DENSITY: Record<'pierre' | 'buche' | 'tronc' | 'baton', number> = { pierre: 2600, buche: 700, tronc: 700, baton: 600 };
+export const DENSITY: Record<'pierre' | 'buche' | 'tronc' | 'baton' | 'manche' | 'perche' | 'baton_fouir' | 'lance', number> = {
+  pierre: 2600,
+  buche: 700,
+  tronc: 700,
+  baton: 600,
+  manche: 650,
+  perche: 650,
+  baton_fouir: 600,
+  lance: 650,
+};
 export const BODY_MASS = 70;
 
 /** Objets que l'on peut ranger (poche ou sac), avec leur identifiant dans le catalogue. */
-export const ITEM_OF_PROP: Partial<Record<PropKind, ItemId>> = {
-  pierre: 'pierre',
-  baton: 'baton',
-  chiffon: 'chiffon',
-  aloes: 'aloes',
-  fruit_baobab: 'fruit_baobab',
-  figue: 'figue',
-  muhacha: 'muhacha',
-};
+export const ITEM_OF_PROP: Partial<Record<PropKind, ItemId>> = Object.fromEntries(Object.keys(ITEMS).map((id) => [id, id])) as Partial<Record<PropKind, ItemId>>;
 
-/** Petits objets rangés directement en les ramassant (les pierres se prennent en main). */
-export const QUICK_PICK = new Set<PropKind>(['baton', 'chiffon', 'aloes', 'fruit_baobab', 'figue', 'muhacha']);
+/** Objets rangés directement en les ramassant (pierres et bûches se prennent en main). */
+export const QUICK_PICK = new Set<PropKind>((Object.keys(ITEMS) as ItemId[]).filter((id) => id !== 'pierre' && id !== 'buche'));
+
+/** Gisements (immobiles, exploitables). */
+export const NODE_PROP_KINDS = new Set<PropKind>(['bloc_quartz', 'touffe_herbe', 'gisement_argile', 'filon_fer', 'gravier_or']);
+
+/** Délai de repousse d'un objet naturel ramassé (secondes ; Infinity : jamais). */
+export function regrowDelay(kind: PropKind): number {
+  if (kind === 'baton') return 3600;
+  if (kind === 'figue' || kind === 'muhacha' || kind === 'fruit_baobab') return 7200;
+  if (kind === 'aloes') return 10800;
+  return Infinity;
+}
 
 /** Au-delà de 8 kg : à deux mains ; au-delà de 60 kg : on ne peut que le traîner. */
 export const ONE_HAND_MAX_KG = 8;
@@ -83,6 +122,13 @@ export function propMass(p: Pick<PropDef, 'kind' | 'radius' | 'length' | 'contai
     case 'tronc':
     case 'baton':
       return Math.PI * p.radius * p.radius * p.length * DENSITY[p.kind];
+    case 'bloc_quartz':
+    case 'touffe_herbe':
+    case 'gisement_argile':
+    case 'filon_fer':
+    case 'gravier_or':
+    case 'foyer':
+      return 0;
     case 'sac':
       return bagTotalMass(p.container?.bag ?? []);
     case 'corps':
@@ -117,6 +163,48 @@ export function itemShape(kind: PropKind): { radius: number; length: number } {
       return { radius: 0.22, length: 0 };
     case 'corps':
       return { radius: 0.28, length: 1.1 };
+    case 'quartz':
+      return { radius: 0.03, length: 0 };
+    case 'ecorce':
+      return { radius: 0.05, length: 0.5 };
+    case 'fibres':
+    case 'pansement':
+      return { radius: 0.05, length: 0 };
+    case 'corde':
+      return { radius: 0.07, length: 0 };
+    case 'herbe':
+      return { radius: 0.12, length: 0.4 };
+    case 'ilala':
+      return { radius: 0.15, length: 0.8 };
+    case 'argile':
+      return { radius: 0.06, length: 0 };
+    case 'resine':
+      return { radius: 0.02, length: 0 };
+    case 'minerai_fer':
+      return { radius: 0.07, length: 0 };
+    case 'pepite_or':
+      return { radius: 0.012, length: 0 };
+    case 'manche':
+      return { radius: 0.02, length: 0.5 };
+    case 'perche':
+      return { radius: 0.025, length: 1.8 };
+    case 'couteau':
+      return { radius: 0.02, length: 0.3 };
+    case 'hache':
+      return { radius: 0.05, length: 0.6 };
+    case 'baton_fouir':
+      return { radius: 0.022, length: 0.9 };
+    case 'lance':
+      return { radius: 0.025, length: 1.9 };
+    case 'archet':
+      return { radius: 0.05, length: 0.6 };
+    case 'pot_cru':
+    case 'pot':
+      return { radius: 0.13, length: 0.22 };
+    case 'batee':
+      return { radius: 0.2, length: 0.08 };
+    case 'foyer':
+      return { radius: 0.45, length: 0 };
     default:
       return { radius: 0.1, length: 0 };
   }
@@ -127,7 +215,8 @@ const FOREST_BIOMES = new Set<BiomeId>(['miombo', 'fleuve', 'hautes_terres', 'ka
 const ROCKY_BIOMES = new Set<BiomeId>(['matobo', 'escarpement', 'frontiere', 'hautes_terres']);
 const ALOE_BIOMES = new Set<BiomeId>(['matobo', 'escarpement', 'lowveld', 'vallee']);
 
-export function propsInChunk(terrain: Terrain, cx: number, cz: number): PropDef[] {
+/** `skipTree(i)` : arbre abattu, sans fruits ni bois mort à son pied. */
+export function propsInChunk(terrain: Terrain, cx: number, cz: number, skipTree?: (index: number) => boolean): PropDef[] {
   const out: PropDef[] = [];
   if (!terrain.floraEnabled) return out;
   const n = CHUNK_SIZE / PROP_CELL;
@@ -173,7 +262,9 @@ export function propsInChunk(terrain: Terrain, cx: number, cz: number): PropDef[
 
   // Fruits tombés et bois mort au pied des arbres.
   const trees = floraInChunk(terrain, cx, cz).trees;
-  for (const t of trees) {
+  for (let ti = 0; ti < trees.length; ti++) {
+    const t = trees[ti]!;
+    if (skipTree?.(ti)) continue;
     const ht = hash32(seed, Math.round(t.x * 4), Math.round(t.z * 4), 0x51a7);
     const r = (ht & 0xffff) / 65536;
     let fruit: PropKind | null = null;

@@ -100,7 +100,7 @@ describe('inventaire', () => {
     expect(inv.pockets).toEqual([{ item: 'figue', count: 3 }, null, null, null]);
     expect(inv.bag).toEqual([{ item: 'baton', count: 8 }]);
     expect(inv.clothes).toEqual({ haut: false, bas: true });
-    expect(readInventory(null)).toEqual({ bag: null, pockets: [null, null, null, null], clothes: { haut: true, bas: true } });
+    expect(readInventory(null)).toEqual({ bag: null, pockets: [null, null, null, null], clothes: { haut: true, bas: true }, bench: [] });
   });
 
   it('noms avec article et pluriel', () => {

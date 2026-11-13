@@ -2,15 +2,44 @@
 // vêtements (que l'on peut déchirer en chiffons). Données simples (sérialisables) : elles
 // seront sauvegardées par l'hôte et échangées sur le réseau en phase 8.
 
-import { ITEMS, type ItemId, STONE_DENSITY_KG_L, isItemId } from './items';
+import { ITEMS, type ItemId, MASS_ITEMS, STONE_DENSITY_KG_L, WOOD_DENSITY_KG_L, isItemId } from './items';
 
 export interface ItemStack {
   item: ItemId;
   count: number;
   /** Masse d'une unité si elle diffère du catalogue (pierres). */
   mass?: number;
-  /** Rayon de la pierre (pour la reposer telle quelle dans le monde). */
+  /** Rayon de la pierre ou de la bûche (pour la reposer telle quelle dans le monde). */
   radius?: number;
+  /** Longueur d'une bûche. */
+  length?: number;
+  /** Outil fabriqué : qualité (0 à 100), durabilité restante et maximale. */
+  q?: number;
+  d?: number;
+  dm?: number;
+  /** Améliorations et défauts (FX_DURCI, FX_RESINE, FX_LIGATURE_LACHE, FX_MANCHE_FENDU). */
+  fx?: number;
+  /** Pot : 0 vide, 1 eau, 2 eau bouillie. */
+  w?: number;
+}
+
+/** Propriétés propres à un exemplaire (un objet qui en a ne se regroupe pas). */
+export const META_KEYS = ['mass', 'radius', 'length', 'q', 'd', 'dm', 'fx', 'w'] as const;
+export type ItemMeta = Partial<Pick<ItemStack, (typeof META_KEYS)[number]>>;
+
+export const FX_DURCI = 1;
+export const FX_RESINE = 2;
+export const FX_LIGATURE_LACHE = 4;
+export const FX_MANCHE_FENDU = 8;
+
+export function metaOf(st: ItemStack): ItemMeta {
+  const m: ItemMeta = {};
+  for (const k of META_KEYS) if (st[k] !== undefined) m[k] = st[k];
+  return m;
+}
+
+function hasMeta(st: ItemStack): boolean {
+  return META_KEYS.some((k) => st[k] !== undefined);
 }
 
 /** Contenu d'un sac et de poches : celui du joueur, d'un corps ou d'un sac posé. */
@@ -28,7 +57,11 @@ export interface Clothes {
 
 export interface Inventory extends Container {
   clothes: Clothes;
+  /** Plan de travail (pièces posées sur la toile pour fabriquer). */
+  bench: ItemStack[];
 }
+
+export const BENCH_SLOTS = 6;
 
 export type ClothingPart = keyof Clothes;
 
@@ -36,7 +69,7 @@ export const POCKET_COUNT = 4;
 export const POCKET_MAX_L = 1;
 export const BAG_CAPACITY_L = 30;
 export const BAG_EMPTY_MASS = 1.2;
-/** Une pierre plus lourde ne rentre pas dans le sac. */
+/** Une pierre ou une bûche plus lourde ne rentre pas dans le sac. */
 export const BAG_STONE_MAX_KG = 8;
 export const RAGS_PER_PART: Record<ClothingPart, number> = { haut: 4, bas: 4 };
 export const CLOTHING_LABELS: Record<ClothingPart, string> = { haut: 'votre chemise', bas: 'votre pantalon' };
@@ -47,7 +80,7 @@ export function emptyPockets(): Array<ItemStack | null> {
 
 /** Inventaire de départ : vêtements intacts, sac vide, poches vides. */
 export function makeInventory(withBag = true): Inventory {
-  return { bag: withBag ? [] : null, pockets: emptyPockets(), clothes: { haut: true, bas: true } };
+  return { bag: withBag ? [] : null, pockets: emptyPockets(), clothes: { haut: true, bas: true }, bench: [] };
 }
 
 export function unitMass(st: ItemStack): number {
@@ -55,7 +88,9 @@ export function unitMass(st: ItemStack): number {
 }
 
 export function unitVolume(st: ItemStack): number {
-  return st.item === 'pierre' ? unitMass(st) / STONE_DENSITY_KG_L : ITEMS[st.item].volume;
+  if (st.item === 'pierre') return unitMass(st) / STONE_DENSITY_KG_L;
+  if (st.item === 'buche') return unitMass(st) / WOOD_DENSITY_KG_L;
+  return ITEMS[st.item].volume;
 }
 
 export function stackMass(st: ItemStack): number {
@@ -90,13 +125,13 @@ export function carriedMass(c: Container): number {
   return m;
 }
 
-/** Deux piles peuvent-elles se regrouper ? (les pierres, toutes différentes, jamais) */
+/** Deux piles peuvent-elles se regrouper ? (pas les pierres, les bûches ni les outils usés) */
 function sameKind(a: ItemStack, b: ItemStack): boolean {
-  return a.item === b.item && a.item !== 'pierre' && a.mass === undefined && b.mass === undefined;
+  return a.item === b.item && !MASS_ITEMS.has(a.item) && !hasMeta(a) && !hasMeta(b);
 }
 
 export function fitsBag(st: ItemStack): boolean {
-  return st.item !== 'pierre' || unitMass(st) <= BAG_STONE_MAX_KG;
+  return !MASS_ITEMS.has(st.item) || unitMass(st) <= BAG_STONE_MAX_KG;
 }
 
 /** Range dans les poches autant d'unités que possible ; renvoie le nombre restant. */
@@ -237,6 +272,19 @@ function readStack(raw: unknown): ItemStack | null {
   const st: ItemStack = { item: r.item, count };
   if (typeof r.mass === 'number' && Number.isFinite(r.mass) && r.mass > 0 && r.mass < 1000) st.mass = r.mass;
   if (typeof r.radius === 'number' && Number.isFinite(r.radius) && r.radius > 0 && r.radius < 2) st.radius = r.radius;
+  if (typeof r.length === 'number' && Number.isFinite(r.length) && r.length > 0 && r.length < 6) st.length = r.length;
+  const n = (v: unknown, lo: number, hi: number): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : undefined);
+  const q = n(r.q, 0, 100);
+  const dm = n(r.dm, 1, 10000);
+  const d = n(r.d, 0, dm ?? 10000);
+  const fx = n(r.fx, 0, 255);
+  const w = n(r.w, 0, 2);
+  if (q !== undefined) st.q = q;
+  if (dm !== undefined) st.dm = dm;
+  if (d !== undefined) st.d = d;
+  if (fx !== undefined) st.fx = Math.round(fx);
+  if (w !== undefined) st.w = Math.round(w);
+  if (hasMeta(st) && st.count > 1 && !MASS_ITEMS.has(st.item) && (st.q !== undefined || st.d !== undefined)) st.count = 1;
   return st;
 }
 
@@ -259,5 +307,10 @@ export function readInventory(raw: unknown): Inventory {
   const c = readContainer(raw);
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const cl = (typeof r.clothes === 'object' && r.clothes !== null ? r.clothes : {}) as Record<string, unknown>;
-  return { ...c, clothes: { haut: cl.haut !== false, bas: cl.bas !== false } };
+  const bench: ItemStack[] = [];
+  if (Array.isArray(r.bench)) for (const b of r.bench.slice(0, BENCH_SLOTS)) {
+    const st = readStack(b);
+    if (st) bench.push(st);
+  }
+  return { ...c, clothes: { haut: cl.haut !== false, bas: cl.bas !== false }, bench };
 }

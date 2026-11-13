@@ -4,8 +4,35 @@
 // En phase 8, cette même logique tournera sur le serveur de l'hôte et le client prédira.
 
 import type { ActionResult, HandOrSlot, PlayerAction } from './actions';
-import { KILL_Y, PHYS_CHUNK_RADIUS, TICK_DT } from './constants';
-import { PropSystem, REACH, lookDirection } from './interaction';
+import { KILL_Y, PHYS_CHUNK_RADIUS, TICK_DT, WATER_LEVEL } from './constants';
+import {
+  type ImproveKind,
+  type Knowledge,
+  RECIPES,
+  type RecipeId,
+  type RepairKind,
+  applyImprove,
+  applyRepair,
+  canDismantle,
+  craftQuality,
+  dismantle,
+  ensureToolMeta,
+  experimentHint,
+  hintFrom,
+  hintRecipe,
+  improveOptions,
+  learn,
+  makeKnowledge,
+  matchRecipe,
+  maxDurability,
+  readKnowledge,
+  repairOptions,
+  skillLevel,
+  stepToolOk,
+  toolPower,
+  wear,
+} from './crafting';
+import { PropSystem, type PropTarget, REACH, type TreeTarget, lookDirection } from './interaction';
 import {
   CLOTHING_LABELS,
   type Container,
@@ -13,6 +40,9 @@ import {
   type ItemStack,
   POCKET_MAX_L,
   RAGS_PER_PART,
+  BENCH_SLOTS,
+  FX_LIGATURE_LACHE,
+  FX_MANCHE_FENDU,
   addToBag,
   addToPockets,
   carriedMass,
@@ -27,12 +57,14 @@ import {
   takeAt,
   tearClothing,
   unitVolume,
+  metaOf,
 } from './inventory';
-import { ITEMS, type ItemId, itemName } from './items';
+import { ITEMS, type ItemId, MASS_ITEMS, type ToolTag, hasTag, itemName } from './items';
 import {
   BTN_CROUCH,
   BTN_INTERACT,
   BTN_JUMP,
+  MODE_CLIMB,
   type InputCmd,
   MODE_SWIM,
   MODE_WALK,
@@ -48,7 +80,8 @@ import {
   stepMovement,
 } from './movement';
 import { type HeightProvider, PhysicsWorld, type RAPIER, initPhysics } from './physics';
-import { ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, itemShape } from './props';
+import { type FireState, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, itemShape } from './props';
+import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
 import { Terrain } from './terrain';
 import {
@@ -70,6 +103,7 @@ import {
   fallAsleep,
   limits,
   makeVitals,
+  rand,
   readVitals,
   sitDown,
   standUp,
@@ -99,14 +133,43 @@ export type SimEvent =
 
 /** Geste en cours (manger, soigner) : il prend du temps et bouger l'interrompt. */
 export interface Gesture {
-  kind: 'manger' | 'soin';
+  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage';
   label: string;
   total: number;
   left: number;
   food?: { item: ItemId; from: HandOrSlot };
   injury?: number;
   treatment?: Treatment;
+  recipe?: RecipeId;
+  step?: number;
+  from?: HandOrSlot;
+  repair?: RepairKind;
+  improve?: ImproveKind;
+  prop?: string;
 }
+
+/** Outils nécessaires, pour les messages. */
+export const TOOL_NEEDS: Record<ToolTag, string> = {
+  tranchant: 'un outil tranchant (éclat de quartz, couteau, hache)',
+  hache: 'une hache',
+  percuteur: 'un galet (pierre) comme percuteur',
+  fouir: 'un bâton à fouir',
+  batee: 'une batée',
+  feu: 'un archet à feu',
+  recipient: 'un pot',
+  pointe: 'une lance',
+};
+
+/** Endurance dépensée par coup selon l'outil. */
+const STRIKE_COST: Record<string, number> = { hache: 6, percuteur: 4, tranchant: 3, fouir: 5, batee: 3, main: 2 };
+/** Durée d'un coup (s). */
+const STRIKE_TIME = 0.6;
+/** Combustion : un bâton, une bûche (s). */
+const FUEL_STICK = 60;
+const FUEL_LOG = 240;
+const FIRE_START = 300;
+const BOIL_TIME = 30;
+const FIRING_TIME = 90;
 
 /** Sauvegarde de la partie (solo pour l'instant ; l'hôte en phase 8). */
 export interface SimSave {
@@ -120,8 +183,10 @@ export interface SimSave {
     inventory: Inventory;
     respawn: SpawnPoint | null;
     lastBody: { id: string; x: number; z: number } | null;
+    knowledge: Knowledge;
   };
   props: ReturnType<PropSystem['serialize']>;
+  world: ReturnType<WorldState['serialize']>;
 }
 
 export interface SimulationOptions {
@@ -149,6 +214,7 @@ export function compassDirection(dx: number, dz: number): string {
   return DIRECTIONS[(((Math.round(deg / 45) % 8) + 8) % 8)]!;
 }
 
+const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
 const ok = (message?: string): ActionResult => (message ? { ok: true, message } : { ok: true });
 const fail = (message?: string): ActionResult => (message ? { ok: false, message } : { ok: false });
 
@@ -176,9 +242,22 @@ export class LocalSimulation {
   time = 0;
   /** Secondes écoulées depuis la mort (réapparition après RESPAWN_DELAY). */
   deadTime = 0;
+  /** Gisements et arbres modifiés par le joueur. */
+  readonly world = new WorldState();
+  /** Recettes connues et pressenties, compétence « Fabrication ». */
+  knowledge: Knowledge = makeKnowledge();
+  /** Fabrication en cours sur le plan de travail : recette et étape suivante. */
+  craft: { recipe: RecipeId; step: number } | null = null;
+  /** Coups déjà portés sur une cible (gisement, partie d'un arbre). */
+  private readonly strikes = new Map<string, number>();
+  /** Temps avant le prochain coup d'outil (s). */
+  private useCooldown = 0;
+  /** Endurance dépensée hors déplacement (coups d'outil), pour l'énergie et la fatigue. */
+  private extraSpent = 0;
   private readonly collider: RAPIER.Collider;
   private lastDrownEvent = -1e9;
   private yaw = 0;
+  private pitch = 0;
 
   /** Charge Rapier si nécessaire puis crée la simulation. */
   static async create(seed: number, opts: SimulationOptions = {}): Promise<LocalSimulation> {
@@ -192,6 +271,8 @@ export class LocalSimulation {
     this.phys = new PhysicsWorld(this.terrain);
     if (opts.heightProvider) this.phys.heightProvider = opts.heightProvider;
     this.props = new PropSystem(this.phys);
+    this.props.clock = () => this.time;
+    this.phys.treeFelled = (cx, cz, i) => this.world.isFelled(treeKey(cx, cz, i), this.time);
     this.spawn = opts.spawnSeed !== undefined ? chooseSpawn(this.terrain, opts.spawnSeed) : findSpawn(this.terrain);
     this.vitals = makeVitals((opts.spawnSeed ?? this.terrain.seed) ^ 0x5eed);
     this.inventory = makeInventory(true);
@@ -249,6 +330,7 @@ export class LocalSimulation {
     if (this.tick % 120 === 0) this.phys.unloadUnused(this.tick, 600);
     this.time += TICK_DT;
     this.yaw = q.yaw;
+    this.pitch = q.pitch;
 
     if (v.state === 'mort') {
       this.deadTime += TICK_DT;
@@ -283,9 +365,18 @@ export class LocalSimulation {
       const t = this.props.target(s, c.yaw, c.pitch);
       if (t && QUICK_PICK.has(t.kind)) {
         if (this.pickUp(t.id)) propPressed &= ~BTN_INTERACT;
-      } else if (t && (t.kind === 'sac' || t.kind === 'corps')) {
+      } else if (t && (t.kind === 'sac' || t.kind === 'corps' || t.kind === 'foyer')) {
         propPressed &= ~BTN_INTERACT;
         this.push({ type: 'ouvrir', prop: t.id, tick: this.tick });
+      } else if (t && t.kind === 'touffe_herbe') {
+        // Les herbes sèches s'arrachent à la main.
+        propPressed &= ~BTN_INTERACT;
+        const r = this.harvestNode(t, null);
+        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+      } else if (t && t.kind === 'gravier_or') {
+        propPressed &= ~BTN_INTERACT;
+        if (hintRecipe(this.knowledge, 'batee')) this.msg('Ce gravier brille… Une batée permettrait de le laver. Nouvelle idée dans le carnet.', 'info');
+        else this.msg('Ce gravier brille… Il faut une batée en main (Utiliser) pour le laver.', 'info');
       }
     }
     this.props.update(s, c, propPressed);
@@ -323,14 +414,20 @@ export class LocalSimulation {
 
     const out: VitalEvent[] = [];
     const moving = s.vx * s.vx + s.vz * s.vz > 0.09;
-    tickVitals(v, TICK_DT, { staminaSpent: s.spent, moving, loadKg: s.loadKg + s.carryMass, inWater: s.mode === MODE_SWIM, drowning: s.drowning, grounded: s.grounded }, out);
+    tickVitals(v, TICK_DT, { staminaSpent: s.spent + this.extraSpent, moving, loadKg: s.loadKg + s.carryMass, inWater: s.mode === MODE_SWIM, drowning: s.drowning, grounded: s.grounded }, out);
+    this.extraSpent = 0;
+    if (this.useCooldown > 0) this.useCooldown = Math.max(0, this.useCooldown - TICK_DT);
     for (const e of out) this.onVital(e);
     if (this.dead) {
       this.tick++;
       return;
     }
     this.stepGesture();
-    if (this.tick % 600 === 0) this.cleanupBodies();
+    if (this.tick % 30 === 0) this.stepFires(30 * TICK_DT);
+    if (this.tick % 600 === 0) {
+      this.cleanupBodies();
+      for (const c of this.world.regrow(this.time)) this.phys.rebuildChunk(c.cx, c.cz);
+    }
     if (s.y < KILL_Y || !Number.isFinite(s.x + s.y + s.z)) this.respawn();
     if (this.events.length > 80) this.events.splice(0, this.events.length - 80);
     this.tick++;
@@ -382,6 +479,13 @@ export class LocalSimulation {
     this.gesture = null;
     if (this.props.held) this.props.drop(s);
     const inv = this.inventory;
+    // Les pièces du plan de travail restent avec le corps.
+    for (const st of inv.bench) {
+      if (inv.bag) inv.bag.push(st);
+      else this.dropOnGround(st);
+    }
+    inv.bench = [];
+    this.craft = null;
     const container: Container = { bag: inv.bag, pockets: inv.pockets };
     const shape = itemShape('corps');
     const id = this.props.spawnDynamic({ kind: 'corps', x: s.x, y: s.y + shape.radius + 0.05, z: s.z, rot: (((this.yaw / (Math.PI * 2)) % 1) + 1) % 1, ...shape, container });
@@ -446,11 +550,12 @@ export class LocalSimulation {
   private stackFromProp(id: string, def: PropDef): ItemStack | null {
     const item = ITEM_OF_PROP[def.kind];
     if (!item) return null;
-    const st: ItemStack = { item, count: 1 };
-    if (item === 'pierre') {
-      st.mass = this.props.massOf(id) || undefined;
-      if (st.mass === undefined) delete st.mass;
+    const st: ItemStack = { item, count: 1, ...(def.meta ?? {}) };
+    if (MASS_ITEMS.has(item)) {
+      const m = this.props.massOf(id);
+      if (m > 0) st.mass = m;
       st.radius = def.radius;
+      if (item === 'buche') st.length = def.length;
     }
     return st;
   }
@@ -467,6 +572,7 @@ export class LocalSimulation {
     }
     this.props.remove(id);
     this.msg(`Vous ramassez ${itemName(st.item)}.`, 'info');
+    this.noteHints(hintFrom(this.knowledge, st.item));
     return true;
   }
 
@@ -500,9 +606,10 @@ export class LocalSimulation {
       const dir = lookDirection(this.yaw + (k - (st.count - 1) / 2) * 0.35, 0);
       const x = s.x + dir.x * 0.65;
       const z = s.z + dir.z * 0.65;
-      const shape = st.item === 'pierre' ? { radius: st.radius ?? 0.08, length: 0 } : itemShape(kind);
+      const shape = MASS_ITEMS.has(st.item) ? { radius: st.radius ?? 0.08, length: st.item === 'buche' ? (st.length ?? 0.7) : 0 } : itemShape(kind);
       const y = Math.max(s.y + 0.45, this.terrain.heightAt(x, z) + shape.radius + 0.1);
-      this.props.spawnDynamic({ kind, x, y, z, rot: (k * 0.37) % 1, ...shape });
+      const meta = this.propMeta(st);
+      this.props.spawnDynamic({ kind, x, y, z, rot: (k * 0.37) % 1, ...shape, ...(meta ? { meta } : {}) });
     }
   }
 
@@ -532,10 +639,27 @@ export class LocalSimulation {
     const g = this.gesture;
     if (!g) return;
     g.left -= TICK_DT;
+    if (g.kind === 'allumage') {
+      // Faire tourner l'archet épuise.
+      const s = this.state;
+      s.stamina = Math.max(0, s.stamina - 5 * TICK_DT);
+      this.extraSpent += 5 * TICK_DT;
+      if (s.stamina <= 0) {
+        this.gesture = null;
+        this.wearTool('feu', 1);
+        this.msg('Épuisé, vous lâchez l’archet : le feu n’a pas pris.', 'alerte');
+        return;
+      }
+    }
     if (g.left > 0) return;
     this.gesture = null;
     if (g.kind === 'manger' && g.food) this.finishEating(g.food.item, g.food.from);
     else if (g.kind === 'soin' && g.injury !== undefined && g.treatment) this.finishTreatment(g.injury, g.treatment);
+    else if (g.kind === 'fabrication' && g.recipe && g.step !== undefined) this.finishCraftStep(g.recipe, g.step);
+    else if (g.kind === 'reparation' && g.from && g.repair) this.finishRepair(g.from, g.repair);
+    else if (g.kind === 'amelioration' && g.from && g.improve) this.finishImprove(g.from, g.improve);
+    else if (g.kind === 'demontage' && g.from) this.finishDismantle(g.from);
+    else if (g.kind === 'allumage' && g.prop) this.finishLighting(g.prop);
   }
 
   private startEating(from: HandOrSlot): ActionResult {
@@ -573,7 +697,7 @@ export class LocalSimulation {
     const opt = treatmentOptions(v).find((o) => o.injury === injuryId && o.treatment === t);
     const inj = v.injuries.find((i) => i.id === injuryId);
     if (!opt || !inj) return fail('Ce soin ne convient pas à cette blessure.');
-    for (const [item, n] of opt.needs) if (this.available(item) < n) return fail(`Il vous faut ${itemName(item, n)}.`);
+    for (const [item, n] of this.needsFor(opt.treatment, opt.needs)) if (this.available(item) < n) return fail(`Il vous faut ${itemName(item, n)}.`);
     this.gesture = { kind: 'soin', label: `${TREATMENT_LABELS[t]} (${ZONE_LABELS[inj.zone]})…`, total: opt.seconds, left: opt.seconds, injury: injuryId, treatment: t };
     return ok();
   }
@@ -581,10 +705,12 @@ export class LocalSimulation {
   private finishTreatment(injuryId: number, t: Treatment): void {
     const opt = treatmentOptions(this.vitals).find((o) => o.injury === injuryId && o.treatment === t);
     if (!opt) return;
-    for (const [item, n] of opt.needs) if (this.available(item) < n) return this.msg(`Il vous manque ${itemName(item, n)}.`, 'alerte');
-    for (const [item, n] of opt.needs) this.use(item, n);
-    applyTreatment(this.vitals, injuryId, t);
-    const text = t === 'attelle' ? 'Attelle posée : la fracture peut guérir.' : t === 'aloes' ? 'Plaie désinfectée, la douleur s’apaise.' : 'Bandage posé.';
+    const needs = this.needsFor(t, opt.needs);
+    for (const [item, n] of needs) if (this.available(item) < n) return this.msg(`Il vous manque ${itemName(item, n)}.`, 'alerte');
+    for (const [item, n] of needs) this.use(item, n);
+    const sterile = needs.some(([item]) => item === 'pansement');
+    applyTreatment(this.vitals, injuryId, t, sterile);
+    const text = t === 'attelle' ? 'Attelle posée : la fracture peut guérir.' : t === 'aloes' ? 'Plaie désinfectée, la douleur s’apaise.' : sterile ? 'Pansement propre posé : aucun risque d’infection.' : 'Bandage posé.';
     this.msg(text, 'info');
   }
 
@@ -593,7 +719,7 @@ export class LocalSimulation {
     const v = this.vitals;
     const opts = treatmentOptions(v);
     const injury = (id: number) => v.injuries.find((i) => i.id === id)!;
-    if (item === 'chiffon') {
+    if (item === 'chiffon' || item === 'pansement') {
       const bleeding = opts.filter((o) => o.treatment === 'bander' && bleedRate(injury(o.injury)) > 0).sort((a, b) => bleedRate(injury(b.injury)) - bleedRate(injury(a.injury)));
       const o = bleeding[0] ?? opts.find((x) => x.treatment === 'bander');
       return o ? { injury: o.injury, treatment: 'bander' } : null;
@@ -653,8 +779,9 @@ export class LocalSimulation {
         const one = takeAt(inv, a.from, 1);
         if (!one) return fail();
         const kind = one.item as PropKind;
-        const shape = one.item === 'pierre' ? { radius: one.radius ?? 0.08, length: 0 } : itemShape(kind);
-        if (!this.props.holdNew({ kind, rot: 0, ...shape }, s, this.yaw, s.crouched ? 0.6 : 0.3)) {
+        const shape = MASS_ITEMS.has(one.item) ? { radius: one.radius ?? 0.08, length: one.item === 'buche' ? (one.length ?? 0.7) : 0 } : itemShape(kind);
+        const meta = this.propMeta(one);
+        if (!this.props.holdNew({ kind, rot: 0, ...shape, ...(meta ? { meta } : {}) }, s, this.yaw, s.crouched ? 0.6 : 0.3)) {
           store(inv, one);
           return fail(this.props.refusal ?? 'Impossible de le prendre en main.');
         }
@@ -825,6 +952,8 @@ export class LocalSimulation {
         return this.act({ type: 'sortir', from: { zone: 'poche', index: a.index } });
       }
       case 'utiliser': {
+        const tool = this.useTool();
+        if (tool) return tool;
         const h = this.heldItem();
         if (!h) return fail('Vous ne tenez rien à utiliser.');
         if (ITEMS[h.item].food) return this.startEating({ zone: 'main' });
@@ -833,10 +962,636 @@ export class LocalSimulation {
         if (h.item === 'chiffon') return fail('Aucune blessure à bander.');
         if (h.item === 'aloes') return fail('Aucune plaie à désinfecter.');
         if (h.item === 'baton') return fail('Une attelle se pose sur une fracture (2 bâtons et 2 chiffons).');
-        return fail('Rien à faire avec cet objet.');
+        if (a.repeat) return fail();
+        return fail('Rien à faire avec cet objet ici.');
       }
+      case 'etabli_poser':
+        return this.benchPut(a.from);
+      case 'etabli_reprendre':
+        return this.benchTake(a.index);
+      case 'fabriquer':
+        return this.craftNext();
+      case 'reparer':
+        return this.startRepair(a.from, a.kind);
+      case 'ameliorer':
+        return this.startImprove(a.from, a.kind);
+      case 'demonter':
+        return this.startDismantle(a.from);
+      case 'remplir':
+        return this.fillPot(a.from);
+      case 'allumer':
+        return this.startLighting(a.prop);
+      case 'alimenter':
+        return this.feedFire(a.prop);
+      case 'poser_feu':
+        return this.putOnFire(a.prop, a.from);
+      case 'reprendre_feu':
+        return this.takeFromFire(a.prop);
       default:
         return fail();
+    }
+  }
+
+
+  // ——— Phase 4 : récolte, fabrication, feu ———
+
+  private noteHints(ids: RecipeId[]): void {
+    if (ids.length) this.msg(`Nouvelle idée dans le carnet : ${ids.map((id) => RECIPES[id].label).join(', ')}.`, 'info');
+  }
+
+  /** Propriétés d'un exemplaire à garder sur l'objet posé dans le monde (sans la géométrie). */
+  private propMeta(st: ItemStack): PropDef['meta'] | undefined {
+    const m = metaOf(st);
+    delete m.mass;
+    delete m.radius;
+    delete m.length;
+    return Object.keys(m).length ? m : undefined;
+  }
+
+  /** Accès à un objet (en main ou dans l'inventaire) ; `commit` enregistre ses changements. */
+  private stackRef(from: HandOrSlot): { st: ItemStack; commit: () => void; remove: () => void } | null {
+    if (from.zone === 'main') {
+      const h = this.heldItem();
+      if (!h) return null;
+      const st = this.stackFromProp(h.id, h.def)!;
+      return {
+        st,
+        commit: () => {
+          const m = this.propMeta(st);
+          if (m) h.def.meta = m;
+          else delete h.def.meta;
+        },
+        remove: () => {
+          this.props.remove(h.id);
+        },
+      };
+    }
+    const st = stackAt(this.inventory, from);
+    if (!st) return null;
+    return {
+      st,
+      commit: () => undefined,
+      remove: () => {
+        const i = from.zone === 'poche' ? from.index : this.inventory.bag?.indexOf(st) ?? -1;
+        if (i >= 0) takeAt(this.inventory, { zone: from.zone, index: i }, 1);
+      },
+    };
+  }
+
+  /** Objets utilisables comme outils (main, poches, sac ; pas le plan de travail). */
+  private toolStacks(): ItemStack[] {
+    const out: ItemStack[] = [];
+    const h = this.heldItem();
+    if (h) out.push(this.stackFromProp(h.id, h.def)!);
+    for (const p of this.inventory.pockets) if (p) out.push(p);
+    if (this.inventory.bag) out.push(...this.inventory.bag);
+    return out;
+  }
+
+  /** Trouve un outil (de préférence en main). */
+  private findTool(tag: ToolTag): { st: ItemStack; commit: () => void; remove: () => void } | null {
+    const h = this.heldItem();
+    if (h && hasTag(h.item, tag)) return this.stackRef({ zone: 'main' });
+    const inv = this.inventory;
+    const usable = (st: ItemStack) => hasTag(st.item, tag) && (st.d === undefined || st.d > 0);
+    for (let i = 0; i < inv.pockets.length; i++) if (inv.pockets[i] && usable(inv.pockets[i]!)) return this.stackRef({ zone: 'poche', index: i });
+    if (inv.bag) for (let i = 0; i < inv.bag.length; i++) if (usable(inv.bag[i]!)) return this.stackRef({ zone: 'sac', index: i });
+    return null;
+  }
+
+  /** Use un outil d'un cran ; il casse à 0 (les galets ne s'usent pas). */
+  private wearRef(ref: { st: ItemStack; commit: () => void; remove: () => void }, amount: number): void {
+    const spec = ITEMS[ref.st.item].tool;
+    if (!spec || spec.durability <= 0) return;
+    const st = ref.st;
+    if (st.count > 1) {
+      // On n'use qu'un exemplaire : il devient un objet à part.
+      st.count--;
+      const one: ItemStack = { item: st.item, count: 1, ...metaOf(st) };
+      ensureToolMeta(one);
+      if (wear(one, amount)) {
+        this.msg(`Un ${ITEMS[one.item].label} se casse.`, 'alerte');
+        return;
+      }
+      if (store(this.inventory, one) > 0) this.dropOnGround(one);
+      return;
+    }
+    ensureToolMeta(st);
+    if (wear(st, amount)) {
+      ref.remove();
+      this.msg(`Votre ${ITEMS[st.item].label} se casse.`, 'alerte');
+      return;
+    }
+    ref.commit();
+  }
+
+  private wearTool(tag: ToolTag, amount: number): void {
+    const ref = this.findTool(tag);
+    if (ref) this.wearRef(ref, amount);
+  }
+
+  /** Matériel d'un soin (un pansement propre plutôt qu'un chiffon quand on en a). */
+  private needsFor(t: Treatment, needs: Array<[ItemId, number]>): Array<[ItemId, number]> {
+    if (t === 'bander' && this.available('pansement') > 0) return [['pansement', 1]];
+    return needs;
+  }
+
+  private inWater(): boolean {
+    const s = this.state;
+    return s.mode === MODE_SWIM || WATER_LEVEL - s.y > 0.2;
+  }
+
+  /** Dépose un objet récolté au sol, à l'endroit donné. */
+  private dropNear(st: ItemStack, x: number, z: number, k: number): void {
+    const kind = st.item as PropKind;
+    const shape = MASS_ITEMS.has(st.item) ? { radius: st.radius ?? 0.08, length: st.length ?? 0 } : itemShape(kind);
+    const a = k * 2.1;
+    const px = x + Math.cos(a) * 0.18 * k;
+    const pz = z + Math.sin(a) * 0.18 * k;
+    const y = this.terrain.heightAt(px, pz) + 0.35 + shape.radius;
+    const meta = this.propMeta(st);
+    this.props.spawnDynamic({ kind, x: px, y, z: pz, rot: (k * 0.31) % 1, ...shape, ...(meta ? { meta } : {}) });
+  }
+
+  /** « Utiliser » avec un outil sur un gisement ou un arbre ; null si aucune cible à travailler. */
+  private useTool(): ActionResult | null {
+    const s = this.state;
+    if (s.mode === MODE_CLIMB) return null;
+    const h = this.heldItem();
+    if (h?.item === 'pot' && this.inWater()) return this.fillPot({ zone: 'main' });
+    const t = this.props.target(s, this.yaw, this.pitch);
+    const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
+    const tree = this.props.targetTree(s, this.yaw, this.pitch);
+    if (!node && !tree) return null;
+    if (this.useCooldown > 0) return fail();
+    if (node && (!tree || node.distance <= tree.distance)) return this.harvestNode(node, h);
+    return this.harvestTree(tree!, h);
+  }
+
+  private harvestNode(t: PropTarget, h: { id: string; def: PropDef; item: ItemId } | null): ActionResult {
+    const kind = t.kind as NodeKind;
+    const spec = NODE_SPECS[kind];
+    const s = this.state;
+    if (spec.tool && !(h && hasTag(h.item, spec.tool))) {
+      if (kind === 'gravier_or' && hintRecipe(this.knowledge, 'batee')) this.noteHints(['batee']);
+      return fail(`Il faut ${TOOL_NEEDS[spec.tool]} en main.`);
+    }
+    if (this.world.nodeLeft(t.id, kind, this.time) <= 0) return fail('Plus rien à prendre ici pour l’instant : cela se reconstitue avec le temps.');
+    const cost = STRIKE_COST[spec.tool ?? 'main']!;
+    if (s.stamina < cost) return fail('Trop fatigué : reprenez votre souffle.');
+    s.stamina -= cost;
+    this.extraSpent += cost;
+    this.useCooldown = STRIKE_TIME;
+    const ref = h && spec.tool ? this.stackRef({ zone: 'main' }) : null;
+    const power = ref ? toolPower(ref.st) : 1;
+    if (ref) this.wearRef(ref, 1);
+    const done = (this.strikes.get(t.id) ?? 0) + power;
+    if (done < spec.strikes - 1e-6) {
+      this.strikes.set(t.id, done);
+      return ok();
+    }
+    this.strikes.delete(t.id);
+    this.world.useNode(t.id, kind, this.time);
+    if (rand(this.vitals) >= spec.chance) return ok('Rien cette fois… Continuez à laver le gravier.');
+    const pos = this.props.position(t.id) ?? { x: s.x, y: s.y, z: s.z };
+    const n = spec.amount === 1 ? 1 : 1 + Math.floor(rand(this.vitals) * spec.amount);
+    for (let k = 0; k < n; k++) this.dropNear({ item: spec.yields, count: 1 }, pos.x + (s.x - pos.x) * 0.45, pos.z + (s.z - pos.z) * 0.45, k);
+    if (kind === 'touffe_herbe') return ok('Vous arrachez une brassée d’herbes sèches.');
+    if (kind === 'gravier_or') return ok('Une pépite d’or brille au fond de la batée !');
+    return ok(`${cap(itemName(spec.yields, n))} ${n > 1 ? 'tombent' : 'tombe'} au sol.`);
+  }
+
+  private harvestTree(tree: TreeTarget, h: { id: string; def: PropDef; item: ItemId } | null): ActionResult {
+    const s = this.state;
+    if (!h || !hasTag(h.item, 'tranchant')) return fail('Il faut un outil tranchant en main : un éclat de quartz ou un couteau pour écorcer et couper, une hache pour abattre.');
+    const spec = treeSpec(tree.species, tree.scale);
+    const axe = hasTag(h.item, 'hache');
+    const ref = this.stackRef({ zone: 'main' })!;
+    const power = toolPower(ref.st);
+    const cost = axe ? STRIKE_COST.hache! : STRIKE_COST.tranchant!;
+    if (s.stamina < cost) return fail('Trop fatigué : reprenez votre souffle.');
+    if (axe && !s.crouched) {
+      s.stamina -= cost;
+      this.extraSpent += cost;
+      this.useCooldown = STRIKE_TIME;
+      this.wearRef(ref, 1);
+      const r = this.world.fellStrike(tree.key, spec, power, this.time);
+      if (r.felled) {
+        this.onTreeFelled(tree, spec.logs);
+        return ok('L’arbre s’abat ! Les bûches sont au sol.');
+      }
+      return ok();
+    }
+    // Outil tranchant : résine prête, feuilles (palmier), perche (hache, accroupi), écorce, branche, entaille.
+    const key = tree.key;
+    const resin = this.world.resinState(key, this.time);
+    let part: TreePart | 'resine' | 'entaille' | null = null;
+    if (resin === 'prete') part = 'resine';
+    else if (this.world.partLeft(key, 'ilala', spec, this.time) > 0) part = 'ilala';
+    else if (axe && this.world.partLeft(key, 'perche', spec, this.time) > 0) part = 'perche';
+    else if (this.world.partLeft(key, 'ecorce', spec, this.time) > 0) part = 'ecorce';
+    else if (this.world.partLeft(key, 'manche', spec, this.time) > 0) part = 'manche';
+    else if (spec.resin && resin === 'aucune') part = 'entaille';
+    if (!part) return fail(resin === 'coule' ? 'La résine coule encore : revenez dans quelques minutes.' : 'Cet arbre n’a plus rien à donner pour l’instant : il repoussera.');
+    s.stamina -= cost;
+    this.extraSpent += cost;
+    this.useCooldown = STRIKE_TIME;
+    if (part !== 'resine') this.wearRef(ref, 1);
+    const need = part === 'perche' ? 3 : part === 'ecorce' || part === 'manche' ? 2 : 1;
+    const sk = `${key}:${part}`;
+    const done = (this.strikes.get(sk) ?? 0) + (part === 'resine' || part === 'entaille' ? 1 : power);
+    if (done < need - 1e-6) {
+      this.strikes.set(sk, done);
+      return ok();
+    }
+    this.strikes.delete(sk);
+    const x = s.x + (tree.x - s.x) * 0.5;
+    const z = s.z + (tree.z - s.z) * 0.5;
+    if (part === 'resine') {
+      this.world.takeResin(key, this.time);
+      this.dropNear({ item: 'resine', count: 1 }, x, z, 0);
+      return ok('Une boulette de résine tombe au sol.');
+    }
+    if (part === 'entaille') {
+      this.world.incise(key, this.time);
+      return ok('Vous entaillez l’écorce : la résine coulera dans une dizaine de minutes.');
+    }
+    this.world.usePart(key, part, spec, this.time);
+    const item: ItemId = part;
+    this.dropNear({ item, count: 1 }, x, z, 0);
+    return ok(`${cap(itemName(item))} tombe au sol.`);
+  }
+
+  private onTreeFelled(tree: TreeTarget, logs: number): void {
+    this.phys.rebuildChunk(tree.cx, tree.cz);
+    const s = this.state;
+    // L'arbre tombe à l'opposé du joueur : les bûches s'alignent le long du tronc.
+    let dx = tree.x - s.x;
+    let dz = tree.z - s.z;
+    const l = Math.hypot(dx, dz) || 1;
+    dx /= l;
+    dz /= l;
+    for (let i = 0; i < logs; i++) {
+      const d = 1.2 + i * 0.9;
+      const r = 0.06 + rand(this.vitals) * 0.02;
+      const length = 0.5 + rand(this.vitals) * 0.2;
+      this.dropNear({ item: 'buche', count: 1, radius: r, length }, tree.x + dx * d, tree.z + dz * d, 0);
+    }
+    this.dropNear({ item: 'baton', count: 1 }, tree.x + dz * 1.5, tree.z - dx * 1.5, 0);
+    this.dropNear({ item: 'baton', count: 1 }, tree.x - dz * 1.5, tree.z + dx * 1.5, 0);
+  }
+
+  // Plan de travail.
+
+  private benchAdd(st: ItemStack): boolean {
+    const b = this.inventory.bench;
+    const plain = (x: ItemStack) => Object.keys(metaOf(x)).length === 0;
+    const same = b.find((x) => x.item === st.item && !MASS_ITEMS.has(st.item) && plain(x) && plain(st) && x.count + st.count <= ITEMS[st.item].stack);
+    if (same) {
+      same.count += st.count;
+      return true;
+    }
+    if (b.length >= BENCH_SLOTS) return false;
+    b.push(st);
+    return true;
+  }
+
+  private benchPut(from: HandOrSlot): ActionResult {
+    const inv = this.inventory;
+    if (from.zone === 'main') {
+      const h = this.heldItem();
+      if (!h) return fail('Vous ne tenez rien.');
+      const st = this.stackFromProp(h.id, h.def);
+      if (!st) return fail('Cet objet ne va pas sur le plan de travail.');
+      if (!this.benchAdd(st)) return fail('Le plan de travail est plein (6 emplacements).');
+      this.props.remove(h.id);
+    } else {
+      const cur = stackAt(inv, from);
+      if (!cur) return fail();
+      if (!this.benchAdd({ ...cur })) return fail('Le plan de travail est plein (6 emplacements).');
+      takeAt(inv, from, cur.count);
+    }
+    this.craft = null;
+    return ok();
+  }
+
+  private benchTake(index: number): ActionResult {
+    const b = this.inventory.bench;
+    const st = b[index];
+    if (!st) return fail();
+    b.splice(index, 1);
+    const left = store(this.inventory, st);
+    if (left > 0) this.dropOnGround({ ...st, count: left });
+    this.craft = null;
+    return ok();
+  }
+
+  /** Recette reconnue sur le plan de travail, avec l'étape suivante (pour l'affichage). */
+  benchRecipe(): { recipe: (typeof RECIPES)[RecipeId]; step: number; known: boolean } | null {
+    const r = matchRecipe(this.inventory.bench);
+    if (!r) return null;
+    const step = this.craft && this.craft.recipe === r.id ? this.craft.step : 0;
+    return { recipe: r, step, known: this.knowledge.known.includes(r.id) };
+  }
+
+  /** Outil disponible pour une étape (pour l'affichage). */
+  hasTool(tag: ToolTag | null): boolean {
+    if (!tag) return true;
+    return stepToolOk({ label: '', tool: tag, seconds: 0 }, this.toolStacks());
+  }
+
+  private findBoiledPot(): { st: ItemStack; commit: () => void; remove: () => void } | null {
+    const h = this.heldItem();
+    if (h?.item === 'pot' && h.def.meta?.w === 2) return this.stackRef({ zone: 'main' });
+    const inv = this.inventory;
+    for (let i = 0; i < inv.pockets.length; i++) if (inv.pockets[i]?.item === 'pot' && inv.pockets[i]!.w === 2) return this.stackRef({ zone: 'poche', index: i });
+    if (inv.bag) for (let i = 0; i < inv.bag.length; i++) if (inv.bag[i]!.item === 'pot' && inv.bag[i]!.w === 2) return this.stackRef({ zone: 'sac', index: i });
+    return null;
+  }
+
+  private craftNext(): ActionResult {
+    const bench = this.inventory.bench;
+    const r = matchRecipe(bench);
+    if (!r) return fail(experimentHint(bench, this.knowledge));
+    let discovered = false;
+    if (learn(this.knowledge, r.id)) discovered = true;
+    if (!this.craft || this.craft.recipe !== r.id) this.craft = { recipe: r.id, step: 0 };
+    const step = r.steps[this.craft.step]!;
+    const intro = discovered ? `Nouvelle recette découverte : ${r.label} ! ` : '';
+    if (r.boiledWater && !this.findBoiledPot()) return discovered ? ok(`${intro}Il faut un pot d’eau bouillante.`) : fail('Il faut un pot d’eau bouillante (rempli au fleuve, chauffé sur un feu allumé).');
+    if (!stepToolOk(step, this.toolStacks())) {
+      const need = `Il faut ${TOOL_NEEDS[step.tool!]} pour : ${step.label.toLowerCase()}.`;
+      return discovered ? ok(`${intro}${need}`) : fail(need);
+    }
+    const seconds = step.seconds * (1 - 0.04 * skillLevel(this.knowledge.xp));
+    this.gesture = { kind: 'fabrication', label: `${step.label}… (${this.craft.step + 1}/${r.steps.length})`, total: seconds, left: seconds, recipe: r.id, step: this.craft.step };
+    return discovered ? ok(intro.trim()) : ok();
+  }
+
+  private finishCraftStep(id: RecipeId, stepIndex: number): void {
+    const r = RECIPES[id];
+    if (!this.craft || this.craft.recipe !== id || this.craft.step !== stepIndex || matchRecipe(this.inventory.bench)?.id !== id) return;
+    const step = r.steps[stepIndex]!;
+    if (step.tool && step.tool !== 'recipient') this.wearTool(step.tool, 1);
+    this.craft.step++;
+    if (this.craft.step < r.steps.length) {
+      this.msg(`Étape faite. Suivante : ${r.steps[this.craft.step]!.label.toLowerCase()}.`, 'info');
+      return;
+    }
+    this.craft = null;
+    const used: ItemStack[] = [];
+    for (const [item, n] of r.inputs) {
+      let need = n;
+      const b = this.inventory.bench;
+      for (let i = b.length - 1; i >= 0 && need > 0; i--) {
+        const st = b[i]!;
+        if (st.item !== item) continue;
+        const k = Math.min(need, st.count);
+        used.push({ ...st, count: k });
+        st.count -= k;
+        need -= k;
+        if (st.count <= 0) b.splice(i, 1);
+      }
+    }
+    const level = skillLevel(this.knowledge.xp);
+    this.knowledge.xp += 10 * r.steps.length;
+    if ('place' in r.output) {
+      this.placeFire();
+      this.msg('Foyer monté. Allumez-le avec un archet à feu et des herbes sèches.', 'info');
+      return;
+    }
+    const out: ItemStack = { item: r.output.item, count: r.output.count };
+    let detail = '';
+    const tool = ITEMS[out.item].tool;
+    if (tool && tool.durability > 0) {
+      const { q, fx } = craftQuality(used, level, rand(this.vitals), rand(this.vitals), rand(this.vitals));
+      out.q = q;
+      if (fx) out.fx = fx;
+      out.dm = maxDurability(out.item, q, fx);
+      out.d = out.dm;
+      const label = q < 40 ? 'médiocre' : q < 70 ? 'correcte' : q < 85 ? 'bonne' : 'excellente';
+      detail = ` : qualité ${label}${fx & FX_LIGATURE_LACHE ? ', ligature un peu lâche' : fx & FX_MANCHE_FENDU ? ', manche fendu' : ''}`;
+    } else if (out.item === 'pot_cru') out.q = Math.round(Math.max(20, Math.min(100, 50 + level * 4 + rand(this.vitals) * 25)));
+    if (r.boiledWater) {
+      const pot = this.findBoiledPot();
+      if (pot) {
+        pot.st.w = 0;
+        pot.commit();
+      }
+    }
+    const left = store(this.inventory, out);
+    if (left > 0) this.dropOnGround({ ...out, count: left });
+    this.msg(`Vous avez fabriqué ${itemName(out.item, out.count)}${detail}.`, 'info');
+    this.noteHints(hintFrom(this.knowledge, out.item));
+  }
+
+  // Réparer, améliorer, démonter.
+
+  private startRepair(from: HandOrSlot, kind: RepairKind): ActionResult {
+    const ref = this.stackRef(from);
+    if (!ref) return fail();
+    ensureToolMeta(ref.st);
+    ref.commit();
+    const opt = repairOptions(ref.st).find((o) => o.kind === kind);
+    if (!opt) return fail('Rien à réparer de cette façon.');
+    for (const [item, n] of opt.needs) if (this.available(item) < n) return fail(`Il vous faut ${itemName(item, n)}.`);
+    if (opt.tool && !this.findTool(opt.tool)) return fail(`Il faut ${TOOL_NEEDS[opt.tool]}.`);
+    this.gesture = { kind: 'reparation', label: `${opt.label}…`, total: opt.seconds, left: opt.seconds, from, repair: kind };
+    return ok();
+  }
+
+  private finishRepair(from: HandOrSlot, kind: RepairKind): void {
+    const ref = this.stackRef(from);
+    if (!ref) return;
+    const st = ref.st;
+    const opt = repairOptions(st).find((o) => o.kind === kind);
+    if (!opt) return;
+    for (const [item, n] of opt.needs) if (this.available(item) < n) return this.msg(`Il vous manque ${itemName(item, n)}.`, 'alerte');
+    for (const [item, n] of opt.needs) this.use(item, n);
+    if (opt.tool) this.wearTool(opt.tool, 1);
+    applyRepair(st, kind);
+    ref.commit();
+    this.knowledge.xp += 5;
+    this.msg(`${opt.label} : c’est fait (${st.d}/${st.dm}).`, 'info');
+  }
+
+  private litFireNear(radius: number): boolean {
+    const s = this.state;
+    for (const { def, fire } of this.props.fires()) {
+      if (!fire.lit) continue;
+      const p = this.props.position(def.id);
+      if (p && Math.hypot(p.x - s.x, p.z - s.z) <= radius) return true;
+    }
+    return false;
+  }
+
+  private startImprove(from: HandOrSlot, kind: ImproveKind): ActionResult {
+    const ref = this.stackRef(from);
+    if (!ref) return fail();
+    const opt = improveOptions(ref.st).find((o) => o.kind === kind);
+    if (!opt) return fail('Cette amélioration ne convient pas.');
+    for (const [item, n] of opt.needs) if (this.available(item) < n) return fail(`Il vous faut ${itemName(item, n)}.`);
+    if (opt.fire && !this.litFireNear(3)) return fail('Il faut un feu allumé tout près.');
+    this.gesture = { kind: 'amelioration', label: `${opt.label}…`, total: opt.seconds, left: opt.seconds, from, improve: kind };
+    return ok();
+  }
+
+  private finishImprove(from: HandOrSlot, kind: ImproveKind): void {
+    const ref = this.stackRef(from);
+    if (!ref) return;
+    const st = ref.st;
+    const opt = improveOptions(st).find((o) => o.kind === kind);
+    if (!opt) return;
+    if (opt.fire && !this.litFireNear(3)) return this.msg('Le feu s’est éteint.', 'alerte');
+    for (const [item, n] of opt.needs) if (this.available(item) < n) return this.msg(`Il vous manque ${itemName(item, n)}.`, 'alerte');
+    for (const [item, n] of opt.needs) this.use(item, n);
+    applyImprove(st, kind);
+    ref.commit();
+    this.knowledge.xp += 5;
+    this.msg(`${opt.label} : plus solide (${st.d}/${st.dm}).`, 'info');
+  }
+
+  private startDismantle(from: HandOrSlot): ActionResult {
+    const ref = this.stackRef(from);
+    if (!ref) return fail();
+    if (!canDismantle(ref.st.item)) return fail('Cet objet ne se démonte pas.');
+    this.gesture = { kind: 'demontage', label: `Vous démontez ${itemName(ref.st.item)}…`, total: 3, left: 3, from };
+    return ok();
+  }
+
+  private finishDismantle(from: HandOrSlot): void {
+    const ref = this.stackRef(from);
+    if (!ref || !canDismantle(ref.st.item)) return;
+    const one: ItemStack = { ...ref.st, count: 1 };
+    ref.remove();
+    const parts = dismantle(one, () => rand(this.vitals));
+    for (const p of parts) {
+      const left = store(this.inventory, p);
+      if (left > 0) this.dropOnGround({ ...p, count: left });
+    }
+    this.msg(parts.length ? `Vous récupérez : ${parts.map((p) => itemName(p.item, p.count)).join(', ')}.` : 'Rien de récupérable : les pièces étaient trop usées.', 'info');
+  }
+
+  // Feu et eau.
+
+  private placeFire(): void {
+    const s = this.state;
+    const dir = lookDirection(this.yaw, 0);
+    const x = s.x + dir.x * 1.3;
+    const z = s.z + dir.z * 1.3;
+    const fire: FireState = { lit: false, fuel: 0, pot: null, cook: 0 };
+    this.props.spawnDynamic({ kind: 'foyer', x, y: this.terrain.heightAt(x, z) + 0.12, z, rot: 0, ...itemShape('foyer'), fixed: true, fire });
+  }
+
+  private fireDef(prop: string): PropDef | null {
+    const def = this.reachable(prop);
+    return def?.kind === 'foyer' && def.fire ? def : null;
+  }
+
+  private startLighting(prop: string): ActionResult {
+    const def = this.fireDef(prop);
+    if (!def) return fail('Trop loin du foyer.');
+    if (def.fire!.lit) return fail('Le feu brûle déjà.');
+    if (!this.findTool('feu')) return fail('Il faut un archet à feu.');
+    if (this.available('herbe') < 1) return fail('Il faut des herbes sèches comme amadou.');
+    if (this.state.stamina < 20) return fail('Trop fatigué pour faire tourner l’archet.');
+    const seconds = 6 * (1 - 0.04 * skillLevel(this.knowledge.xp));
+    this.gesture = { kind: 'allumage', label: 'Vous faites tourner l’archet…', total: seconds, left: seconds, prop };
+    return ok();
+  }
+
+  private finishLighting(prop: string): void {
+    const def = this.fireDef(prop);
+    if (!def || def.fire!.lit) return;
+    if (this.available('herbe') < 1) return this.msg('Il manque des herbes sèches.', 'alerte');
+    this.use('herbe', 1);
+    this.wearTool('feu', 1);
+    def.fire!.lit = true;
+    def.fire!.fuel = Math.max(def.fire!.fuel, FIRE_START);
+    this.knowledge.xp += 5;
+    this.msg('Une braise, puis une flamme : le feu prend ! Ajoutez du bois pour l’entretenir.', 'info');
+  }
+
+  private feedFire(prop: string): ActionResult {
+    const def = this.fireDef(prop);
+    if (!def) return fail('Trop loin du foyer.');
+    const f = def.fire!;
+    if (f.fuel >= 1800) return fail('Le foyer est plein de bois.');
+    if (this.available('buche') > 0) {
+      this.use('buche', 1);
+      f.fuel += FUEL_LOG;
+    } else if (this.available('baton') > 0) {
+      this.use('baton', 1);
+      f.fuel += FUEL_STICK;
+    } else return fail('Il faut du bois : un bâton ou une bûche.');
+    return ok(f.lit ? 'Vous ajoutez du bois.' : 'Vous ajoutez du bois. Le feu est éteint : allumez-le.');
+  }
+
+  private putOnFire(prop: string, from: HandOrSlot): ActionResult {
+    const def = this.fireDef(prop);
+    if (!def) return fail('Trop loin du foyer.');
+    const f = def.fire!;
+    if (f.pot) return fail('Il y a déjà un pot sur le feu.');
+    const ref = this.stackRef(from);
+    if (!ref) return fail();
+    if (ref.st.item !== 'pot' && ref.st.item !== 'pot_cru') return fail('Seul un pot se pose sur le feu.');
+    f.pot = { ...ref.st, count: 1 };
+    f.cook = 0;
+    ref.remove();
+    if (f.pot.item === 'pot_cru') return ok('Le pot cuit sur le feu : environ une minute et demie, feu allumé.');
+    return ok(f.pot.w === 1 ? 'L’eau chauffe : une demi-minute, feu allumé.' : 'Pot posé sur le feu (il est vide : remplissez-le au fleuve).');
+  }
+
+  private takeFromFire(prop: string): ActionResult {
+    const def = this.fireDef(prop);
+    if (!def) return fail('Trop loin du foyer.');
+    const f = def.fire!;
+    if (!f.pot) return fail('Rien sur le feu.');
+    const st = f.pot;
+    f.pot = null;
+    f.cook = 0;
+    const left = store(this.inventory, st);
+    if (left > 0) this.dropOnGround(st);
+    return ok();
+  }
+
+  private fillPot(from: HandOrSlot): ActionResult {
+    if (!this.inWater()) return fail('Il faut être dans l’eau (fleuve, lac) pour remplir le pot.');
+    const ref = this.stackRef(from);
+    if (!ref || ref.st.item !== 'pot') return fail('Il faut un pot en terre cuite.');
+    ensureToolMeta(ref.st);
+    ref.st.w = 1;
+    ref.commit();
+    return ok('Le pot est plein d’eau. Posez-le sur un feu allumé pour la faire bouillir.');
+  }
+
+  /** Le feu brûle son bois ; l'eau bout ; l'argile cuit. */
+  private stepFires(dt: number): void {
+    const s = this.state;
+    for (const { def, fire } of this.props.fires()) {
+      if (!fire.lit) continue;
+      fire.fuel -= dt;
+      const pos = this.props.position(def.id);
+      const near = pos ? Math.hypot(pos.x - s.x, pos.z - s.z) < 12 : false;
+      if (fire.fuel <= 0) {
+        fire.fuel = 0;
+        fire.lit = false;
+        if (near) this.msg('Le feu s’est éteint.', 'info');
+        continue;
+      }
+      if (!fire.pot) continue;
+      fire.cook += dt;
+      if (fire.pot.item === 'pot' && fire.pot.w === 1 && fire.cook >= BOIL_TIME) {
+        fire.pot.w = 2;
+        if (near) this.msg('L’eau bout dans le pot.', 'info');
+      } else if (fire.pot.item === 'pot_cru' && fire.cook >= FIRING_TIME) {
+        const q = fire.pot.q ?? 60;
+        const dm = maxDurability('pot', q, 0);
+        fire.pot = { item: 'pot', count: 1, q, dm, d: dm, w: 0 };
+        fire.cook = 0;
+        if (near) this.msg('Le pot est cuit : il tiendra l’eau.', 'info');
+        this.noteHints(hintFrom(this.knowledge, 'pot'));
+      }
     }
   }
 
@@ -858,8 +1613,9 @@ export class LocalSimulation {
     return {
       version: 1,
       time: this.time,
-      player: { ...pos, vitals, inventory: this.inventory, respawn: this.respawnPoint, lastBody: this.lastBody },
+      player: { ...pos, vitals, inventory: this.inventory, respawn: this.respawnPoint, lastBody: this.lastBody, knowledge: this.knowledge },
       props: this.props.serialize(),
+      world: this.world.serialize(),
     };
   }
 
@@ -869,10 +1625,12 @@ export class LocalSimulation {
     const r = raw as Record<string, unknown>;
     if (typeof r.time === 'number' && Number.isFinite(r.time) && r.time >= 0) this.time = r.time;
     this.props.restore(r.props);
+    this.world.restore(r.world);
     const p = r.player as Record<string, unknown> | undefined;
     if (!p || typeof p !== 'object') return null;
     this.vitals = readVitals(p.vitals, this.vitals.rng);
     this.inventory = readInventory(p.inventory);
+    this.knowledge = readKnowledge(p.knowledge);
     const pt = (o: unknown): SpawnPoint | null => {
       const q = o as Record<string, unknown> | null;
       if (!q || typeof q !== 'object') return null;

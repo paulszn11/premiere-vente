@@ -5,7 +5,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { CHUNK_SIZE, MOVE, PHYS_CELLS, PLAYER_CENTER_Y, PLAYER_HALF_HEIGHT, PLAYER_RADIUS, WORLD_HALF } from './constants';
 import { type Terrain, chunkCoord, chunkKey } from './terrain';
-import { SPECIES, floraInChunk } from './vegetation';
+import { SPECIES, type Species, floraInChunk } from './vegetation';
 
 export { RAPIER };
 
@@ -26,6 +26,8 @@ export const GROUP_PROP = 0x0004;
 export const GROUP_OBSTACLE = 0x0008;
 /** Objet tenu en main : ne heurte pas le joueur. */
 export const GROUP_HELD = 0x0010;
+/** Gisements plats (herbes, argile, gravier) et foyers : visables, mais on marche dessus. */
+export const GROUP_NODE = 0x0020;
 
 export function interactionGroups(membership: number, filter: number): number {
   return (((membership & 0xffff) << 16) | (filter & 0xffff)) >>> 0;
@@ -42,12 +44,29 @@ export const DRAGGED_GROUPS = interactionGroups(GROUP_PROP, GROUP_TERRAIN | GROU
 export const QUERY_TERRAIN = interactionGroups(0xffff, GROUP_TERRAIN);
 /** Requête ne touchant que les objets déplaçables. */
 export const QUERY_PROPS = interactionGroups(0xffff, GROUP_PROP);
+/** Requête de visée : objets et gisements. */
+export const QUERY_TARGETS = interactionGroups(0xffff, GROUP_PROP | GROUP_NODE);
+/** Gisements plats : seuls le décor et les objets les touchent (pas le joueur). */
+export const NODE_GROUPS = interactionGroups(GROUP_NODE, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
 /** Requête « tout le décor » (sol, obstacles, objets). */
 export const QUERY_SOLID = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
 
 interface PhysChunk {
   colliders: RAPIER.Collider[];
   lastNeeded: number;
+}
+
+/** Arbre touché par un rayon (pour l'écorcer, le couper, l'abattre). */
+export interface TreeHit {
+  key: string;
+  species: Species;
+  scale: number;
+  x: number;
+  y: number;
+  z: number;
+  cx: number;
+  cz: number;
+  index: number;
 }
 
 const DEG = Math.PI / 180;
@@ -65,6 +84,10 @@ export class PhysicsWorld {
   heightProvider: HeightProvider | null = null;
   private readonly chunks = new Map<string, PhysChunk>();
   private needsRefresh = false;
+  /** Troncs : poignée du collisionneur → arbre. */
+  private readonly trees = new Map<number, TreeHit>();
+  /** Arbre abattu (ignoré : ni tronc, ni collision). */
+  treeFelled: ((cx: number, cz: number, index: number) => boolean) | null = null;
 
   constructor(readonly terrain: Terrain) {
     this.world = new RAPIER.World({ x: 0, y: -MOVE.gravity, z: 0 });
@@ -140,7 +163,10 @@ export class PhysicsWorld {
       if (now - chunk.lastNeeded > graceMs) {
         const [cx, cz] = key.split(',').map(Number) as [number, number];
         this.onChunkUnloaded?.(cx, cz);
-        for (const c of chunk.colliders) this.world.removeCollider(c, false);
+        for (const c of chunk.colliders) {
+          this.trees.delete(c.handle);
+          this.world.removeCollider(c, false);
+        }
         this.chunks.delete(key);
         removed++;
       }
@@ -187,6 +213,24 @@ export class PhysicsWorld {
     this.chunks.clear();
   }
 
+  /** Arbre correspondant à un collisionneur (tronc), ou null. */
+  treeOf(collider: RAPIER.Collider): TreeHit | null {
+    return this.trees.get(collider.handle) ?? null;
+  }
+
+  /** Reconstruit le décor d'un chunk chargé (arbre abattu ou repoussé). */
+  rebuildChunk(cx: number, cz: number): void {
+    const key = chunkKey(cx, cz);
+    const chunk = this.chunks.get(key);
+    if (!chunk) return;
+    for (const c of chunk.colliders) {
+      this.trees.delete(c.handle);
+      this.world.removeCollider(c, false);
+    }
+    chunk.colliders = this.buildChunk(cx, cz);
+    this.needsRefresh = true;
+  }
+
   private buildChunk(cx: number, cz: number): RAPIER.Collider[] {
     const n = PHYS_CELLS + 1;
     const rowMajor = this.heightProvider?.(cx, cz) ?? this.terrain.sampleChunk(cx, cz, PHYS_CELLS);
@@ -201,14 +245,17 @@ export class PhysicsWorld {
       .setCollisionGroups(TERRAIN_GROUPS);
     const colliders = [this.world.createCollider(ground)];
     const flora = floraInChunk(this.terrain, cx, cz);
-    for (const t of flora.trees) {
+    flora.trees.forEach((t, index) => {
+      if (this.treeFelled?.(cx, cz, index)) return;
       const spec = SPECIES[t.species];
       const halfHeight = (spec.trunkHeight * t.scale) / 2;
       const trunk = RAPIER.ColliderDesc.cylinder(halfHeight, spec.trunkRadius * t.scale)
         .setTranslation(t.x, t.y - 0.3 + halfHeight, t.z)
         .setCollisionGroups(OBSTACLE_GROUPS);
-      colliders.push(this.world.createCollider(trunk));
-    }
+      const col = this.world.createCollider(trunk);
+      this.trees.set(col.handle, { key: `${cx}:${cz}:${index}`, species: t.species, scale: t.scale, x: t.x, y: t.y, z: t.z, cx, cz, index });
+      colliders.push(col);
+    });
     for (const r of flora.rocks) {
       colliders.push(this.world.createCollider(RAPIER.ColliderDesc.ball(r.r).setTranslation(r.x, r.y, r.z).setCollisionGroups(TERRAIN_GROUPS)));
       if (r.top > 0) {

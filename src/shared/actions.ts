@@ -1,8 +1,9 @@
 // Actions ponctuelles du joueur (sac, soins, repos…). En phase 8, le client les enverra au
 // serveur de l'hôte, qui les validera avec `readAction` avant de les appliquer.
 
+import type { ImproveKind, RepairKind } from './crafting';
 import type { ClothingPart, Slot } from './inventory';
-import { POCKET_COUNT } from './inventory';
+import { BENCH_SLOTS, POCKET_COUNT } from './inventory';
 import type { Treatment } from './vitals';
 
 export type HandOrSlot = Slot | { zone: 'main' };
@@ -33,8 +34,22 @@ export type PlayerAction =
   | { type: 'trainer'; prop: string }
   /** Poche 1 à 4 : prend l'objet en main, ou y range l'objet tenu. */
   | { type: 'poche'; index: number }
-  /** Utilise l'objet tenu : manger, bander, désinfecter. */
-  | { type: 'utiliser' }
+  /** Utilise l'objet tenu : récolter avec un outil, manger, bander, désinfecter. `repeat` : touche maintenue. */
+  | { type: 'utiliser'; repeat?: boolean }
+  /** Plan de travail : y poser une pile, en reprendre une, faire l'étape suivante. */
+  | { type: 'etabli_poser'; from: HandOrSlot }
+  | { type: 'etabli_reprendre'; index: number }
+  | { type: 'fabriquer' }
+  | { type: 'reparer'; from: HandOrSlot; kind: RepairKind }
+  | { type: 'ameliorer'; from: HandOrSlot; kind: ImproveKind }
+  | { type: 'demonter'; from: HandOrSlot }
+  /** Remplir un pot d'eau (dans l'eau). */
+  | { type: 'remplir'; from: HandOrSlot }
+  /** Foyer : allumer, ajouter du bois, poser ou reprendre un pot. */
+  | { type: 'allumer'; prop: string }
+  | { type: 'alimenter'; prop: string }
+  | { type: 'poser_feu'; prop: string; from: HandOrSlot }
+  | { type: 'reprendre_feu'; prop: string }
   /** Interrompt le geste en cours. */
   | { type: 'interrompre' }
   /** État critique ou inconscient : mourir tout de suite (personne ne peut venir). */
@@ -64,6 +79,17 @@ const TYPES = new Set([
   'trainer',
   'poche',
   'utiliser',
+  'etabli_poser',
+  'etabli_reprendre',
+  'fabriquer',
+  'reparer',
+  'ameliorer',
+  'demonter',
+  'remplir',
+  'allumer',
+  'alimenter',
+  'poser_feu',
+  'reprendre_feu',
   'interrompre',
   'abandonner',
 ]);
@@ -118,6 +144,32 @@ export function readAction(raw: unknown): PlayerAction | null {
     }
     case 'poche':
       return typeof r.index === 'number' && Number.isInteger(r.index) && r.index >= 0 && r.index < POCKET_COUNT ? { type: 'poche', index: r.index } : null;
+    case 'utiliser':
+      return r.repeat === true ? { type: 'utiliser', repeat: true } : { type: 'utiliser' };
+    case 'etabli_poser':
+    case 'demonter':
+    case 'remplir': {
+      const from = readSlot(r.from, true);
+      return from ? { type: r.type, from } : null;
+    }
+    case 'etabli_reprendre':
+      return typeof r.index === 'number' && Number.isInteger(r.index) && r.index >= 0 && r.index < BENCH_SLOTS ? { type: 'etabli_reprendre', index: r.index } : null;
+    case 'reparer': {
+      const from = readSlot(r.from, true);
+      return from && (r.kind === 'religaturer' || r.kind === 'affuter' || r.kind === 'retailler' || r.kind === 'recorder') ? { type: 'reparer', from, kind: r.kind } : null;
+    }
+    case 'ameliorer': {
+      const from = readSlot(r.from, true);
+      return from && (r.kind === 'durcir' || r.kind === 'resine') ? { type: 'ameliorer', from, kind: r.kind } : null;
+    }
+    case 'allumer':
+    case 'alimenter':
+    case 'reprendre_feu':
+      return propId(r.prop) ? { type: r.type, prop: r.prop } : null;
+    case 'poser_feu': {
+      const from = readSlot(r.from, true);
+      return propId(r.prop) && from ? { type: 'poser_feu', prop: r.prop, from } : null;
+    }
     default:
       return { type: r.type } as PlayerAction;
   }

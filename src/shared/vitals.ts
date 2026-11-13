@@ -446,15 +446,15 @@ function rollInfection(v: Vitals, i: Injury, chance: number): void {
   if (rand(v) < chance) i.infectAt = i.age + 240 + rand(v) * 180;
 }
 
-/** Applique un soin terminé (le geste a duré le temps voulu). */
-export function applyTreatment(v: Vitals, injuryId: number, t: Treatment): boolean {
+/** Applique un soin terminé (le geste a duré le temps voulu). Pansement propre : `sterile`. */
+export function applyTreatment(v: Vitals, injuryId: number, t: Treatment, sterile = false): boolean {
   const i = v.injuries.find((x) => x.id === injuryId);
   if (!i || v.state === 'mort') return false;
   if (t === 'bander') {
     if (i.bandaged || (i.kind !== 'coupure' && i.kind !== 'entorse')) return false;
     i.bandaged = true;
     // Chiffon de vêtement, pas stérile : la plaie peut s'infecter si elle n'est pas désinfectée.
-    if (i.kind === 'coupure') rollInfection(v, i, i.disinfected ? 0.03 : i.grave ? 0.3 : 0.15);
+    if (i.kind === 'coupure' && !sterile) rollInfection(v, i, i.disinfected ? 0.03 : i.grave ? 0.3 : 0.15);
     return true;
   }
   if (t === 'attelle') {

@@ -50,7 +50,19 @@ function leaf(angle: number, length: number, tilt: number): VertexData {
 const SKIN: [number, number, number] = [0.42, 0.29, 0.21];
 const CLOTH: [number, number, number] = [0.27, 0.32, 0.4];
 
-/** Pièces de chaque objet, à l'échelle réelle (mètres). */
+/** Cylindre debout. */
+function can(height: number, diameter: number, tess: number, y = 0, top = diameter): VertexData {
+  const vd = CreateCylinderVertexData({ height, diameterTop: top, diameterBottom: diameter, tessellation: tess });
+  vd.transform(Matrix.Translation(0, y, 0));
+  return vd;
+}
+
+const WOOD: [number, number, number] = [0.45, 0.33, 0.22];
+const TWINE: [number, number, number] = [0.62, 0.52, 0.34];
+const QUARTZ: [number, number, number] = [0.9, 0.9, 0.93];
+const STONE: [number, number, number] = [0.5, 0.49, 0.46];
+
+/** Pièces de chaque objet, à l'échelle réelle (mètres). Gisements : taille 1, mis à l'échelle à l'affichage. */
 export function itemParts(kind: PropKind): Part[] {
   switch (kind) {
     case 'pierre':
@@ -58,12 +70,16 @@ export function itemParts(kind: PropKind): Part[] {
     case 'buche':
     case 'tronc':
     case 'baton':
-      return [[rod(1, 2, 7), 0.45, 0.33, 0.22]];
+    case 'manche':
+    case 'perche':
+      return [[rod(1, 2, 7), ...WOOD]];
     case 'chiffon':
       return [
         [box(0.2, 0.012, 0.16), 0.82, 0.78, 0.66],
         [box(0.1, 0.012, 0.16, 0.04, 0.012, 0, 0.3), 0.76, 0.72, 0.6],
       ];
+    case 'pansement':
+      return [[box(0.1, 0.015, 0.08), 0.96, 0.96, 0.93]];
     case 'aloes': {
       const parts: Part[] = [];
       for (let i = 0; i < 7; i++) parts.push([leaf((i / 7) * Math.PI * 2, 0.22 + (i % 3) * 0.04, 0.55 + (i % 2) * 0.25), 0.36, 0.5, 0.38]);
@@ -81,6 +97,70 @@ export function itemParts(kind: PropKind): Part[] {
       return [[ball(0.044, 0.05, 0.044, 5), 0.45, 0.2, 0.25]];
     case 'muhacha':
       return [[ball(0.05, 0.045, 0.05, 5), 0.66, 0.42, 0.18]];
+    case 'quartz':
+      return [[box(0.05, 0.03, 0.035, 0, 0, 0, 0.4, 0.3), ...QUARTZ]];
+    case 'ecorce':
+      return [[box(0.5, 0.012, 0.1), 0.42, 0.36, 0.29]];
+    case 'fibres':
+      return [[box(0.1, 0.04, 0.1), 0.72, 0.62, 0.44]];
+    case 'corde':
+      return [[can(0.03, 0.14, 10), ...TWINE]];
+    case 'herbe':
+      return [
+        [box(0.4, 0.05, 0.1), 0.78, 0.7, 0.36],
+        [box(0.36, 0.04, 0.08, 0.02, 0.03, 0.02, 0.2), 0.72, 0.64, 0.3],
+      ];
+    case 'ilala':
+      return [[box(0.8, 0.01, 0.3), 0.34, 0.5, 0.26]];
+    case 'argile':
+      return [[ball(0.12, 0.1, 0.12, 5), 0.6, 0.4, 0.28]];
+    case 'resine':
+      return [[ball(0.04, 0.035, 0.04, 4), 0.78, 0.5, 0.14]];
+    case 'minerai_fer':
+      return [[ball(0.15, 0.12, 0.14, 3), 0.44, 0.24, 0.18]];
+    case 'pepite_or':
+      return [[ball(0.025, 0.018, 0.022, 4), 0.92, 0.76, 0.24]];
+    case 'couteau':
+      return [
+        [rod(0.2, 0.035, 6, -0.05), ...WOOD],
+        [box(0.1, 0.012, 0.035, 0.1), ...QUARTZ],
+        [rod(0.04, 0.042, 6, 0.04), ...TWINE],
+      ];
+    case 'hache':
+      return [
+        [rod(0.6, 0.04, 6), ...WOOD],
+        [box(0.08, 0.07, 0.15, 0.24, 0, 0), ...STONE],
+        [rod(0.06, 0.05, 6, 0.24), ...TWINE],
+      ];
+    case 'baton_fouir':
+      return [
+        [rod(0.8, 0.045, 6, -0.05), ...WOOD],
+        [rod(0.1, 0.03, 4, 0.4), 0.55, 0.42, 0.28],
+      ];
+    case 'lance':
+      return [
+        [rod(1.8, 0.045, 6, -0.05), ...WOOD],
+        [box(0.12, 0.012, 0.04, 0.9), ...QUARTZ],
+        [rod(0.06, 0.055, 6, 0.83), ...TWINE],
+      ];
+    case 'archet':
+      return [
+        [rod(0.6, 0.025, 5), ...WOOD],
+        [box(0.56, 0.006, 0.006, 0, 0.03, 0), ...TWINE],
+        [box(0.25, 0.02, 0.06, 0, -0.03, 0.06), 0.55, 0.42, 0.28],
+      ];
+    case 'pot_cru':
+      return [
+        [can(0.18, 0.24, 10, -0.02, 0.18), 0.6, 0.46, 0.33],
+        [can(0.04, 0.2, 10, 0.08), 0.56, 0.42, 0.3],
+      ];
+    case 'pot':
+      return [
+        [can(0.18, 0.24, 10, -0.02, 0.18), 0.72, 0.38, 0.22],
+        [can(0.04, 0.2, 10, 0.08), 0.66, 0.34, 0.2],
+      ];
+    case 'batee':
+      return [[can(0.06, 0.4, 12, 0, 0.36), 0.5, 0.36, 0.22]];
     case 'sac':
       return [
         [box(0.34, 0.44, 0.2), 0.36, 0.38, 0.22],
@@ -97,6 +177,40 @@ export function itemParts(kind: PropKind): Part[] {
         [box(0.5, 0.1, 0.1, 0.1, -0.2, 0.25), ...SKIN],
         [box(0.5, 0.1, 0.1, 0.1, -0.2, -0.25), ...SKIN],
       ];
+    // Gisements, à la taille 1 (mis à l'échelle à l'affichage).
+    case 'bloc_quartz':
+      return [
+        [ball(0.9, 0.7, 0.8, 3), 0.86, 0.86, 0.88],
+        [box(0.3, 0.25, 0.3, 0.2, 0.25, 0.1, 0.6, 0.3), ...QUARTZ],
+      ];
+    case 'filon_fer':
+      return [
+        [ball(0.9, 0.7, 0.8, 3), 0.42, 0.25, 0.19],
+        [box(0.25, 0.2, 0.3, -0.2, 0.22, 0.1, 0.5, 0.2), 0.3, 0.18, 0.14],
+      ];
+    case 'touffe_herbe': {
+      const parts: Part[] = [];
+      for (let i = 0; i < 6; i++) parts.push([leaf((i / 6) * Math.PI * 2, 0.55 + (i % 3) * 0.1, 0.25 + (i % 2) * 0.2), 0.74, 0.66, 0.32]);
+      return parts;
+    }
+    case 'gisement_argile':
+      return [[can(0.05, 1, 12, 0.02, 0.9), 0.62, 0.42, 0.3]];
+    case 'gravier_or':
+      return [
+        [can(0.04, 1, 12, 0.02, 0.9), 0.6, 0.56, 0.44],
+        [ball(0.05, 0.03, 0.05, 3, 0.2, 0.05, 0.1), 0.85, 0.72, 0.3],
+        [ball(0.04, 0.03, 0.04, 3, -0.25, 0.05, -0.15), 0.85, 0.72, 0.3],
+      ];
+    case 'foyer': {
+      const parts: Part[] = [];
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        parts.push([ball(0.16, 0.12, 0.14, 3, Math.cos(a) * 0.36, -0.06, Math.sin(a) * 0.36), ...STONE]);
+      }
+      parts.push([rod(0.5, 0.06, 6, 0, -0.05, 0, 0.4), 0.3, 0.22, 0.15]);
+      parts.push([rod(0.5, 0.06, 6, 0, -0.03, 0, -0.5), 0.3, 0.22, 0.15]);
+      return parts;
+    }
   }
 }
 

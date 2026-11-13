@@ -4,10 +4,11 @@
 // et sauvegardés.
 
 import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, MOVE } from './constants';
-import { type Container, readContainer } from './inventory';
+import { type Container, type ItemMeta, readContainer } from './inventory';
 import { BTN_INTERACT, BTN_THROW, type InputCmd, MODE_CLIMB, MODE_SWIM, type MoveState, ONE_HAND_CARRY_KG, R_NO_HEAVY, R_NO_THROW } from './movement';
-import { DRAGGED_GROUPS, GROUP_OBSTACLE, GROUP_TERRAIN, HELD_GROUPS, PROP_GROUPS, type PhysicsWorld, QUERY_PROPS, RAPIER, interactionGroups } from './physics';
-import { BODY_MASS, DENSITY, type Handling, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk } from './props';
+import { DRAGGED_GROUPS, GROUP_OBSTACLE, GROUP_TERRAIN, HELD_GROUPS, NODE_GROUPS, PROP_GROUPS, type PhysicsWorld, QUERY_TARGETS, RAPIER, type TreeHit, interactionGroups } from './physics';
+import { BODY_MASS, DENSITY, type FireState, type Handling, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay } from './props';
+import { nodesInChunk } from './resources';
 import { chunkCoord } from './terrain';
 
 interface LiveProp {
@@ -42,6 +43,10 @@ export interface PropView {
   qz: number;
   qw: number;
   held: boolean;
+  /** Gisement : taille ; foyer : allumé, et ce qui cuit dessus. */
+  size?: number;
+  lit?: boolean;
+  pot?: string | null;
 }
 
 export interface PropTarget {
@@ -51,17 +56,27 @@ export interface PropTarget {
   mass: number;
   handling: Handling;
   distance: number;
+  /** Gisement ou foyer (immobile). */
+  fixed: boolean;
+}
+
+export interface TreeTarget extends TreeHit {
+  distance: number;
 }
 
 /** État des objets à sauvegarder (objets naturels ramassés, objets déplacés ou créés). */
 export interface PropSave {
-  taken: string[];
+  /** Objets naturels ramassés et temps du monde où ils l'ont été. */
+  taken: Array<[string, number]>;
   props: StoredProp[];
   nextDyn: number;
 }
 
 export const REACH = 2.4;
-const ANGULAR_DAMPING: Partial<Record<PropKind, number>> = { pierre: 1.5, buche: 3, tronc: 2.5, baton: 3, corps: 4, sac: 3 };
+const ANGULAR_DAMPING: Partial<Record<PropKind, number>> = { pierre: 1.5, buche: 3, tronc: 2.5, baton: 3, corps: 4, sac: 3, manche: 3, perche: 3, lance: 3, baton_fouir: 3 };
+const QUERY_TRUNKS = interactionGroups(0xffff, GROUP_OBSTACLE);
+/** Gisements solides (on les heurte) ; les autres sont plats. */
+const SOLID_NODES = new Set<PropKind>(['bloc_quartz', 'filon_fer']);
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const AIM_BALL = new RAPIER.Ball(0.14);
 const QUERY_SCENERY = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
@@ -80,6 +95,7 @@ export function lookDirection(yaw: number, pitch: number): { x: number; y: numbe
 
 function colliderFor(def: PropDef): RAPIER.ColliderDesc {
   const r = def.radius;
+  const m = Math.max(0.005, propMass(def));
   switch (def.kind) {
     case 'pierre':
       // Pavé aux coins arrondis : une sphère parfaite roulerait sur la moindre pente.
@@ -88,19 +104,58 @@ function colliderFor(def: PropDef): RAPIER.ColliderDesc {
     case 'tronc':
     case 'baton':
       return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setRotation(LOG_ROT).setDensity(DENSITY[def.kind]);
+    case 'manche':
+    case 'perche':
+    case 'baton_fouir':
+    case 'lance':
+      return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setRotation(LOG_ROT).setMass(m);
     case 'chiffon':
-      return RAPIER.ColliderDesc.cuboid(0.1, 0.012, 0.08).setMass(propMass(def));
+      return RAPIER.ColliderDesc.cuboid(0.1, 0.012, 0.08).setMass(m);
     case 'aloes':
-      return RAPIER.ColliderDesc.cuboid(0.1, 0.07, 0.1).setMass(propMass(def));
+      return RAPIER.ColliderDesc.cuboid(0.1, 0.07, 0.1).setMass(m);
     case 'fruit_baobab':
-      return RAPIER.ColliderDesc.roundCuboid(r * 0.6, r * 0.6, r * 1.1, r * 0.35).setMass(propMass(def));
+      return RAPIER.ColliderDesc.roundCuboid(r * 0.6, r * 0.6, r * 1.1, r * 0.35).setMass(m);
     case 'figue':
     case 'muhacha':
-      return RAPIER.ColliderDesc.roundCuboid(r * 0.7, r * 0.7, r * 0.7, r * 0.3).setMass(propMass(def));
+    case 'quartz':
+    case 'argile':
+    case 'resine':
+    case 'minerai_fer':
+    case 'pepite_or':
+      return RAPIER.ColliderDesc.roundCuboid(r * 0.7, r * 0.6, r * 0.7, r * 0.3).setMass(m);
+    case 'ecorce':
+    case 'ilala':
+      return RAPIER.ColliderDesc.cuboid(def.length / 2, 0.012, r).setMass(m);
+    case 'fibres':
+    case 'corde':
+    case 'pansement':
+      return RAPIER.ColliderDesc.cuboid(r, r * 0.4, r).setMass(m);
+    case 'herbe':
+      return RAPIER.ColliderDesc.cuboid(def.length / 2, r * 0.4, r * 0.6).setMass(m);
+    case 'couteau':
+    case 'hache':
+    case 'archet':
+      return RAPIER.ColliderDesc.cuboid(def.length / 2, r * 0.6, r).setMass(m);
+    case 'pot_cru':
+    case 'pot':
+    case 'batee':
+      return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setMass(m);
     case 'sac':
-      return RAPIER.ColliderDesc.cuboid(0.17, 0.22, 0.1).setMass(propMass(def));
+      return RAPIER.ColliderDesc.cuboid(0.17, 0.22, 0.1).setMass(m);
     case 'corps':
       return RAPIER.ColliderDesc.capsule(def.length / 2, r).setRotation(LOG_ROT).setMass(BODY_MASS);
+    case 'bloc_quartz':
+    case 'filon_fer': {
+      const z = def.size ?? 0.6;
+      return RAPIER.ColliderDesc.roundCuboid(z * 0.45, z * 0.35, z * 0.4, z * 0.12);
+    }
+    case 'touffe_herbe':
+    case 'gisement_argile':
+    case 'gravier_or':
+    case 'foyer': {
+      const z = def.kind === 'foyer' ? 0.45 : (def.size ?? 0.8) / 2;
+      return RAPIER.ColliderDesc.cylinder(0.12, z);
+    }
   }
 }
 
@@ -108,8 +163,10 @@ export class PropSystem {
   private readonly live = new Map<string, LiveProp>();
   private readonly byCollider = new Map<number, string>();
   private readonly stored = new Map<string, StoredProp>();
-  /** Objets naturels ramassés : ils ne réapparaissent pas. */
-  private readonly taken = new Set<string>();
+  /** Objets naturels ramassés (temps du monde) : certains repoussent après un délai. */
+  private readonly taken = new Map<string, number>();
+  /** Temps du monde (secondes), fourni par la simulation. */
+  clock: () => number = () => 0;
   private nextDyn = 1;
   held: { id: string; mode: 'carry' | 'drag' } | null = null;
   /** Raison du dernier refus de prise (bras cassé…), lue puis effacée par la simulation. */
@@ -132,15 +189,18 @@ export class PropSystem {
   private spawn(def: PropDef, x: number, y: number, z: number, q: { x: number; y: number; z: number; w: number }, sleeping: boolean): void {
     const world = this.phys.world;
     // Amortissement marqué : un objet réel, irrégulier, ne roule pas indéfiniment.
-    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(x, y, z)
-      .setRotation(q)
-      .setLinearDamping(0.3)
-      .setAngularDamping(ANGULAR_DAMPING[def.kind] ?? 2.5)
-      .setCanSleep(true);
-    if (sleeping) bodyDesc.setSleeping(true);
+    const bodyDesc = def.fixed
+      ? RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z).setRotation(q)
+      : RAPIER.RigidBodyDesc.dynamic()
+          .setTranslation(x, y, z)
+          .setRotation(q)
+          .setLinearDamping(0.3)
+          .setAngularDamping(ANGULAR_DAMPING[def.kind] ?? 2.5)
+          .setCanSleep(true);
+    if (sleeping && !def.fixed) bodyDesc.setSleeping(true);
     const body = world.createRigidBody(bodyDesc);
-    const colDesc = colliderFor(def).setFriction(0.8).setRestitution(0.1).setCollisionGroups(PROP_GROUPS);
+    const groups = def.fixed && !SOLID_NODES.has(def.kind) ? NODE_GROUPS : PROP_GROUPS;
+    const colDesc = colliderFor(def).setFriction(0.8).setRestitution(0.1).setCollisionGroups(groups);
     const collider = world.createCollider(colDesc, body);
     const mass = body.mass();
     this.live.set(def.id, { def, body, collider, mass, handling: handlingFor(mass) });
@@ -177,7 +237,7 @@ export class PropSystem {
     if (!def) return null;
     this.despawn(id);
     this.stored.delete(id);
-    if (!def.dynamic) this.taken.add(id);
+    if (!def.dynamic) this.taken.set(id, this.clock());
     return def;
   }
 
@@ -199,10 +259,26 @@ export class PropSystem {
     lp.handling = handlingFor(lp.mass);
   }
 
+  /** Un objet naturel ramassé a-t-il repoussé ? */
+  private stillTaken(def: PropDef): boolean {
+    const at = this.taken.get(def.id);
+    if (at === undefined) return false;
+    if (this.clock() - at < regrowDelay(def.kind)) return true;
+    this.taken.delete(def.id);
+    return false;
+  }
+
   private loadChunk(cx: number, cz: number): void {
-    for (const def of propsInChunk(this.phys.terrain, cx, cz)) {
-      if (this.live.has(def.id) || this.stored.has(def.id) || this.taken.has(def.id)) continue;
+    const felled = this.phys.treeFelled;
+    for (const def of propsInChunk(this.phys.terrain, cx, cz, felled ? (i) => felled(cx, cz, i) : undefined)) {
+      if (this.live.has(def.id) || this.stored.has(def.id) || this.stillTaken(def)) continue;
       this.spawn(def, def.x, def.y, def.z, yawQuat(def.rot), true);
+    }
+    for (const n of nodesInChunk(this.phys.terrain, cx, cz)) {
+      if (this.live.has(n.id)) continue;
+      const def: PropDef = { id: n.id, kind: n.kind, x: n.x, y: n.y, z: n.z, rot: n.rot, radius: n.size / 2, length: 0, fixed: true, size: n.size };
+      const lift = SOLID_NODES.has(n.kind) ? n.size * 0.25 : 0.02;
+      this.spawn(def, n.x, n.y + lift, n.z, yawQuat(n.rot), true);
     }
     for (const [id, st] of this.stored) {
       if (this.live.has(id) || chunkCoord(st.x) !== cx || chunkCoord(st.z) !== cz) continue;
@@ -218,6 +294,7 @@ export class PropSystem {
 
   private displaced(id: string, lp: LiveProp): boolean {
     if (lp.def.dynamic || this.stored.has(id)) return true;
+    if (lp.def.fixed) return false;
     const t = lp.body.translation();
     const r = lp.body.rotation();
     const d = lp.def;
@@ -241,7 +318,7 @@ export class PropSystem {
     const dir = lookDirection(yaw, pitch);
     const origin = { x: s.x, y: eyeY, z: s.z };
     // Une petite sphère plutôt qu'un rayon fin : viser un petit objet reste facile.
-    const hit = this.phys.world.castShape(origin, IDENTITY, dir, AIM_BALL, 0, REACH, true, undefined, QUERY_PROPS, undefined, this.held ? this.live.get(this.held.id)?.body : undefined);
+    const hit = this.phys.world.castShape(origin, IDENTITY, dir, AIM_BALL, 0, REACH, true, undefined, QUERY_TARGETS, undefined, this.held ? this.live.get(this.held.id)?.body : undefined);
     if (!hit) return null;
     const d = hit.time_of_impact;
     // L'objet ne doit pas être caché derrière le décor.
@@ -250,13 +327,23 @@ export class PropSystem {
     const id = this.byCollider.get(hit.collider.handle);
     const lp = id ? this.live.get(id) : undefined;
     if (!id || !lp) return null;
-    return { id, kind: lp.def.kind, label: PROP_LABELS[lp.def.kind], mass: lp.mass, handling: lp.handling, distance: d };
+    return { id, kind: lp.def.kind, label: PROP_LABELS[lp.def.kind], mass: lp.mass, handling: lp.handling, distance: d, fixed: !!lp.def.fixed };
+  }
+
+  /** Arbre visé (tronc à portée de main), ou null. */
+  targetTree(s: MoveState, yaw: number, pitch: number, reach = REACH): TreeTarget | null {
+    const eyeY = s.y + (s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT);
+    const dir = lookDirection(yaw, pitch);
+    const hit = this.phys.world.castRay(new RAPIER.Ray({ x: s.x, y: eyeY, z: s.z }, dir), reach + 0.3, true, undefined, QUERY_TRUNKS);
+    if (!hit) return null;
+    const tree = this.phys.treeOf(hit.collider);
+    return tree ? { ...tree, distance: hit.timeOfImpact } : null;
   }
 
   /** Prend un objet en main (ou le traîne s'il est trop lourd). */
   grab(id: string, s: MoveState): boolean {
     const lp = this.live.get(id);
-    if (!lp || this.held) return false;
+    if (!lp || this.held || lp.def.fixed) return false;
     lp.body.wakeUp();
     if (lp.handling === 'trainer') {
       if (s.stamina < 5) {
@@ -397,7 +484,13 @@ export class PropSystem {
     for (const [id, lp] of this.live) {
       const t = lp.body.translation();
       const r = lp.body.rotation();
-      out.push({ id, kind: lp.def.kind, radius: lp.def.radius, length: lp.def.length, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w, held: this.held?.id === id });
+      const v: PropView = { id, kind: lp.def.kind, radius: lp.def.radius, length: lp.def.length, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w, held: this.held?.id === id };
+      if (lp.def.size !== undefined) v.size = lp.def.size;
+      if (lp.def.fire) {
+        v.lit = lp.def.fire.lit;
+        v.pot = lp.def.fire.pot?.item ?? null;
+      }
+      out.push(v);
     }
     return out;
   }
@@ -442,11 +535,25 @@ export class PropSystem {
     return { taken: [...this.taken], props, nextDyn: this.nextDyn };
   }
 
+  /** Foyers simulés ou mémorisés (pour faire brûler le feu). */
+  fires(): Array<{ def: PropDef; fire: FireState }> {
+    const out: Array<{ def: PropDef; fire: FireState }> = [];
+    for (const lp of this.live.values()) if (lp.def.fire) out.push({ def: lp.def, fire: lp.def.fire });
+    for (const st of this.stored.values()) if (st.def.fire && !this.live.has(st.def.id)) out.push({ def: st.def, fire: st.def.fire });
+    return out;
+  }
+
   /** Reprend un état sauvegardé : à appeler avant le chargement des premiers chunks. */
   restore(raw: unknown): void {
     if (typeof raw !== 'object' || raw === null) return;
     const r = raw as Record<string, unknown>;
-    if (Array.isArray(r.taken)) for (const id of r.taken.slice(0, 200000)) if (typeof id === 'string' && id.length < 40) this.taken.add(id);
+    if (Array.isArray(r.taken)) {
+      for (const e of r.taken.slice(0, 200000)) {
+        // Ancien format (phase 3) : identifiant seul.
+        if (typeof e === 'string' && e.length < 40) this.taken.set(e, 0);
+        else if (Array.isArray(e) && typeof e[0] === 'string' && e[0].length < 40 && typeof e[1] === 'number' && Number.isFinite(e[1])) this.taken.set(e[0], e[1]);
+      }
+    }
     if (typeof r.nextDyn === 'number' && Number.isInteger(r.nextDyn) && r.nextDyn > 0) this.nextDyn = r.nextDyn;
     if (!Array.isArray(r.props)) return;
     for (const p of r.props.slice(0, 50000)) {
@@ -483,7 +590,21 @@ function readStored(raw: unknown): StoredProp | null {
     length: d.length as number,
   };
   if (d.dynamic === true) def.dynamic = true;
+  if (d.fixed === true) def.fixed = true;
   if (def.kind === 'sac' || def.kind === 'corps') def.container = readContainer(d.container);
   if (fin(d.emptiedAt)) def.emptiedAt = d.emptiedAt;
+  if (fin(d.size) && d.size > 0 && d.size < 5) def.size = d.size;
+  if (typeof d.meta === 'object' && d.meta !== null) {
+    const st = readContainer({ pockets: [{ item: def.kind, count: 1, ...(d.meta as object) }] }).pockets[0];
+    if (st) {
+      const { item: _i, count: _c, ...meta } = st;
+      def.meta = meta as ItemMeta;
+    }
+  }
+  if (def.kind === 'foyer' && typeof d.fire === 'object' && d.fire !== null) {
+    const f = d.fire as Record<string, unknown>;
+    const pot = f.pot ? readContainer({ pockets: [f.pot] }).pockets[0] ?? null : null;
+    def.fire = { lit: f.lit === true, fuel: fin(f.fuel) ? Math.max(0, Math.min(36000, f.fuel)) : 0, pot, cook: fin(f.cook) ? Math.max(0, f.cook) : 0 };
+  }
   return { def, x: r.x as number, y: r.y as number, z: r.z as number, qx: r.qx as number, qy: r.qy as number, qz: r.qz as number, qw: r.qw as number };
 }
