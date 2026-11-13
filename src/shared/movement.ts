@@ -70,6 +70,20 @@ export interface MoveState {
   impactHeight: number;
   /** Vrai pendant les pas où le souffle est épuisé sous l'eau. */
   drowning: boolean;
+  /** Limites venant du corps (blessures, énergie, fatigue) et de la charge, fixées par la simulation. */
+  staminaMax: number;
+  /** Vitesse maximale au sol (m/s ; 99 : aucune limite). */
+  speedCap: number;
+  speedMul: number;
+  regenMul: number;
+  /** Coût en endurance des efforts. */
+  drainMul: number;
+  /** Actions impossibles (R_NO_SPRINT…). */
+  restrict: number;
+  /** Charge portée sur soi (kg). */
+  loadKg: number;
+  /** Endurance dépensée pendant le dernier pas (pour l'énergie et la fatigue). */
+  spent: number;
 }
 
 /** Commande envoyée par le client à chaque pas de simulation. */
@@ -89,6 +103,13 @@ export const BTN_SPRINT = 2;
 export const BTN_CROUCH = 4;
 export const BTN_INTERACT = 8;
 export const BTN_THROW = 16;
+
+/** Actions rendues impossibles par le corps ou la charge. */
+export const R_NO_SPRINT = 1;
+export const R_NO_JUMP = 2;
+export const R_NO_CLIMB = 4;
+export const R_NO_HEAVY = 8;
+export const R_NO_THROW = 16;
 
 export const MAX_PITCH = 1.55;
 const Q_DIR = 1024;
@@ -156,6 +177,14 @@ export function makeState(x: number, y: number, z: number): MoveState {
     impactSeverity: 0,
     impactHeight: 0,
     drowning: false,
+    staminaMax: STAMINA.max,
+    speedCap: 99,
+    speedMul: 1,
+    regenMul: 1,
+    drainMul: 1,
+    restrict: 0,
+    loadKg: 0,
+    spent: 0,
   };
 }
 
@@ -187,15 +216,18 @@ function centerY(s: MoveState): number {
 // ——— Endurance ———
 
 function drain(s: MoveState, amount: number): void {
-  s.stamina = Math.max(0, s.stamina - amount);
+  const a = Math.min(s.stamina, amount * s.drainMul);
+  s.stamina -= a;
+  s.spent += a;
   s.regenDelay = STAMINA.regenDelay;
   if (s.stamina <= 0) s.exhausted = true;
 }
 
 function regen(s: MoveState, dt: number, rate = 1): void {
   if (s.regenDelay > 0) s.regenDelay = Math.max(0, s.regenDelay - dt);
-  else s.stamina = Math.min(STAMINA.max, s.stamina + STAMINA.regen * rate * dt);
-  if (s.exhausted && s.stamina >= STAMINA.recoverAt) s.exhausted = false;
+  else s.stamina = Math.min(s.staminaMax, s.stamina + STAMINA.regen * rate * s.regenMul * dt);
+  if (s.stamina > s.staminaMax) s.stamina = s.staminaMax;
+  if (s.exhausted && s.stamina >= Math.min(STAMINA.recoverAt, s.staminaMax * 0.8)) s.exhausted = false;
 }
 
 // ——— Outils physiques ———
@@ -350,10 +382,10 @@ function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   }
   const hasInput = wl2 > 1e-8;
   const heavy = s.carryMass > ONE_HAND_CARRY_KG;
-  const sprinting = (buttons & BTN_SPRINT) !== 0 && hasInput && !s.crouched && !s.exhausted && s.stamina > 0 && !heavy && !s.dragging && s.stumble <= 0;
+  const sprinting = (buttons & BTN_SPRINT) !== 0 && hasInput && !s.crouched && !s.exhausted && s.stamina > 0 && !heavy && !s.dragging && s.stumble <= 0 && (s.restrict & R_NO_SPRINT) === 0;
 
   // Escalade : saut face à une paroi raide.
-  if ((pressed & BTN_JUMP) !== 0 && !heavy && !s.dragging && s.stamina >= CLIMB.minStamina) {
+  if ((pressed & BTN_JUMP) !== 0 && !heavy && !s.dragging && s.stamina >= CLIMB.minStamina && (s.restrict & R_NO_CLIMB) === 0) {
     const wall = probeWall(phys, s, Math.sin(cmd.yaw), Math.cos(cmd.yaw));
     if (wall) {
       setCrouch(phys, collider, s, false);
@@ -374,6 +406,7 @@ function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   // Vitesse horizontale : accélération, inertie, sol, charge, eau, trébuchement.
   let speed: number = sprinting ? MOVE.runSpeed : MOVE.walkSpeed;
   if (s.crouched) speed = MOVE.crouchSpeed;
+  speed = Math.min(speed, s.speedCap) * s.speedMul;
   if (heavy) speed = Math.min(speed, MOVE.heavyCarrySpeed);
   if (s.dragging) speed = Math.min(speed, MOVE.dragSpeed);
   if (s.grounded) speed *= eff.speed;
@@ -396,7 +429,7 @@ function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   }
 
   // Vitesse verticale : saut (un par appui, coûte de l'endurance), gravité.
-  const canJump = s.grounded && (pressed & BTN_JUMP) !== 0 && !s.crouched && !heavy && !s.dragging && s.stamina >= STAMINA.jumpCost && s.stumble <= 0;
+  const canJump = s.grounded && (pressed & BTN_JUMP) !== 0 && !s.crouched && !heavy && !s.dragging && s.stamina >= STAMINA.jumpCost && s.stumble <= 0 && (s.restrict & R_NO_JUMP) === 0;
   if (canJump) {
     s.vy = MOVE.jumpSpeed;
     drain(s, STAMINA.jumpCost);
@@ -475,9 +508,10 @@ function swimStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   }
   const wl = Math.sqrt(wx * wx + wz * wz);
   const heavy = s.carryMass > ONE_HAND_CARRY_KG;
-  const fast = (buttons & BTN_SPRINT) !== 0 && wl > 0.1 && !s.exhausted && s.stamina > 0 && !heavy;
+  const fast = (buttons & BTN_SPRINT) !== 0 && wl > 0.1 && !s.exhausted && s.stamina > 0 && !heavy && (s.restrict & R_NO_SPRINT) === 0;
   let speed: number = fast ? SWIM.fastSpeed : s.exhausted ? SWIM.exhaustedSpeed : SWIM.speed;
   if (heavy) speed *= 0.5;
+  speed *= s.speedMul;
 
   // Plongée : nager en regardant vers le bas (ou le haut), ou boutons monter / descendre.
   let vyWish = 0;
@@ -494,6 +528,8 @@ function swimStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   else if (s.y > floatY - 0.6) tvy = clamp((floatY - s.y) * 2, -1, 1);
   else tvy = heavy ? -0.6 : 0.25;
   if (s.y > floatY && tvy > 0) tvy = (floatY - s.y) * 2;
+  // Un sac lourd fait couler : il vaut mieux le poser avant de nager.
+  if (s.loadKg > 20 && (buttons & BTN_JUMP) === 0) tvy -= Math.min(0.5, (s.loadKg - 20) * 0.03);
 
   const current = phys.terrain.currentAt(s.x, s.z);
   const tvx = wx * speed * horiz + current.x;
@@ -558,7 +594,7 @@ function climbStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, 
     if (s.mantle <= 0) exitClimb(s);
     return;
   }
-  if ((pressed & BTN_CROUCH) !== 0) {
+  if ((pressed & BTN_CROUCH) !== 0 || (s.restrict & R_NO_CLIMB) !== 0) {
     exitClimb(s);
     return;
   }
@@ -620,6 +656,7 @@ export function stepMovement(phys: PhysicsWorld, collider: RAPIER.Collider, s: M
   s.impact = 0;
   s.impactSeverity = 0;
   s.drowning = false;
+  s.spent = 0;
   if (s.stumble > 0) s.stumble = Math.max(0, s.stumble - dt);
 
   const waterDepth = WATER_LEVEL - s.y;
