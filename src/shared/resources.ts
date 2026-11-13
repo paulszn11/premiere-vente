@@ -80,7 +80,9 @@ export function nodesInChunk(terrain: Terrain, cx: number, cz: number): NodeDef[
       if (bankLow && s.biome === 'fleuve' && p < 0.004) kind = 'gravier_or';
       // Rare : affleurements de fer sur les roches de l'escarpement et des hautes terres.
       else if (IRON_BIOMES.has(s.biome) && s.kopje < 0.3 && p < 0.012) kind = 'filon_fer';
-      else if ((s.kopje > 0.3 && p < 0.07) || (QUARTZ_BIOMES.has(s.biome) && p < 0.03) || (bankLow && p < 0.02)) kind = 'bloc_quartz';
+      // Quartz : partout sur les kopjes et l'escarpement, et des filons épars sur tout le plateau
+      // (le craton du Zimbabwe est parcouru de filons de quartz) : le premier outil reste à portée.
+      else if ((s.kopje > 0.3 && p < 0.07) || (QUARTZ_BIOMES.has(s.biome) && p < 0.03) || (bankLow && p < 0.02) || p < 0.012) kind = 'bloc_quartz';
       else if ((s.biome === 'vlei' && p < 0.08) || (bankLow && p < 0.07)) kind = 'gisement_argile';
       else if (GRASS_BIOMES.has(s.biome) && s.kopje < 0.2 && p < 0.14) kind = 'touffe_herbe';
       if (!kind) continue;

@@ -4,10 +4,11 @@
 
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
 import type { PlayerAction } from '../../shared/actions';
-import { type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
+import { RECIPES, RECIPE_IDS, canDismantle, conditionOf, experimentHint, improveOptions, repairOptions, skillLevel } from '../../shared/crafting';
+import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
 import { ITEMS, type ItemId, itemName } from '../../shared/items';
 import { ITEM_OF_PROP, PROP_LABELS } from '../../shared/props';
-import type { LocalSimulation, Tone } from '../../shared/simulation';
+import { type LocalSimulation, TOOL_NEEDS, type Tone } from '../../shared/simulation';
 import {
   INJURY_LABELS,
   type Injury,
@@ -36,6 +37,10 @@ interface ActionButton {
   run: () => void;
   disabled?: boolean;
 }
+
+type Tab = 'sac' | 'corps' | 'fabriquer' | 'carnet';
+const TABS: Tab[] = ['sac', 'corps', 'fabriquer', 'carnet'];
+type ListKey = 'item' | 'body' | 'zone' | 'bench' | 'craft';
 
 const fmtKg = (kg: number): string => `${kg < 10 ? kg.toFixed(1).replace('.', ',') : Math.round(kg)} kg`;
 const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
@@ -67,13 +72,13 @@ export class BagView {
   private otherProp: string | null = null;
   private selected: BagSlot | null = { zone: 'poche', index: 0 };
   private zone: Zone | null = null;
-  private tab: 'sac' | 'corps' = 'sac';
+  private tab: Tab = 'sac';
   private navCooldown = 0;
   private navHeld = false;
   private buttons: ActionButton[] = [];
   /** Listes de boutons à jour ; les boutons affichés ne sont recréés que si les libellés changent. */
-  private readonly lists: Record<'item' | 'body' | 'zone', ActionButton[]> = { item: [], body: [], zone: [] };
-  private readonly listSig: Record<'item' | 'body' | 'zone', string> = { item: '', body: '', zone: '' };
+  private readonly lists: Record<ListKey, ActionButton[]> = { item: [], body: [], zone: [], bench: [], craft: [] };
+  private readonly listSig: Record<ListKey, string> = { item: '', body: '', zone: '', bench: '', craft: '' };
   private zoneLines!: HTMLElement;
   private zoneButtons_!: HTMLElement;
   private readonly el: Record<string, HTMLElement>;
@@ -93,6 +98,11 @@ export class BagView {
       itemName: q('.item-name'),
       itemDesc: q('.item-desc'),
       itemActions: q('.item-actions'),
+      benchList: q('.bench-list'),
+      recipe: q('.recipe'),
+      craftActions: q('.craft-actions'),
+      craftHint: q('.craft-hint'),
+      carnet: q('.carnet'),
     };
     this.badges = q('.bag-badges');
     this.zoneLines = document.createElement('div');
@@ -115,7 +125,7 @@ export class BagView {
       if (slot) this.select(slot);
     });
     q('.bag-close').addEventListener('click', () => this.deps.onClose());
-    deps.root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.addEventListener('click', () => this.setTab(b.dataset.tab === 'corps' ? 'corps' : 'sac')));
+    deps.root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.addEventListener('click', () => this.setTab(TABS.includes(b.dataset.tab as Tab) ? (b.dataset.tab as Tab) : 'sac')));
   }
 
   get isOpen(): boolean {
@@ -142,9 +152,9 @@ export class BagView {
     this.badges.textContent = '';
   }
 
-  private setTab(tab: 'sac' | 'corps'): void {
+  private setTab(tab: Tab): void {
     this.tab = tab;
-    this.deps.root.classList.toggle('tab-corps', tab === 'corps');
+    for (const t of TABS) this.deps.root.classList.toggle(`tab-${t}`, tab === t);
     this.deps.root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
   }
 
@@ -158,6 +168,17 @@ export class BagView {
     if (!sim) return;
     const r = sim.act(a);
     if (r.message) this.deps.onMessage(r.message, r.ok ? 'info' : 'alerte');
+  }
+
+  /** Foyer ouvert (à portée). */
+  private otherFire() {
+    const sim = this.sim;
+    if (!sim || !this.otherProp) return null;
+    const def = sim.props.defOf(this.otherProp);
+    const pos = sim.props.position(this.otherProp);
+    if (!def?.fire || !pos) return null;
+    if (Math.hypot(pos.x - sim.state.x, pos.z - sim.state.z) > 3.4) return null;
+    return { def, fire: def.fire };
   }
 
   private otherContainer() {
@@ -179,7 +200,7 @@ export class BagView {
       this.deps.onClose();
       return;
     }
-    if (this.otherProp && !this.otherContainer()) {
+    if (this.otherProp && !this.otherContainer() && !this.otherFire()) {
       this.otherProp = null;
       if (this.selected?.zone.startsWith('autre')) this.select({ zone: 'poche', index: 0 });
     }
@@ -193,6 +214,7 @@ export class BagView {
       bag: sim.inventory.bag,
       hand: held ? { kind: held.kind, radius: held.radius, length: held.length } : null,
       other: other?.c ?? null,
+      bench: sim.inventory.bench,
     });
     // Même règle que la feuille de style : petit écran = onglets Sac / Corps.
     const tabbed = window.matchMedia('(max-width: 760px), (max-height: 420px)').matches;
@@ -213,7 +235,8 @@ export class BagView {
     if (Math.hypot(mx, my) < 0.55) {
       this.navCooldown = 0;
       this.navHeld = false;
-    } else if (this.navCooldown <= 0 && this.tab === 'sac') {
+    } else if (this.navCooldown <= 0 && this.el.pick!.getClientRects().length > 0) {
+      // Le stick choisit une case tant que le sac est à l'écran (sur grand écran, aussi pendant la fabrication).
       const horizontal = Math.abs(mx) > Math.abs(my);
       const next = this.bag.neighbor(this.selected, horizontal ? Math.sign(mx) : 0, horizontal ? 0 : Math.sign(my));
       if (next) this.select(next);
@@ -221,13 +244,18 @@ export class BagView {
       this.navCooldown = this.navHeld ? 0.16 : 0.4;
       this.navHeld = true;
     }
+    // Onglet « Fabriquer » : A fabrique (étape suivante), X pose l'objet choisi sur le plan de travail (ou le reprend).
+    const crafting = this.tab === 'fabriquer';
     const first = input.codePressed('Pad:0') || input.codePressed('Enter') || (input.pressed('interact') && !input.codePressed('Pad:2'));
-    if (first && this.buttons[0] && !this.buttons[0].disabled) this.buttons[0].run();
+    const a = crafting ? this.lists.craft[0] : this.buttons[0];
+    if (first && a && !a.disabled) a.run();
     if (!this.open_) return;
-    if (input.codePressed('Pad:2') && this.buttons[1] && !this.buttons[1].disabled) this.buttons[1].run();
+    const x = crafting ? this.buttons.find((b) => b.label === 'Poser sur le plan de travail' || b.label === 'Reprendre') : this.buttons[1];
+    if (input.codePressed('Pad:2') && x && !x.disabled) x.run();
     if (!this.open_) return;
     if (input.pressed('use')) this.buttons.find((b) => b.label === 'Manger' || b.label === 'Utiliser')?.run();
-    if (input.codePressed('Pad:4') || input.codePressed('Pad:5')) this.setTab(this.tab === 'sac' ? 'corps' : 'sac');
+    if (input.codePressed('Pad:4')) this.setTab(TABS[(TABS.indexOf(this.tab) + TABS.length - 1) % TABS.length]!);
+    if (input.codePressed('Pad:5')) this.setTab(TABS[(TABS.indexOf(this.tab) + 1) % TABS.length]!);
     if (input.codePressed('Pad:1')) this.deps.onClose();
   }
 
@@ -247,23 +275,41 @@ export class BagView {
   }
 
   /** Objet de la case choisie. */
-  private selectedItem(): { item: ItemId | null; kindLabel: string; count: number; mass: number } | null {
+  private selectedItem(): { item: ItemId | null; kindLabel: string; count: number; mass: number; st: ItemStack | null } | null {
     const sim = this.sim!;
     const s = this.selected;
     if (!s) return null;
     if (s.zone === 'main') {
       const h = sim.props.held ? sim.props.defOf(sim.props.held.id) : null;
       if (!h) return null;
-      return { item: ITEM_OF_PROP[h.kind] ?? null, kindLabel: PROP_LABELS[h.kind], count: 1, mass: sim.props.massOf(h.id) };
+      const item = ITEM_OF_PROP[h.kind] ?? null;
+      return { item, kindLabel: PROP_LABELS[h.kind], count: 1, mass: sim.props.massOf(h.id), st: item ? { item, count: 1, ...(h.meta ?? {}) } : null };
     }
     let st = null;
     if (s.zone === 'poche' || s.zone === 'sac') st = stackAt(sim.inventory, s);
+    else if (s.zone === 'etabli') st = sim.inventory.bench[s.index] ?? null;
     else {
       const o = this.otherContainer();
       if (o) st = stackAt(o.c, { zone: s.zone === 'autre-poche' ? 'poche' : 'sac', index: s.index });
     }
     if (!st) return null;
-    return { item: st.item, kindLabel: ITEMS[st.item].label, count: st.count, mass: unitMass(st) * st.count };
+    return { item: st.item, kindLabel: ITEMS[st.item].label, count: st.count, mass: unitMass(st) * st.count, st };
+  }
+
+  /** État d'un outil : « neuf (118/120), qualité bonne, durci au feu ». */
+  private toolText(st: ItemStack | null): string {
+    if (!st) return '';
+    const cond = conditionOf(st);
+    const parts: string[] = [];
+    if (cond) parts.push(`${cond} (${st.d}/${st.dm})`);
+    if (st.q !== undefined) parts.push(`qualité ${st.q < 40 ? 'médiocre' : st.q < 70 ? 'correcte' : st.q < 85 ? 'bonne' : 'excellente'}`);
+    const fx = st.fx ?? 0;
+    if (fx & FX_DURCI) parts.push('durci au feu');
+    if (fx & FX_RESINE) parts.push('ligature à la résine');
+    if (fx & FX_LIGATURE_LACHE) parts.push('ligature lâche');
+    if (fx & FX_MANCHE_FENDU) parts.push('manche fendu');
+    if (st.item === 'pot') parts.push(st.w === 2 ? 'eau bouillie' : st.w === 1 ? 'plein d’eau' : 'vide');
+    return parts.join(', ');
   }
 
   private itemButtons(): ActionButton[] {
@@ -272,12 +318,47 @@ export class BagView {
     const out: ActionButton[] = [];
     const other = this.otherContainer();
     const sel = this.selectedItem();
-    if (s && sel) {
+    const fire = this.otherFire();
+    const toolButtons = (from: Slot | { zone: 'main' }) => {
+      const st = sel?.st;
+      if (!st) return;
+      if (sel.item) out.push({ label: 'Poser sur le plan de travail', run: () => this.act({ type: 'etabli_poser', from }) });
+      const needText = (needs: Array<[ItemId, number]>, extra: string[]) => {
+        const all = [...needs.map(([item, n]) => itemName(item, n)), ...extra];
+        return all.length ? ` (${all.join(', ')})` : '';
+      };
+      const lacks = (needs: Array<[ItemId, number]>) => needs.some(([item, n]) => sim.available(item) < n);
+      for (const o of repairOptions(st)) {
+        out.push({
+          label: `Réparer : ${o.label.toLowerCase()}${needText(o.needs, [])}`,
+          disabled: lacks(o.needs) || (o.tool !== null && !sim.hasTool(o.tool)),
+          run: () => this.act({ type: 'reparer', from, kind: o.kind }),
+        });
+      }
+      for (const o of improveOptions(st)) {
+        out.push({
+          label: `Améliorer : ${o.label.toLowerCase()}${needText(o.needs, o.fire ? ['un feu allumé'] : [])}`,
+          disabled: lacks(o.needs) || (o.fire && !sim.fireNearby()),
+          run: () => this.act({ type: 'ameliorer', from, kind: o.kind }),
+        });
+      }
+      if (canDismantle(st.item)) out.push({ label: 'Démonter', run: () => this.act({ type: 'demonter', from }) });
+      if (st.item === 'pot' && sim.inWater()) out.push({ label: 'Remplir d’eau', run: () => this.act({ type: 'remplir', from }) });
+      if (fire && this.otherProp && (st.item === 'pot' || st.item === 'pot_cru') && !fire.fire.pot) {
+        const prop = this.otherProp;
+        out.push({ label: 'Poser sur le feu', run: () => this.act({ type: 'poser_feu', prop, from }) });
+      }
+    };
+    if (s && sel && s.zone === 'etabli') {
+      const index = s.index;
+      out.push({ label: 'Reprendre', run: () => this.act({ type: 'etabli_reprendre', index }) });
+    } else if (s && sel) {
       if (s.zone === 'main') {
         if (sel.item && ITEMS[sel.item].food) out.push({ label: 'Manger', run: () => this.act({ type: 'manger', from: { zone: 'main' } }) });
         if (sel.item === 'chiffon' || sel.item === 'aloes' || sel.item === 'baton') out.push({ label: 'Utiliser', run: () => this.act({ type: 'utiliser' }) });
         if (sel.item) out.push({ label: 'Ranger', run: () => this.act({ type: 'ranger' }) });
         out.push({ label: 'Poser au sol', run: () => this.act({ type: 'poser', from: { zone: 'main' } }) });
+        toolButtons({ zone: 'main' });
       } else if (s.zone === 'poche' || s.zone === 'sac') {
         const from: Slot = { zone: s.zone, index: s.index };
         const item = sel.item!;
@@ -290,11 +371,18 @@ export class BagView {
           out.push({ label: 'Ranger dans le sac posé', run: () => this.act({ type: 'deposer_dans', prop, from }) });
         }
         out.push({ label: 'Poser au sol', run: () => this.act({ type: 'poser', from }) });
+        toolButtons(from);
       } else if (this.otherProp) {
         const prop = this.otherProp;
         const from: Slot = { zone: s.zone === 'autre-poche' ? 'poche' : 'sac', index: s.index };
         out.push({ label: 'Prendre', run: () => this.act({ type: 'prendre_dans', prop, from }) });
       }
+    }
+    if (fire && this.otherProp) {
+      const prop = this.otherProp;
+      if (!fire.fire.lit) out.push({ label: 'Allumer le feu (archet + herbes sèches)', run: () => this.act({ type: 'allumer', prop }) });
+      out.push({ label: 'Ajouter du bois', run: () => this.act({ type: 'alimenter', prop }) });
+      if (fire.fire.pot) out.push({ label: 'Reprendre le pot', run: () => this.act({ type: 'reprendre_feu', prop }) });
     }
     if (other && this.otherProp) {
       const prop = this.otherProp;
@@ -353,7 +441,7 @@ export class BagView {
   }
 
   /** Met à jour une liste de boutons ; le DOM n'est recréé que si les libellés ou états changent. */
-  private renderButtons(host: HTMLElement, key: 'item' | 'body' | 'zone', list: ActionButton[]): void {
+  private renderButtons(host: HTMLElement, key: ListKey, list: ActionButton[]): void {
     this.lists[key] = list;
     const sig = JSON.stringify(list.map((b) => [b.label, !!b.disabled]));
     if (sig === this.listSig[key]) return;
@@ -395,12 +483,21 @@ export class BagView {
       ? `Sac : ${vol.toFixed(1).replace('.', ',')} / ${BAG_CAPACITY_L} L · charge portée ${fmtKg(load)}${load > 25 ? ' (trop lourd pour courir)' : ''}`
       : `Pas de sac · ${POCKET_COUNT} poches · charge ${fmtKg(load)}`;
     if (other) title += other.def.kind === 'corps' ? ' · vous fouillez un corps' : ` · sac posé (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
+    const fire = this.otherFire();
+    if (fire) {
+      const f = fire.fire;
+      let pot = '';
+      if (f.pot?.item === 'pot_cru') pot = ` · pot en cuisson (${Math.min(100, Math.round((f.cook / 90) * 100))} %)`;
+      else if (f.pot?.item === 'pot') pot = f.pot.w === 2 ? ' · l’eau bout' : f.pot.w === 1 ? ` · l’eau chauffe (${Math.min(100, Math.round((f.cook / 30) * 100))} %)` : ' · pot vide sur le feu';
+      title = `Foyer ${f.lit ? `allumé (${Math.ceil(f.fuel / 60)} min de bois)` : 'éteint'}${pot} · ${title}`;
+    }
     this.setText(this.el.title!, title);
 
     // Objet choisi.
     if (sel) {
       this.setText(this.el.itemName!, `${cap(sel.item ? itemName(sel.item, sel.count) : `${sel.kindLabel}`)} · ${fmtKg(sel.mass)}`);
-      this.setText(this.el.itemDesc!, sel.item ? ITEMS[sel.item].description : 'Trop grand pour le sac : on le porte ou on le traîne.');
+      const tool = this.toolText(sel.st);
+      this.setText(this.el.itemDesc!, `${tool ? `${cap(tool)}. ` : ''}${sel.item ? ITEMS[sel.item].description : 'Trop grand pour le sac : on le porte ou on le traîne.'}`);
     } else {
       this.setText(this.el.itemName!, other ? 'Choisissez un objet à prendre.' : 'Case vide.');
       this.setText(this.el.itemDesc!, sim.gesture ? sim.gesture.label : 'Touchez un objet, puis une action.');
@@ -446,6 +543,63 @@ export class BagView {
       this.renderButtons(this.zoneButtons_, 'zone', []);
     }
     this.renderButtons(this.el.bodyActions!, 'body', this.bodyButtons());
+    this.refreshCraft();
+  }
+
+  /** Onglets « Fabriquer » (plan de travail, étapes) et « Carnet » (recettes). */
+  private refreshCraft(): void {
+    const sim = this.sim!;
+    const bench = sim.inventory.bench;
+    this.renderButtons(
+      this.el.benchList!,
+      'bench',
+      bench.map((st, index) => ({ label: `Reprendre ${itemName(st.item, st.count)}`, run: () => this.act({ type: 'etabli_reprendre', index }) })),
+    );
+    const info = sim.benchRecipe();
+    const craft: ActionButton[] = [];
+    if (bench.length === 0) {
+      this.setHtml(this.el.recipe!, '<p>Le plan de travail est vide. Dans le sac, choisissez une pièce puis « Poser sur le plan de travail ».</p>');
+      this.setText(this.el.craftHint!, '');
+    } else if (!info) {
+      this.setHtml(this.el.recipe!, '<p>Aucune recette connue ne correspond à ces pièces.</p>');
+      this.setText(this.el.craftHint!, experimentHint(bench, sim.knowledge));
+      craft.push({ label: 'Essayer d’assembler', run: () => this.act({ type: 'fabriquer' }) });
+    } else {
+      const r = info.recipe;
+      const steps = r.steps
+        .map((st, i) => {
+          const mark = i < info.step ? '✓' : i === info.step ? '→' : '·';
+          const tool = st.tool ? ` — ${TOOL_NEEDS[st.tool]} ${sim.hasTool(st.tool) ? '✓' : '✗'}` : '';
+          return `<li>${mark} ${st.label}${tool}</li>`;
+        })
+        .join('');
+      this.setHtml(this.el.recipe!, `<p><strong>${info.known ? r.label : 'Recette inconnue…'}</strong>${info.known ? '' : ' (essayez : elle se révélera)'}</p><ol class="steps">${steps}</ol>`);
+      const next = r.steps[info.step];
+      this.setText(this.el.craftHint!, r.boiledWater ? 'Il faut un pot d’eau bouillante dans le sac ou en main.' : '');
+      craft.push({
+        label: info.known && next ? `Faire : ${next.label.toLowerCase()} (${Math.round(next.seconds)} s)` : 'Essayer d’assembler',
+        disabled: info.known && next ? !sim.hasTool(next.tool) : false,
+        run: () => this.act({ type: 'fabriquer' }),
+      });
+    }
+    if (sim.gesture) craft.push({ label: 'Interrompre', run: () => this.act({ type: 'interrompre' }) });
+    this.renderButtons(this.el.craftActions!, 'craft', craft);
+    // Carnet.
+    const k = sim.knowledge;
+    const lvl = skillLevel(k.xp);
+    const known = k.known.map((id) => {
+      const r = RECIPES[id];
+      return `<li><strong>${r.label}</strong> : ${r.inputs.map(([item, n]) => itemName(item, n)).join(' + ')} · ${r.steps.length} étape${r.steps.length > 1 ? 's' : ''}</li>`;
+    });
+    const hinted = k.hinted.map((id) => `<li><em>${RECIPES[id].hint}</em></li>`);
+    const unknown = RECIPE_IDS.length - k.known.length - k.hinted.length;
+    this.setHtml(
+      this.el.carnet!,
+      `<p>Fabrication : niveau ${lvl} (${Math.round(k.xp)} points). Plus le niveau monte, meilleurs sont les objets et plus les gestes sont rapides.</p>` +
+        `<h4>Recettes connues</h4><ul>${known.join('')}</ul>` +
+        (hinted.length ? `<h4>Idées</h4><ul>${hinted.join('')}</ul>` : '') +
+        (unknown > 0 ? `<p class="note">${unknown} recette${unknown > 1 ? 's' : ''} encore inconnue${unknown > 1 ? 's' : ''} : ramassez de nouveaux matériaux, expérimentez sur le plan de travail.</p>` : ''),
+    );
   }
 
   /** État pour les tests automatiques. */
@@ -457,7 +611,7 @@ export class BagView {
       other: this.otherProp,
       cells: this.bag.cells.map((c) => ({ slot: c.slot, kind: c.kind, count: c.count, ...this.bag.toScreen(c.x, c.z) })),
       actions: this.buttons.map((b) => b.label),
-      all: [...this.lists.item, ...this.lists.zone, ...this.lists.body].map((b) => (b.disabled ? `(${b.label})` : b.label)),
+      all: [...this.lists.item, ...this.lists.zone, ...this.lists.body, ...this.lists.bench, ...this.lists.craft].map((b) => (b.disabled ? `(${b.label})` : b.label)),
     };
   }
 
@@ -468,7 +622,7 @@ export class BagView {
 
   /** Clique une action par son libellé (tests). */
   run(label: string): boolean {
-    const b = [...this.lists.item, ...this.lists.zone, ...this.lists.body].find((x) => x.label === label);
+    const b = [...this.lists.item, ...this.lists.zone, ...this.lists.body, ...this.lists.bench, ...this.lists.craft].find((x) => x.label === label || (label.endsWith('…') && x.label.startsWith(label.slice(0, -1))));
     if (!b || b.disabled) return false;
     b.run();
     return true;

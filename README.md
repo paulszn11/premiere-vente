@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 3 terminée (119 tests unitaires, 122 vérifications dans le navigateur).** Le prototype contient :
+**État : phase 4 terminée (146 tests unitaires, 151 vérifications dans le navigateur).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -13,6 +13,12 @@ Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le n
   - sac à dos de 30 litres et 4 poches, avec une vue du sac en 3D ;
   - perte de connaissance et mort ;
   - corps laissé dans le monde et réapparition ;
+- les ressources et la fabrication (phase 4) :
+  - gisements de quartz, d'herbes sèches, d'argile, de fer et d'or, répartis selon les régions ;
+  - récolte par gestes avec l'outil en main : tailler le quartz, écorcer, couper, abattre un arbre ;
+  - un plan de travail sur la toile du sac, des recettes par étapes et un carnet, avec découverte et expérimentation ;
+  - qualité, usure, réparations, améliorations et démontage des outils ;
+  - le feu, l'eau bouillie, les pansements propres, et une fumée visible de loin ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
 
@@ -35,8 +41,8 @@ Tant que la protection Vercel est activée, il faut être connecté à son compt
 | S'accroupir · plonger · lâcher la paroi | C | B / Rond | Bouton « Accroupir » |
 | Prendre · ramasser · poser · traîner · fouiller | E | X / Carré | Bouton « Prendre » |
 | Lancer l'objet porté | Clic gauche | RT / R2 | Bouton « Lancer » |
-| Utiliser l'objet en main (manger, soigner) | Clic droit ou F | LT / L2 | Bouton « Utiliser » |
-| Sac et examen du corps | Tab ou I | Y / Triangle | Bouton « Sac » |
+| Utiliser l'objet en main : manger, soigner, frapper, couper, abattre (maintenir pour enchaîner les coups) | Clic droit ou F | LT / L2 | Bouton « Utiliser » |
+| Sac, examen du corps, fabrication, carnet | Tab ou I | Y / Triangle | Bouton « Sac » |
 | S'asseoir · dormir (maintenir) | R | LB / L1 | Sac → onglet « Corps » |
 | Poches 1 à 4 | 1 à 4 | RB / R1 (poche suivante) | Dans le sac |
 | Menu / pause | Échap | Start | Bouton ☰ |
@@ -44,7 +50,23 @@ Tant que la protection Vercel est activée, il faut être connecté à son compt
 
 Toutes les touches se changent dans « Réglages » → « Commandes ».
 
-Pour essayer rapidement chaque région, ouvrez le menu pause, puis « Réglages » → « Outils de test ». Vous y trouverez la téléportation vers le lac (nage), une paroi de granit (escalade) et chaque biome. Ces outils seront retirés ou réservés à l'hôte en multijoueur.
+Dans le sac :
+- toucher ou cliquer un objet affiche ses actions, dont « Poser sur le plan de travail » ;
+- l'onglet « Fabriquer » montre la recette reconnue et ses étapes, avec le bouton « Faire » ;
+- l'onglet « Carnet » liste les recettes connues et les idées ;
+- à la manette, LB et RB changent d'onglet ; dans « Fabriquer », X pose l'objet choisi sur le plan de travail et A fabrique.
+
+Pour bien démarrer :
+1. Prenez un galet (E) et frappez un bloc de quartz blanc (clic droit maintenu) : des éclats tranchants tombent.
+2. Avec un éclat en main, écorcez un arbre.
+3. Sur le plan de travail : battez l'écorce (fibres), torsadez une corde, puis fabriquez un couteau.
+
+Pour essayer rapidement chaque région, ouvrez le menu pause, puis « Réglages » → « Outils de test ». Vous y trouverez :
+- la téléportation vers le lac (nage), une paroi de granit (escalade) et chaque biome ;
+- la téléportation à côté du gisement de quartz, d'argile, de fer ou d'or le plus proche ;
+- un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet).
+
+Ces outils seront retirés ou réservés à l'hôte en multijoueur.
 
 ## Tester les performances sur vos appareils
 
@@ -74,7 +96,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,verification,phase3,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire sur ordinateur, téléphone et manette).
+- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; les deux sur ordinateur, téléphone et manette).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
@@ -82,7 +104,8 @@ Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
 ```
 src/shared/     code commun au client et au futur serveur : géographie, relief, flore,
-                objets, inventaire, corps du joueur (santé, blessures), actions,
+                objets, inventaire, corps du joueur (santé, blessures), ressources
+                (gisements, arbres), fabrication (recettes, qualité, usure), actions,
                 physique, déplacements, simulation à pas fixe, apparitions,
                 protocole, codes de monde
 src/client/     jeu dans le navigateur : rendu (Babylon.js), commandes, réglages,
@@ -106,3 +129,4 @@ Le projet Vercel `bienvenue-au-zimbabwe` construit le site avec `npm run build` 
 - [`docs/PHASE-1.md`](docs/PHASE-1.md) : architecture et prototype, procédure de test sur appareils réels
 - [`docs/PHASE-2.md`](docs/PHASE-2.md) : monde et déplacements (carte, décisions, tests, limites)
 - [`docs/PHASE-3.md`](docs/PHASE-3.md) : survie et inventaire (décisions inspirées d'autres jeux, tests, limites)
+- [`docs/PHASE-4.md`](docs/PHASE-4.md) : ressources et fabrication (matériaux, recettes, outils, feu, tests, limites)

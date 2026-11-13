@@ -160,6 +160,15 @@ export const TOOL_NEEDS: Record<ToolTag, string> = {
   pointe: 'une lance',
 };
 
+/** Verbes des gisements, pour les indications à l'écran. */
+const NODE_VERB: Record<NodeKind, string> = {
+  bloc_quartz: 'frapper le bloc de quartz',
+  touffe_herbe: 'arracher des herbes sèches',
+  gisement_argile: 'creuser l’argile',
+  filon_fer: 'extraire le minerai de fer',
+  gravier_or: 'laver le gravier (orpailler)',
+};
+
 /** Endurance dépensée par coup selon l'outil. */
 const STRIKE_COST: Record<string, number> = { hache: 6, percuteur: 4, tranchant: 3, fouir: 5, batee: 3, main: 2 };
 /** Durée d'un coup (s). */
@@ -1105,7 +1114,8 @@ export class LocalSimulation {
     return needs;
   }
 
-  private inWater(): boolean {
+  /** Dans l'eau (fleuve, lac) : on peut remplir un pot. */
+  inWater(): boolean {
     const s = this.state;
     return s.mode === MODE_SWIM || WATER_LEVEL - s.y > 0.2;
   }
@@ -1120,6 +1130,41 @@ export class LocalSimulation {
     const y = this.terrain.heightAt(px, pz) + 0.35 + shape.radius;
     const meta = this.propMeta(st);
     this.props.spawnDynamic({ kind, x: px, y, z: pz, rot: (k * 0.31) % 1, ...shape, ...(meta ? { meta } : {}) });
+  }
+
+  /** Ce que ferait « Utiliser » sur la cible visée (indication à l'écran). `interact` : se fait avec « Prendre ». */
+  useHint(): { action: string; ready: boolean; interact: boolean } | null {
+    const s = this.state;
+    if (s.mode === MODE_CLIMB || this.vitals.state !== 'eveille') return null;
+    const h = this.heldItem();
+    if (h?.item === 'pot' && this.inWater()) return { action: 'remplir le pot d’eau', ready: true, interact: false };
+    const t = this.props.target(s, this.yaw, this.pitch);
+    const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
+    const tree = this.props.targetTree(s, this.yaw, this.pitch);
+    if (node && (!tree || node.distance <= tree.distance)) {
+      const kind = node.kind as NodeKind;
+      const spec = NODE_SPECS[kind];
+      const verb = NODE_VERB[kind];
+      if (this.world.nodeLeft(node.id, kind, this.time) <= 0) return { action: `${spec.label} : épuisé pour l’instant`, ready: false, interact: false };
+      if (!spec.tool) return { action: verb, ready: true, interact: true };
+      if (!(h && hasTag(h.item, spec.tool))) return { action: `${verb} : il faut ${TOOL_NEEDS[spec.tool]} en main`, ready: false, interact: false };
+      const done = this.strikes.get(node.id) ?? 0;
+      return { action: `${verb}${done > 0 ? ` (${Math.round((done / spec.strikes) * 100)} %)` : ''}`, ready: true, interact: false };
+    }
+    if (!tree) return null;
+    if (!h || !hasTag(h.item, 'tranchant')) return h ? { action: 'arbre : il faut un outil tranchant (éclat de quartz, couteau, hache)', ready: false, interact: false } : null;
+    const spec = treeSpec(tree.species, tree.scale);
+    const axe = hasTag(h.item, 'hache');
+    if (axe && !s.crouched) return { action: `abattre l’arbre (${Math.round(this.world.fellProgress(tree.key, spec) * 100)} %) · accroupi : couper`, ready: true, interact: false };
+    const key = tree.key;
+    const resin = this.world.resinState(key, this.time);
+    if (resin === 'prete') return { action: 'récolter la résine', ready: true, interact: false };
+    if (this.world.partLeft(key, 'ilala', spec, this.time) > 0) return { action: 'couper des feuilles d’ilala', ready: true, interact: false };
+    if (axe && this.world.partLeft(key, 'perche', spec, this.time) > 0) return { action: 'couper une perche', ready: true, interact: false };
+    if (this.world.partLeft(key, 'ecorce', spec, this.time) > 0) return { action: 'écorcer (bandes d’écorce)', ready: true, interact: false };
+    if (this.world.partLeft(key, 'manche', spec, this.time) > 0) return { action: 'couper une branche verte', ready: true, interact: false };
+    if (spec.resin && resin === 'aucune') return { action: 'entailler l’écorce pour la résine', ready: true, interact: false };
+    return { action: resin === 'coule' ? 'la résine coule : revenez plus tard' : 'cet arbre n’a plus rien à donner pour l’instant', ready: false, interact: false };
   }
 
   /** « Utiliser » avec un outil sur un gisement ou un arbre ; null si aucune cible à travailler. */
@@ -1274,8 +1319,10 @@ export class LocalSimulation {
     } else {
       const cur = stackAt(inv, from);
       if (!cur) return fail();
-      if (!this.benchAdd({ ...cur })) return fail('Le plan de travail est plein (6 emplacements).');
-      takeAt(inv, from, cur.count);
+      // Un outil (éclat de quartz…) se pose un par un : les autres restent sous la main pour travailler.
+      const n = (ITEMS[cur.item].tool?.durability ?? 0) > 0 ? 1 : cur.count;
+      if (!this.benchAdd({ ...cur, count: n })) return fail('Le plan de travail est plein (6 emplacements).');
+      takeAt(inv, from, n);
     }
     this.craft = null;
     return ok();
@@ -1419,6 +1466,11 @@ export class LocalSimulation {
     ref.commit();
     this.knowledge.xp += 5;
     this.msg(`${opt.label} : c’est fait (${st.d}/${st.dm}).`, 'info');
+  }
+
+  /** Un feu allumé à portée de main (pour l'affichage et les gestes au feu). */
+  fireNearby(): boolean {
+    return this.litFireNear(3);
   }
 
   private litFireNear(radius: number): boolean {

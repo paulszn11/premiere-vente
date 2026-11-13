@@ -214,19 +214,26 @@ describe('fabrication', () => {
     expect(s.inventory.bench).toEqual([{ item: 'fibres', count: 1 }]);
     act({ type: 'etabli_reprendre', index: 0 });
     // Couteau : éclat + branche + corde ; il faut un autre outil tranchant pour fendre le manche.
-    store(s.inventory, { item: 'quartz', count: 1 });
+    store(s.inventory, { item: 'quartz', count: 2 });
     store(s.inventory, { item: 'manche', count: 1 });
     const put = (item: string) => {
       const i = s.inventory.pockets.findIndex((p) => p?.item === item);
       if (i >= 0) return act({ type: 'etabli_poser', from: { zone: 'poche', index: i } });
       return act({ type: 'etabli_poser', from: { zone: 'sac', index: s.inventory.bag!.findIndex((st) => st.item === item) } });
     };
+    // Un outil se pose un par un : l'autre éclat reste en poche pour fendre le manche.
     put('quartz');
+    expect(s.inventory.bench).toEqual([{ item: 'quartz', count: 1 }]);
+    expect(countOf(s.inventory, 'quartz')).toBe(1);
     put('manche');
     put('corde');
     expect(s.benchRecipe()?.recipe.id).toBe('couteau');
+    // Sans autre outil tranchant sous la main, la première étape est refusée.
+    const spare = s.inventory.pockets.findIndex((p) => p?.item === 'quartz');
+    const keep = s.inventory.pockets[spare]!;
+    s.inventory.pockets[spare] = null;
     expect(act({ type: 'fabriquer' })).toEqual({ ok: false, message: expect.stringMatching(/outil tranchant/) });
-    store(s.inventory, { item: 'quartz', count: 1 });
+    s.inventory.pockets[spare] = keep;
     const xp = s.knowledge.xp;
     for (let step = 0; step < 3; step++) {
       expect(act({ type: 'fabriquer' }).ok).toBe(true);

@@ -16,7 +16,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   crouch: "S'accroupir · plonger (nage) · lâcher (escalade)",
   interact: 'Prendre · ramasser · poser · traîner · fouiller',
   throw: "Lancer l'objet porté",
-  use: "Utiliser l'objet en main (manger, bander, attelle)",
+  use: "Utiliser l'objet en main (manger, soigner, frapper, couper, abattre ; maintenir pour enchaîner)",
   bag: 'Sac à dos et état du corps',
   rest: "S'asseoir · dormir (maintenir)",
   pocket1: 'Poche 1',

@@ -58,22 +58,37 @@
         <div class="bag-tabs">
           <button type="button" data-tab="sac" class="on">Sac</button>
           <button type="button" data-tab="corps">Corps</button>
+          <button type="button" data-tab="fabriquer">Fabriquer</button>
+          <button type="button" data-tab="carnet">Carnet</button>
         </div>
         <p class="bag-title"></p>
         <button type="button" class="bag-close">Fermer</button>
       </header>
       <aside class="bag-body">
-        <svg class="silhouette" viewBox="0 0 120 220" aria-label="Votre corps">
-          <circle data-zone="tete" cx="60" cy="24" r="18" />
-          <rect data-zone="torse" x="38" y="46" width="44" height="70" rx="10" />
-          <rect data-zone="bras_g" x="14" y="48" width="20" height="72" rx="9" />
-          <rect data-zone="bras_d" x="86" y="48" width="20" height="72" rx="9" />
-          <rect data-zone="jambe_g" x="38" y="120" width="20" height="92" rx="9" />
-          <rect data-zone="jambe_d" x="62" y="120" width="20" height="92" rx="9" />
-        </svg>
-        <div class="vitals"></div>
-        <div class="zone-detail"></div>
-        <div class="body-actions"></div>
+        <div class="panel-corps">
+          <svg class="silhouette" viewBox="0 0 120 220" aria-label="Votre corps">
+            <circle data-zone="tete" cx="60" cy="24" r="18" />
+            <rect data-zone="torse" x="38" y="46" width="44" height="70" rx="10" />
+            <rect data-zone="bras_g" x="14" y="48" width="20" height="72" rx="9" />
+            <rect data-zone="bras_d" x="86" y="48" width="20" height="72" rx="9" />
+            <rect data-zone="jambe_g" x="38" y="120" width="20" height="92" rx="9" />
+            <rect data-zone="jambe_d" x="62" y="120" width="20" height="92" rx="9" />
+          </svg>
+          <div class="vitals"></div>
+          <div class="zone-detail"></div>
+          <div class="body-actions"></div>
+        </div>
+        <div class="panel-fabriquer">
+          <h3>Plan de travail</h3>
+          <div class="bench-list"></div>
+          <div class="recipe"></div>
+          <p class="craft-hint"></p>
+          <div class="craft-actions"></div>
+        </div>
+        <div class="panel-carnet">
+          <h3>Carnet</h3>
+          <div class="carnet"></div>
+        </div>
       </aside>
       <div class="bag-info">
         <p class="item-name"></p>

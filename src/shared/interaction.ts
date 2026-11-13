@@ -7,7 +7,8 @@ import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, MOVE } from './constants';
 import { type Container, type ItemMeta, readContainer } from './inventory';
 import { BTN_INTERACT, BTN_THROW, type InputCmd, MODE_CLIMB, MODE_SWIM, type MoveState, ONE_HAND_CARRY_KG, R_NO_HEAVY, R_NO_THROW } from './movement';
 import { DRAGGED_GROUPS, GROUP_OBSTACLE, GROUP_TERRAIN, HELD_GROUPS, NODE_GROUPS, PROP_GROUPS, type PhysicsWorld, QUERY_TARGETS, RAPIER, type TreeHit, interactionGroups } from './physics';
-import { BODY_MASS, DENSITY, type FireState, type Handling, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay } from './props';
+import { ITEMS } from './items';
+import { BODY_MASS, DENSITY, type FireState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay } from './props';
 import { nodesInChunk } from './resources';
 import { chunkCoord } from './terrain';
 
@@ -441,10 +442,15 @@ export class PropSystem {
       if (this.held.mode === 'carry') {
         const twoHands = lp.handling === 'deux-mains';
         const eyeY = s.y + (s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT);
-        const dist = twoHands ? 0.95 : 0.75;
-        const tx = s.x + dir.x * dist;
-        const ty = eyeY + dir.y * dist - (twoHands ? 0.45 : 0.25);
-        const tz = s.z + dir.z * dist;
+        // Un outil se tient en bas à droite : il ne cache pas ce qu'on frappe ou ce qu'on coupe.
+        const item = ITEM_OF_PROP[lp.def.kind];
+        const tool = !twoHands && item !== undefined && (ITEMS[item].tool?.durability ?? 0) > 0;
+        const dist = twoHands ? 0.95 : tool ? 0.62 : 0.75;
+        const fl = Math.hypot(dir.x, dir.z) || 1;
+        const side = tool ? 0.3 : 0;
+        const tx = s.x + dir.x * dist + (dir.z / fl) * side;
+        const ty = eyeY + dir.y * dist - (twoHands ? 0.45 : tool ? 0.42 : 0.25);
+        const tz = s.z + dir.z * dist - (dir.x / fl) * side;
         const ex = tx - t.x;
         const ey = ty - t.y;
         const ez = tz - t.z;

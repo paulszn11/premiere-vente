@@ -1,9 +1,10 @@
 # État des fonctionnalités
 
-Mis à jour le 13/11/2026, version 0.3.0.
+Mis à jour le 13/11/2026, version 0.4.0.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
 - **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
+- **Phase 4 :** terminée le 13/11/2026 (146 tests unitaires, 151 vérifications navigateur, dont 31 propres à la phase 4). Les éléments de la section 15 qui la concernent (liste des matériaux et leurs propriétés, amélioration de l'équipement) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-4.md`. Reste à l'essayer sur vos appareils.
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).
@@ -60,6 +61,24 @@ Légende des tests :
 | Mort, corps fouillable laissé dans le monde, réapparition au dernier sommeil ou au point d'arrivée, souvenir du corps | 8.7 | Auto |
 | Sauvegarde de la partie solo dans le navigateur (joueur, sac, objets du monde, corps) | 3.3 | Auto |
 
+## Terminé — phase 4 (à valider sur vos appareils)
+
+| Fonctionnalité | Section du cahier | Tests |
+| --- | --- | --- |
+| Gisements répartis par biome : quartz (commun), herbes sèches, argile, fer (rare), or (très rare), déterministes | 9.1 | Auto |
+| Récolte par gestes avec l'outil en main (« Utiliser », maintenir pour enchaîner) : tailler le quartz au galet, écorcer, couper branches et perches, entailler pour la résine, creuser l'argile, orpailler | 9.2 | Auto |
+| Abattage à la hache : souche, bûches, repousse au bout de 12 h ; fruits et bois mort disparaissent avec l'arbre | 9.2, 9.6, 6.4 | Auto |
+| Épuisement et reconstitution des gisements et des parties d'arbre, chacun à son rythme | 9.6 | Auto |
+| Plan de travail sur la toile du sac (6 pièces en 3D) ; recettes par étapes, chacune avec son outil | 9.3 | Auto |
+| 12 recettes (fibres, cordes, couteau, hache, bâton à fouir, lance, archet, pot, batée, foyer, pansements) ; carnet ; recettes pressenties ; expérimentation avec indices | 9.4 | Auto |
+| Compétence « Fabrication » : qualité, défauts plus rares, gestes plus rapides | 9.4, 12.3 | Auto |
+| Qualité, défauts, usure par états, efficacité selon l'état, réparations qui réduisent le maximum, améliorations (feu, résine) | 9.5 | Auto |
+| Démontage : pièces récupérées selon l'état | 9.7 | Auto |
+| Outils avec masse, portée, équilibre, durabilité (base des armes de mêlée) | 8.3 | Auto |
+| Feu : foyer, allumage à l'archet (peut échouer), bois, cuisson du pot, eau bouillie, pansements propres (jamais d'infection), fumée visible de loin | 9.3, 8.5 | Auto |
+| Interface : onglets Fabriquer et Carnet, état des outils, panneau du foyer ; doigt, souris, clavier et manette | 13.4, 2.2 | Auto |
+| Sauvegarde du plan de travail, du carnet et de l'état du monde (gisements, arbres, foyers) | 3.3 | Auto |
+
 ## Préparé mais pas encore branché (phase 8)
 
 | Élément | Fichier | Tests |
@@ -75,7 +94,7 @@ Légende des tests :
 
 ## En cours
 
-La validation des phases 2 et 3 sur vos appareils.
+La validation des phases 2, 3 et 4 sur vos appareils.
 
 ## Restant
 
@@ -83,7 +102,7 @@ La validation des phases 2 et 3 sur vos appareils.
 | --- | --- |
 | 2 (suivi) | Animation des mains en escalade, prises plus fines ; ruisseaux et chutes d'eau (avec la phase 9) |
 | 3 (suivi) | Objets manipulés à la main dans la vue du sac, examen du corps en vue réelle, vêtements de rechange ; secours entre joueurs (avec la phase 8) |
-| 4 | Récolte, outils, matériaux, recettes, fabrication physique, qualité et usure, matériel de plongée |
+| 4 (suivi) | Manipulation libre des pièces en 3D, animations des gestes (coups d'outil, chute des arbres) ; matériel de plongée (avec les phases 6 et 9) ; usage de l'or (commerce, section 15) |
 | 5 | Construction physique, structures, destruction, installations |
 | 6 | Intelligence artificielle, écosystème, créatures, détection, combats, horreur sous-marine |
 | 7 | Véhicules et machines |
@@ -96,6 +115,8 @@ La validation des phases 2 et 3 sur vos appareils.
 
 - En solo, la partie est sauvegardée dans ce navigateur : position, état du corps, sac, objets ramassés, déplacés ou posés, et corps. Les sauvegardes du monde partagé, chez l'hôte, arrivent en phase 8.
 - Les indications à l'écran (nom du biome, action possible, barres d'endurance et de souffle, bords rouges, messages) sont temporaires.
-- Le matériel médical se limite aux chiffons, aux bâtons et à l'aloès jusqu'à la fabrication (phase 4).
+- Matériel médical : chiffons, attelles, aloès et pansements propres (chiffons bouillis). Pas encore de plantes médicinales ni de médicaments.
+- Les temps de reconstitution (gisements, arbres, fruits) comptent en temps de jeu. Sans cycle jour/nuit (phase 9), ce temps avance comme le temps réel, et seulement pendant qu'on joue.
+- Pas d'animation des gestes : l'outil ne bouge pas à chaque coup et l'arbre abattu disparaît d'un coup en laissant sa souche.
 - Les menus se pilotent au clavier, à la souris ou au doigt, pas encore à la manette (sauf Start pour la pause).
 - La résolution adaptative peut baisser inutilement sur un écran limité à 30 images par seconde : désactivable dans les réglages.

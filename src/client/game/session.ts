@@ -10,11 +10,14 @@ import { Scene } from '@babylonjs/core/scene';
 import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, TICK_DT, WATER_LEVEL } from '../../shared/constants';
 import { BIOME_LABELS, type BiomeId, SURFACE_LABELS } from '../../shared/geography';
 import type { PlayerAction } from '../../shared/actions';
+import { ensureToolMeta } from '../../shared/crafting';
+import { type ItemStack, store } from '../../shared/inventory';
 import { ITEMS } from '../../shared/items';
 import { BTN_CROUCH, BTN_INTERACT, BTN_JUMP, BTN_SPRINT, BTN_THROW, type InputCmd, MAX_PITCH, MODE_CLIMB, MODE_SWIM, wrapAngle } from '../../shared/movement';
 import { ITEM_OF_PROP, QUICK_PICK, propWithArticle } from '../../shared/props';
 import { LocalSimulation, RESPAWN_DELAY, type SimEvent, type Tone, findSpawn } from '../../shared/simulation';
 import { DEATH_LABELS, INJURY_LABELS, VITALS, ZONE_LABELS, limits } from '../../shared/vitals';
+import { treeKey } from '../../shared/resources';
 import { type SpawnPoint, TEST_DESTINATIONS, resolveDestination } from '../../shared/spawn';
 import { Terrain } from '../../shared/terrain';
 import type { DeviceInfo } from '../device';
@@ -129,6 +132,8 @@ export class GameSession {
   private roll = 0;
   private deadBack = 0;
   private giveUpHeld = 0;
+  private useHeld = 0;
+  private worldVersion = -1;
   private restHeld = 0;
   private restDone = false;
   private nextPocket = 0;
@@ -174,6 +179,8 @@ export class GameSession {
     if (sim) {
       const s = sim.state;
       this.camera.position.set(s.x, s.y + EYE_HEIGHT, s.z);
+      // Arbres abattus : souches à la place des arbres.
+      this.world.treeFelled = (cx, cz, i) => sim.world.isFelled(treeKey(cx, cz, i), sim.time);
     }
   }
 
@@ -243,12 +250,33 @@ export class GameSession {
   teleport(destId: string): boolean {
     const dest = TEST_DESTINATIONS.find((d) => d.id === destId);
     if (!this.sim || !dest) return false;
-    const r = resolveDestination(this.terrain, dest);
+    const r = resolveDestination(this.terrain, dest, { x: this.sim.state.x, z: this.sim.state.z });
     this.sim.teleport(r.x, r.y, r.z);
     if (r.yaw !== null) this.yaw = r.yaw;
     this.pitch = 0;
     this.biome = null;
     return true;
+  }
+
+  /** Outil de test : un jeu d'outils pour essayer la récolte sans tout fabriquer. Renvoie le nombre d'objets reçus. */
+  giveTestKit(): number {
+    const sim = this.sim;
+    if (!sim) return 0;
+    const kit: ItemStack[] = [
+      { item: 'couteau', count: 1 },
+      { item: 'hache', count: 1 },
+      { item: 'baton_fouir', count: 1 },
+      { item: 'batee', count: 1 },
+      { item: 'archet', count: 1 },
+      { item: 'pot', count: 1 },
+      { item: 'pierre', count: 1, mass: 0.6, radius: 0.04 },
+    ];
+    let given = 0;
+    for (const st of kit) {
+      ensureToolMeta(st, 75);
+      if (store(sim.inventory, st) === 0) given++;
+    }
+    return given;
   }
 
   private key(action: Action): string {
@@ -384,6 +412,10 @@ export class GameSession {
     this.camera.position.set(x + Math.cos(this.yaw) * bobX - Math.sin(this.yaw) * this.deadBack, camY, z - Math.sin(this.yaw) * bobX - Math.cos(this.yaw) * this.deadBack);
     this.camera.rotation.set(this.pitch + shakeP, this.yaw, shakeR + this.roll);
     this.world.update(x, camY, z, this.opts.device.mobile ? 4 : 6);
+    if (sim.world.version !== this.worldVersion) {
+      this.worldVersion = sim.world.version;
+      this.world.invalidateVegetation();
+    }
     this.world.updateProps(sim.props.views());
     this.scene.render();
     if (bag?.isOpen) bag.frame(dt);
@@ -432,18 +464,28 @@ export class GameSession {
     if (v.posture === 'assis') return this.opts.device.touch ? 'Bougez pour vous lever · « Sac » pour dormir' : `${this.key('rest')} : se lever (maintenir : dormir) · bouger : se lever`;
     if (s.mode === MODE_CLIMB) return `${this.key('crouch')} : lâcher · ${this.key('jump')} : sauter en arrière`;
     const held = sim.props.held;
+    const hint = sim.useHint();
+    const hintText = hint ? `${this.key(hint.interact ? 'interact' : 'use')} : ${hint.action}` : null;
     if (held) {
       if (held.mode === 'drag') return `${this.key('interact')} : lâcher`;
       const def = sim.props.defOf(held.id);
       const item = def ? ITEM_OF_PROP[def.kind] : undefined;
+      if (hintText) return `${hintText} · ${this.key('interact')} : poser`;
       const parts = [`${this.key('interact')} : poser`, `${this.key('throw')} : lancer`];
       if (item && ITEMS[item].food) parts.unshift(`${this.key('use')} : manger`);
       else if (item === 'chiffon' || item === 'aloes' || item === 'baton') parts.unshift(`${this.key('use')} : soigner`);
       if (item && item !== 'pierre') parts.push(`${this.key('bag')} : sac`);
       return parts.join(' · ');
     }
+    if (hintText) return hintText;
     const t = sim.props.target(s, this.yaw, this.pitch);
     if (!t) return null;
+    if (t.kind === 'foyer') {
+      const f = sim.props.defOf(t.id)?.fire;
+      return `${this.key('interact')} : foyer (${f?.lit ? `allumé, ${Math.ceil(f.fuel / 60)} min de bois` : 'éteint'})`;
+    }
+    if (t.kind === 'gravier_or') return `${this.key('interact')} : examiner le gravier qui brille`;
+    if (t.fixed) return null;
     if (t.kind === 'corps') return `${this.key('interact')} : fouiller le corps`;
     if (t.kind === 'sac') return `${this.key('interact')} : ouvrir le sac à dos`;
     if (QUICK_PICK.has(t.kind)) return `${this.key('interact')} : ramasser ${propWithArticle(t.kind)}`;
@@ -478,7 +520,17 @@ export class GameSession {
       this.openBag(null);
       return;
     }
-    if (input.pressed('use')) this.doAct({ type: 'utiliser' });
+    // Utiliser : un appui, ou maintenir pour enchaîner les coups d'outil.
+    if (input.pressed('use')) {
+      this.doAct({ type: 'utiliser' });
+      this.useHeld = 0;
+    } else if (input.isDown('use')) {
+      this.useHeld += dt;
+      if (this.useHeld > 0.25) {
+        const r = sim.act({ type: 'utiliser', repeat: true });
+        if (r.ok && r.message) this.opts.onMessage?.(r.message, 'info');
+      }
+    } else this.useHeld = 0;
     const pockets: Action[] = ['pocket1', 'pocket2', 'pocket3', 'pocket4'];
     pockets.forEach((a, i) => {
       if (input.pressed(a)) this.doAct({ type: 'poche', index: i });

@@ -151,6 +151,11 @@ async function boot(): Promise<void> {
           show('pause');
           toast('Téléportation effectuée : reprenez la partie.');
         },
+        onKit: () => {
+          const n = session?.giveTestKit() ?? 0;
+          show('pause');
+          toast(n === 7 ? 'Jeu d’outils reçu : regardez dans le sac.' : `Jeu d’outils : ${n} objet(s) reçu(s), le reste ne rentre pas.`);
+        },
       };
     },
   };
@@ -519,6 +524,7 @@ async function boot(): Promise<void> {
         meshes: session.scene.meshes.length,
       },
     teleport: (id: string) => session?.teleport(id) ?? false,
+    testKit: () => session?.giveTestKit() ?? 0,
     /** Simulation complète (diagnostic). */
     sim: () => session?.sim ?? null,
     /** Oriente le regard vers un point (tests). */
@@ -553,6 +559,23 @@ async function boot(): Promise<void> {
           lastBody: sim.lastBody,
           held: sim.props.held,
           state: { staminaMax: sim.state.staminaMax, speedCap: sim.state.speedCap, restrict: sim.state.restrict, loadKg: sim.state.loadKg },
+        }),
+      );
+    },
+    /** Plan de travail, recette reconnue, carnet, feux et monde (copies). */
+    craft: () => {
+      const sim = session?.sim;
+      if (!sim) return null;
+      const info = sim.benchRecipe();
+      return JSON.parse(
+        JSON.stringify({
+          bench: sim.inventory.bench,
+          recipe: info ? { id: info.recipe.id, label: info.recipe.label, step: info.step, steps: info.recipe.steps.length, known: info.known } : null,
+          knowledge: sim.knowledge,
+          gesture: sim.gesture,
+          time: sim.time,
+          fires: sim.props.fires().map((f) => ({ id: f.def.id, x: f.def.x, y: f.def.y, z: f.def.z, ...f.fire })),
+          hint: sim.useHint(),
         }),
       );
     },

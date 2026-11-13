@@ -13,7 +13,7 @@ export interface SettingsPanelDeps {
   getSettings: () => Settings;
   update: (patch: Partial<Settings>) => void;
   /** Outils de test (téléportation), disponibles pendant une partie. */
-  testTools?: (() => { destinations: Array<{ id: string; label: string }>; info: string; onTeleport: (id: string) => void } | null) | undefined;
+  testTools?: (() => { destinations: Array<{ id: string; label: string }>; info: string; onTeleport: (id: string) => void; onKit: () => void } | null) | undefined;
 }
 
 function esc(s: string): string {
@@ -59,10 +59,11 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
   const tools = deps.testTools?.() ?? null;
   const testSection = tools
     ? `<h3>Outils de test (temporaires)</h3>
-    <p class="note">Pour essayer rapidement chaque région. Ces outils seront retirés ou réservés à l'hôte en multijoueur, puisque se retrouver doit rester difficile.</p>
+    <p class="note">Pour essayer rapidement chaque région et chaque gisement. Ces outils seront retirés ou réservés à l'hôte en multijoueur, puisque se retrouver doit rester difficile.</p>
     <label class="row"><span>Aller à</span><select id="set-dest">${tools.destinations.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
     <button type="button" id="set-go">Y aller</button>
-    <p class="note" id="set-pos">${esc(tools.info)}</p>`
+    <p class="note" id="set-pos">${esc(tools.info)}</p>
+    <button type="button" id="set-kit">Recevoir un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet)</button>`
     : '';
 
   deps.root.innerHTML = `
@@ -111,6 +112,7 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     const sel = root.querySelector<HTMLSelectElement>('#set-dest');
     if (sel && tools) tools.onTeleport(sel.value);
   });
+  root.querySelector('#set-kit')?.addEventListener('click', () => tools?.onKit());
   live('set-scale', pct, 'renderScale');
   live('set-fov', (v) => `${v}°`, 'fov');
   live('set-mouse', mult, 'mouseSensitivity');

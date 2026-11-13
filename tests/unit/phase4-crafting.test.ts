@@ -22,7 +22,9 @@ import {
 } from '../../src/shared/crafting';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_RESINE, type ItemStack, addToBag, makeInventory, store } from '../../src/shared/inventory';
 import { ITEMS, ITEM_IDS } from '../../src/shared/items';
-import { NODE_SPECS, TREE_REGROW, WorldState, nodesInChunk, treeSpec } from '../../src/shared/resources';
+import { NODE_SPECS, type NodeKind, TREE_REGROW, WorldState, nodesInChunk, treeSpec } from '../../src/shared/resources';
+import { TEST_DESTINATIONS, nearestNode, resolveDestination } from '../../src/shared/spawn';
+import { CHUNK_SIZE, WATER_LEVEL } from '../../src/shared/constants';
 import { Terrain } from '../../src/shared/terrain';
 
 describe('matériaux et outils', () => {
@@ -53,6 +55,27 @@ describe('matériaux et outils', () => {
 });
 
 describe('gisements', () => {
+  it('outil de test : se rendre devant le gisement le plus proche (comparé à une recherche exhaustive)', () => {
+    const t = new Terrain(20261112);
+    const x0 = 1779;
+    const z0 = -6962;
+    for (const id of ['quartz', 'argile', 'fer', 'or']) {
+      const d = TEST_DESTINATIONS.find((x) => x.id === id)!;
+      const kind = d.node as NodeKind;
+      // Recherche exhaustive dans un carré de ±1,3 km.
+      let best = Infinity;
+      const c = Math.floor(x0 / CHUNK_SIZE);
+      const r = Math.floor(z0 / CHUNK_SIZE);
+      for (let cz = r - 21; cz <= r + 21; cz++) for (let cx = c - 21; cx <= c + 21; cx++) for (const n of nodesInChunk(t, cx, cz)) if (n.kind === kind) best = Math.min(best, Math.hypot(n.x - x0, n.z - z0));
+      const n = nearestNode(t, kind, x0, z0)!;
+      expect(n, id).not.toBeNull();
+      expect(Math.hypot(n.x - x0, n.z - z0), id).toBeCloseTo(best, 6);
+      const dest = resolveDestination(t, d, { x: x0, z: z0 });
+      expect(Math.hypot(dest.x - n.x, dest.z - n.z), id).toBeCloseTo(1.9, 5);
+      expect(dest.y, id).toBeGreaterThan(WATER_LEVEL);
+    }
+  });
+
   it('répartis selon les biomes, déterministes ; le fer est rare et l’or très rare', () => {
     const t1 = new Terrain(20261113);
     const t2 = new Terrain(20261113);

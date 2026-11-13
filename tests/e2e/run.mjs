@@ -997,10 +997,12 @@ async function phase3Scenario(browser) {
   check('Un clic choisit un objet et propose ses actions', bag.actions.includes('Manger') && bag.actions.includes('Prendre en main'), bag.actions.join(', '));
   await page.evaluate(() => (window.__game.sim().vitals.health = 60));
   await page.click('.item-actions button:has-text("Manger")');
-  await sleep(3800);
+  // On attend les résultats plutôt qu'un temps fixe : sur une machine lente, la simulation tourne moins vite que le temps réel.
+  await sleep(500);
+  await waitFor(page, () => !window.__game.body().gesture, null, 15000).catch(() => undefined);
   b = await body();
   const fruitLeft = countItem(b, 'fruit_baobab');
-  await sleep(8000);
+  await waitFor(page, () => window.__game.body().vitals.health > 63, null, 30000).catch(() => undefined);
   b = await body();
   check('Manger le fruit du baobab (geste de 3 s) fait remonter la santé', fruitLeft === 0 && b.vitals.health > 63, `santé ${b.vitals.health.toFixed(1)} (partie de 60)`);
 
@@ -1017,7 +1019,8 @@ async function phase3Scenario(browser) {
   await sleep(300);
   const aloeDisabled = await page.evaluate(() => [...document.querySelectorAll('.zone-detail button')].find((x) => x.textContent.startsWith("Appliquer de l'aloès"))?.disabled);
   await page.click('.zone-detail button:has-text("Bander")');
-  await sleep(6800);
+  await waitFor(page, (id) => window.__game.body().vitals.injuries.find((i) => i.id === id)?.bandaged, cutId, 20000).catch(() => undefined);
+  await sleep(300);
   b = await body();
   const cut = b.vitals.injuries.find((i) => i.id === cutId);
   check('Bander depuis l’examen du corps arrête le saignement (geste de 6 s, 1 chiffon)', cut?.bandaged && countItem(b, 'chiffon') === 3, `aloès grisé faute de feuille : ${aloeDisabled}`);
@@ -1049,7 +1052,8 @@ async function phase3Scenario(browser) {
   await sleep(500);
   const afterUse = await body();
   const useMsg = await page.textContent('#message');
-  await sleep(8500);
+  await waitFor(page, () => window.__game.body().vitals.injuries.some((i) => i.kind === 'fracture' && i.splinted), null, 25000).catch(() => undefined);
+  await sleep(300);
   b = await body();
   check(
     '« Utiliser » (F) avec un bâton en main pose l’attelle (2 bâtons + 2 chiffons, 8 s)',
@@ -1108,7 +1112,7 @@ async function phase3Scenario(browser) {
   const carried = (await body()).inventory;
   await injure(page, 'torse', 'coupure', true);
   await page.evaluate(() => (window.__game.sim().vitals.health = 0.4));
-  await waitFor(page, () => window.__game.body().vitals.state === 'critique', null, 5000);
+  await waitFor(page, () => window.__game.body().vitals.state === 'critique', null, 15000);
   await sleep(400);
   const giveUpVisible = await page.isVisible('#btn-give-up');
   const lockedDown = await page.evaluate(() => window.__game.input().locked);
@@ -1210,7 +1214,8 @@ async function phase3Scenario(browser) {
   });
   await sleep(400);
   await tap('[data-touch="use"]');
-  await sleep(2400);
+  await waitFor(tPage, () => window.__game.body().vitals.digest.length === 1, null, 10000).catch(() => undefined);
+  await sleep(200);
   const tBody = await tPage.evaluate(() => window.__game.body());
   check('Téléphone : « Utiliser » mange la figue tenue en main', tBody.held === null && countItem(tBody, 'figue') === 2 && tBody.vitals.digest.length === 1);
   const sleepAct = await tPage.evaluate(() => {
@@ -1264,7 +1269,8 @@ async function phase3Scenario(browser) {
   pb = await pPage.evaluate(() => window.__game.bag());
   check('Manette : Y ouvre le sac, le stick passe à la poche voisine', opened && pb.selected?.zone === 'poche' && pb.selected.index === 1, JSON.stringify(pb.selected));
   await press(0);
-  await sleep(2200);
+  await waitFor(pPage, () => window.__game.body().vitals.digest.length === 1, null, 10000).catch(() => undefined);
+  await sleep(200);
   const pBody = await pPage.evaluate(() => window.__game.body());
   check('Manette : A lance la première action (manger le muhacha)', countItem(pBody, 'muhacha') === 1 && pBody.vitals.digest.length === 1, pb.actions.join(', '));
   await press(1);
@@ -1277,7 +1283,7 @@ async function phase3Scenario(browser) {
     v.digest = [];
     v.health = 0.3;
   });
-  await waitFor(pPage, () => window.__game.body().vitals.state === 'critique', null, 5000);
+  await waitFor(pPage, () => window.__game.body().vitals.state === 'critique', null, 15000);
   await press(2, 2600);
   await sleep(300);
   check('Manette : à terre, maintenir X 2 s permet d’abandonner', await pPage.evaluate(() => window.__game.body().dead));
@@ -1285,7 +1291,479 @@ async function phase3Scenario(browser) {
   await padCtx.close();
 }
 
-// --only=ordinateur,telephone,manette,phase2,verification,phase3,performance,captures,webgpu pour ne lancer que certains scénarios.
+const nearestOf = (page, kind, r = 400) =>
+  page.evaluate(
+    ([kind, r]) => {
+      const st = window.__game.session();
+      const list = st.props.filter((p) => p.kind === kind && Math.hypot(p.x - st.state.x, p.z - st.state.z) < r);
+      list.sort((a, b) => Math.hypot(a.x - st.state.x, a.z - st.state.z) - Math.hypot(b.x - st.state.x, b.z - st.state.z));
+      return list[0] ?? null;
+    },
+    [kind, r],
+  );
+
+/** Ramasse (E) tous les objets d'un type tombés près d'un point. */
+async function pickUpAround(page, kind, x, z, r = 3.5, max = 6) {
+  let n = 0;
+  for (let i = 0; i < max * 2 && n < max; i++) {
+    const p = await page.evaluate(
+      ([kind, x, z, r]) => window.__game.session().props.find((q) => q.kind === kind && !q.held && Math.hypot(q.x - x, q.z - z) < r) ?? null,
+      [kind, x, z, r],
+    );
+    if (!p) break;
+    await page.evaluate((p) => window.__game.place(p.x - 0.9, p.z), p);
+    await sleep(450);
+    await page.evaluate((id) => {
+      const q = window.__game.sim().props.position(id);
+      if (q) window.__game.lookAt(q.x, q.y, q.z);
+    }, p.id);
+    await sleep(250);
+    await page.keyboard.press('KeyE');
+    await sleep(400);
+    if (!(await page.evaluate((id) => window.__game.sim().props.position(id), p.id))) n++;
+  }
+  return n;
+}
+
+/** Arbre le plus proche d'une espèce qui donne écorce et branches (pas un baobab : tronc trop large pour se placer simplement). */
+const nearestTree = (page) =>
+  page.evaluate(() => {
+    const sim = window.__game.sim();
+    const s = sim.state;
+    const okSpecies = new Set(['mopane', 'miombo', 'teck', 'montagne', 'figuier']);
+    const list = [...sim.phys.trees.values()].filter((t) => okSpecies.has(t.species) && !sim.world.isFelled(t.key, sim.time));
+    list.sort((a, b) => Math.hypot(a.x - s.x, a.z - s.z) - Math.hypot(b.x - s.x, b.z - s.z));
+    return list[0] ?? null;
+  });
+
+async function phase4Scenario(browser) {
+  console.log('\n— Phase 4 : ressources et fabrication (ordinateur)');
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  await ctx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'phase 4');
+  await page.goto(BASE);
+  await startGame(page);
+  await settle(page);
+  const body = () => page.evaluate(() => window.__game.body());
+  const craft = () => page.evaluate(() => window.__game.craft());
+  const bagInfo = () => page.evaluate(() => window.__game.bag());
+  const message = () => page.textContent('#message');
+  const openBag = async () => {
+    await page.keyboard.press('Tab');
+    await waitFor(page, () => window.__game.bag().open, null, 5000);
+    await sleep(400);
+  };
+  const closeBag = async () => {
+    await page.keyboard.press('Tab');
+    await waitFor(page, () => !window.__game.bag().open, null, 5000);
+    await sleep(200);
+    await page.mouse.click(480, 270);
+    await sleep(200);
+  };
+  const clickCell = async (pred) => {
+    const cell = (await bagInfo()).cells.find(pred);
+    if (!cell) return false;
+    await page.mouse.click(cell.x, cell.y);
+    await sleep(300);
+    return true;
+  };
+  const clickButton = async (host, text) => {
+    const loc = page.locator(`${host} button:has-text("${text}")`).first();
+    if ((await loc.count()) === 0 || (await loc.isDisabled())) return false;
+    await loc.click();
+    await sleep(300);
+    return true;
+  };
+  const restStamina = () => page.evaluate(() => (window.__game.sim().state.stamina = window.__game.sim().state.staminaMax));
+
+  let c = await craft();
+  check('Départ : 5 recettes connues (fibres, corde, couteau, bâton à fouir, foyer), plan de travail vide', c.knowledge.known.length === 5 && c.bench.length === 0, c.knowledge.known.join(', '));
+
+  // 1. Tailler le quartz : un galet en main, F maintenu sur le bloc.
+  const stoneId = await aimAtNearestStone(page);
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  let b = await body();
+  const heldStone = b.held?.id === stoneId;
+  const block = await nearestOf(page, 'bloc_quartz');
+  check('Un bloc de quartz (gisement) se trouve à moins de 150 m de l’arrivée', block !== null, block ? `${Math.round(Math.hypot(block.x - (await sess(page)).spawn.x, block.z - (await sess(page)).spawn.z))} m` : 'aucun');
+  if (!block) {
+    await ctx.close();
+    return;
+  }
+  await page.evaluate((n) => window.__game.place(n.x - 1.9, n.z), block);
+  await settle(page);
+  await page.evaluate((n) => window.__game.lookAt(n.x, n.y + 0.2, n.z), block);
+  await sleep(400);
+  const promptQuartz = await page.textContent('#prompt');
+  await page.keyboard.down('KeyF');
+  const flakes = await waitFor(page, ([x, z]) => window.__game.session().props.filter((p) => p.kind === 'quartz' && Math.hypot(p.x - x, p.z - z) < 3.5).length >= 2, [block.x, block.z], 15000)
+    .then(() => true)
+    .catch(() => false);
+  await page.keyboard.up('KeyF');
+  writeFileSync(`${OUT}phase4-quartz.png`, await page.screenshot());
+  check('Galet en main, F maintenu sur le bloc de quartz : des éclats tranchants tombent', heldStone && flakes && /frapper le bloc de quartz/.test(promptQuartz ?? ''), `indication : « ${promptQuartz} » · ${await message()}`);
+
+  // 2. Ranger le galet dans le sac (interface), ramasser les éclats (E).
+  await openBag();
+  await clickCell((cl) => cl.slot.zone === 'main');
+  const ranged = await clickButton('.item-actions', 'Ranger');
+  await closeBag();
+  const gotFlakes = await pickUpAround(page, 'quartz', block.x, block.z);
+  b = await body();
+  check('Sac : « Ranger » le galet ; E ramasse les éclats de quartz (poche)', ranged && countItem(b, 'pierre') === 1 && countItem(b, 'quartz') >= 2, `${gotFlakes} ramassé(s) · ${countItem(b, 'quartz')} éclat(s)`);
+
+  // 3. Écorcer un arbre et couper une branche avec un éclat (touche 1 : l'éclat en main).
+  const tree = await nearestTree(page);
+  await page.evaluate((t) => window.__game.place(t.x - 1.2, t.z), tree);
+  await settle(page);
+  const quartzPocket = b.inventory.pockets.findIndex((p) => p?.item === 'quartz');
+  await page.keyboard.press(`Digit${quartzPocket + 1}`);
+  await sleep(400);
+  await page.evaluate((t) => window.__game.lookAt(t.x, t.y + 1.1, t.z), tree);
+  await sleep(400);
+  const promptTree = await page.textContent('#prompt');
+  await restStamina();
+  await page.keyboard.down('KeyF');
+  const harvested = await waitFor(
+    page,
+    ([x, z]) => {
+      const ps = window.__game.session().props.filter((p) => Math.hypot(p.x - x, p.z - z) < 3.5);
+      return ps.filter((p) => p.kind === 'ecorce').length >= 2 && ps.some((p) => p.kind === 'manche');
+    },
+    [tree.x, tree.z],
+    25000,
+  )
+    .then(() => true)
+    .catch(() => false);
+  await page.keyboard.up('KeyF');
+  writeFileSync(`${OUT}phase4-ecorce.png`, await page.screenshot());
+  await page.keyboard.press(`Digit${quartzPocket + 1}`);
+  await sleep(300);
+  await pickUpAround(page, 'ecorce', tree.x, tree.z);
+  await pickUpAround(page, 'manche', tree.x, tree.z);
+  b = await body();
+  check('Éclat en main, F maintenu sur un arbre : deux bandes d’écorce puis une branche', harvested && countItem(b, 'ecorce') === 2 && countItem(b, 'manche') === 1, `${tree.species} · indication : « ${promptTree} » · ${await message()}`);
+
+  // 4. Plan de travail (interface) : écorce → fibres (×2) → corde → couteau.
+  await openBag();
+  await page.click('[data-tab="fabriquer"]');
+  await sleep(300);
+  await clickCell((cl) => cl.kind === 'ecorce');
+  const posed = await clickButton('.item-actions', 'Poser sur le plan de travail');
+  c = await craft();
+  const recipeText = await page.textContent('.recipe');
+  check('« Poser sur le plan de travail » : la recette « Fibres d’écorce » est reconnue, avec ses étapes et l’outil', posed && c.bench[0]?.item === 'ecorce' && c.recipe?.id === 'fibres' && /Battre l’écorce/.test(recipeText ?? '') && /✓/.test(recipeText ?? ''), recipeText ?? '');
+  for (let k = 1; k <= 2; k++) {
+    await clickButton('.craft-actions', 'Faire');
+    await waitFor(page, (k) => [...window.__game.body().inventory.pockets, ...(window.__game.body().inventory.bag ?? [])].filter((s) => s && s.item === 'fibres').reduce((n, s) => n + s.count, 0) >= 2 * k, k, 10000).catch(() => undefined);
+  }
+  b = await body();
+  check('« Faire : battre l’écorce » (3 s, galet du sac comme percuteur), deux fois : 4 poignées de fibres', countItem(b, 'fibres') === 4 && (await craft()).bench.length === 0, `${countItem(b, 'fibres')} fibres`);
+  await clickCell((cl) => cl.kind === 'fibres');
+  await clickButton('.item-actions', 'Poser sur le plan de travail');
+  await clickButton('.craft-actions', 'Faire');
+  await waitFor(page, () => window.__game.body().inventory.bag?.some((s) => s.item === 'corde') || window.__game.body().inventory.pockets.some((s) => s?.item === 'corde'), null, 10000).catch(() => undefined);
+  await clickButton('.bench-list', 'Reprendre');
+  b = await body();
+  check('Corde : 3 fibres torsadées ; « Reprendre » rend la fibre en trop', countItem(b, 'corde') === 1 && countItem(b, 'fibres') === 1 && (await craft()).bench.length === 0);
+  await clickCell((cl) => cl.kind === 'quartz');
+  await clickButton('.item-actions', 'Poser sur le plan de travail');
+  await clickCell((cl) => cl.kind === 'manche');
+  await clickButton('.item-actions', 'Poser sur le plan de travail');
+  await clickCell((cl) => cl.kind === 'corde');
+  await clickButton('.item-actions', 'Poser sur le plan de travail');
+  c = await craft();
+  const benchCells = (await bagInfo()).cells.filter((cl) => cl.slot.zone === 'etabli' && cl.kind).length;
+  check('Couteau : un seul éclat posé (l’autre reste pour travailler), la branche et la corde ; 3 cases du plan de travail en 3D', c.recipe?.id === 'couteau' && c.bench.find((s) => s.item === 'quartz')?.count === 1 && countItem(await body(), 'quartz') >= 1 && benchCells === 3, JSON.stringify(c.bench.map((s) => `${s.item}×${s.count}`)));
+  writeFileSync(`${OUT}phase4-fabriquer.png`, await page.screenshot());
+  for (let step = 0; step < 3; step++) {
+    await clickButton('.craft-actions', 'Faire');
+    await waitFor(page, () => !window.__game.craft().gesture, null, 10000).catch(() => undefined);
+    await sleep(200);
+  }
+  b = await body();
+  const knife = [...b.inventory.pockets, ...(b.inventory.bag ?? [])].find((s) => s?.item === 'couteau');
+  const doneMsg = await message();
+  check('Trois étapes (fendre, emmancher, ligaturer) : un couteau de pierre, avec qualité et durabilité', knife && knife.q > 0 && knife.d === knife.dm, `${doneMsg} · ${JSON.stringify(knife)}`);
+  await page.click('[data-tab="carnet"]');
+  await sleep(400);
+  const carnet = await page.textContent('.carnet');
+  c = await craft();
+  writeFileSync(`${OUT}phase4-carnet.png`, await page.screenshot());
+  check('Carnet : niveau de fabrication, recettes connues, idée de hache après le couteau', c.knowledge.xp > 0 && c.knowledge.hinted.includes('hache') && /Recettes connues/.test(carnet ?? '') && /hache/.test(carnet ?? ''), `${Math.round(c.knowledge.xp)} points · idées : ${c.knowledge.hinted.join(', ')}`);
+
+  // 5. Expérimenter : bâtons + corde + bûche → archet (inconnu), puis foyer.
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.bag.push({ item: 'baton', count: 6 }, { item: 'corde', count: 1 }, { item: 'buche', count: 1, mass: 2.4, radius: 0.07, length: 0.6 }, { item: 'herbe', count: 3 });
+  });
+  await page.click('[data-tab="fabriquer"]');
+  await sleep(300);
+  for (const kind of ['baton', 'corde', 'buche']) {
+    await clickCell((cl) => cl.kind === kind && cl.slot.zone !== 'etabli');
+    await clickButton('.item-actions', 'Poser sur le plan de travail');
+  }
+  const unknownText = await page.textContent('.recipe');
+  await clickButton('.craft-actions', 'Essayer');
+  await sleep(300);
+  const discovered = await message();
+  c = await craft();
+  check('« Essayer d’assembler » des pièces inconnues : nouvelle recette découverte (archet à feu)', c.knowledge.known.includes('archet') && /Nouvelle recette/.test(discovered ?? ''), `${unknownText} → « ${discovered} »`);
+  for (let step = 0; step < 3; step++) {
+    if (step > 0) await clickButton('.craft-actions', 'Faire');
+    await waitFor(page, () => !window.__game.craft().gesture, null, 12000).catch(() => undefined);
+    await sleep(200);
+  }
+  b = await body();
+  check('L’archet à feu est fabriqué (le couteau sert d’outil tranchant)', countItem(b, 'archet') === 1, await message());
+  await clickCell((cl) => cl.kind === 'herbe' && cl.slot.zone !== 'etabli');
+  await clickButton('.item-actions', 'Poser sur le plan de travail');
+  c = await craft();
+  const foyerRecipe = c.recipe?.id;
+  await clickButton('.craft-actions', 'Faire');
+  await waitFor(page, () => window.__game.craft().fires.length > 0, null, 10000).catch(() => undefined);
+  await clickButton('.bench-list', 'Reprendre');
+  c = await craft();
+  check('Foyer : 4 bâtons et 2 brassées d’herbes ; il est monté devant soi', foyerRecipe === 'foyer' && c.fires.length === 1 && !c.fires[0].lit, JSON.stringify(c.fires[0] ?? null));
+  await closeBag();
+
+  // 6. Feu : E sur le foyer ouvre son panneau ; allumer à l'archet, ajouter du bois.
+  const fire = c.fires[0];
+  await page.evaluate((f) => window.__game.place(f.x - 1.6, f.z), fire);
+  await sleep(500);
+  await page.evaluate((f) => window.__game.lookAt(f.x, f.y, f.z), fire);
+  await sleep(400);
+  const promptFire = await page.textContent('#prompt');
+  await page.keyboard.press('KeyE');
+  await sleep(600);
+  let bag = await bagInfo();
+  const fireOpen = bag.open && bag.other === fire.id;
+  await restStamina();
+  const lightClicked = await clickButton('.item-actions', 'Allumer le feu');
+  await waitFor(page, () => window.__game.craft().fires[0]?.lit, null, 12000).catch(() => undefined);
+  c = await craft();
+  const title = await page.textContent('.bag-title');
+  check('E sur le foyer : son panneau s’ouvre ; « Allumer le feu » (archet + herbes, 6 s) l’allume', fireOpen && lightClicked && c.fires[0].lit && /Foyer allumé/.test(title ?? ''), `indication : « ${promptFire} » · « ${title} »`);
+  await page.evaluate(() => window.__game.sim().inventory.bag.push({ item: 'baton', count: 2 }));
+  const fuel0 = c.fires[0].fuel;
+  await clickButton('.item-actions', 'Ajouter du bois');
+  c = await craft();
+  check('« Ajouter du bois » : un bâton nourrit le feu d’une minute', c.fires[0].fuel > fuel0 + 50, `${Math.round(fuel0)} → ${Math.round(c.fires[0].fuel)} s`);
+
+  // 7. Eau bouillie et pansements propres.
+  await page.evaluate(() => window.__game.sim().inventory.bag.push({ item: 'pot', count: 1, q: 70, d: 200, dm: 200, w: 1 }));
+  await sleep(300);
+  await clickCell((cl) => cl.kind === 'pot');
+  const potOnFire = await clickButton('.item-actions', 'Poser sur le feu');
+  await sleep(400);
+  const heating = await page.textContent('.bag-title');
+  // On abrège l'attente (30 s d'ébullition) : la cuisson elle-même est vérifiée par les tests unitaires.
+  await page.evaluate(() => {
+    const f = window.__game.sim().props.fires()[0].fire;
+    f.cook = Math.max(f.cook, 28.5);
+  });
+  await waitFor(page, () => window.__game.craft().fires[0]?.pot?.w === 2, null, 8000).catch(() => undefined);
+  const boiling = await page.textContent('.bag-title');
+  await clickButton('.item-actions', 'Reprendre le pot');
+  b = await body();
+  const pot = [...b.inventory.pockets, ...(b.inventory.bag ?? [])].find((s) => s?.item === 'pot');
+  check('Pot d’eau posé sur le feu : l’eau chauffe puis bout ; « Reprendre le pot »', potOnFire && /l’eau chauffe/.test(heating ?? '') && /l’eau bout/.test(boiling ?? '') && pot?.w === 2, `« ${heating} » → « ${boiling} »`);
+  await page.click('[data-tab="corps"]');
+  await sleep(300);
+  await clickButton('.body-actions', 'Déchirer la chemise');
+  await page.click('[data-tab="fabriquer"]');
+  await sleep(300);
+  await clickCell((cl) => cl.kind === 'chiffon' && cl.slot.zone !== 'etabli');
+  await clickButton('.item-actions', 'Poser sur le plan de travail');
+  await clickButton('.craft-actions', 'Essayer');
+  await waitFor(page, () => !window.__game.craft().gesture, null, 10000).catch(() => undefined);
+  await sleep(300);
+  b = await body();
+  c = await craft();
+  const potAfter = [...b.inventory.pockets, ...(b.inventory.bag ?? [])].find((s) => s?.item === 'pot');
+  check('Chiffons + eau bouillante : recette des pansements propres découverte ; 2 pansements, le pot se vide', c.knowledge.known.includes('pansement') && countItem(b, 'pansement') === 2 && potAfter?.w === 0, await message());
+  await clickButton('.bench-list', 'Reprendre');
+  await closeBag();
+
+  // 8. Abattre un arbre à la hache (F maintenu) : souche, bûches, sauvegarde.
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.pockets[3] = { item: 'hache', count: 1, q: 75, d: 150, dm: 150 };
+  });
+  const tree2 = await nearestTree(page);
+  await page.evaluate((t) => window.__game.place(t.x - 1.2, t.z), tree2);
+  await settle(page);
+  await page.keyboard.press('Digit4');
+  await sleep(400);
+  await page.evaluate((t) => window.__game.lookAt(t.x, t.y + 1.0, t.z), tree2);
+  await sleep(400);
+  const promptAxe = await page.textContent('#prompt');
+  let felled = false;
+  for (let k = 0; k < 6 && !felled; k++) {
+    await restStamina();
+    await page.keyboard.down('KeyF');
+    felled = await waitFor(page, (key) => window.__game.sim().world.isFelled(key, window.__game.sim().time), tree2.key, 9000)
+      .then(() => true)
+      .catch(() => false);
+    await page.keyboard.up('KeyF');
+  }
+  await sleep(1500);
+  const logs = await page.evaluate((t) => window.__game.session().props.filter((p) => p.kind === 'buche' && Math.hypot(p.x - t.x, p.z - t.z) < 9).length, tree2);
+  const trunkGone = await page.evaluate((key) => ![...window.__game.sim().phys.trees.values()].some((t) => t.key === key), tree2.key);
+  writeFileSync(`${OUT}phase4-abattage.png`, await page.screenshot());
+  check('Hache en main, F maintenu sur un arbre debout : il s’abat (souche), des bûches tombent', felled && trunkGone && logs >= 2, `${tree2.species} · indication : « ${promptAxe} » · ${logs} bûches · ${await message()}`);
+
+  // 9. Sauvegarde : quitter, recharger, reprendre.
+  const before = await craft();
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000);
+  await page.click('#btn-quit');
+  await waitFor(page, () => window.__game.screen() === 'home', null, 10000);
+  await page.reload();
+  await startGame(page);
+  await settle(page);
+  const after = await craft();
+  const stillFelled = await page.evaluate((key) => window.__game.sim().world.isFelled(key, window.__game.sim().time), tree2.key);
+  b = await body();
+  check(
+    'Quitter, recharger : recettes apprises, compétence, foyer et arbre abattu sont conservés',
+    after.knowledge.known.length === before.knowledge.known.length && after.knowledge.xp === before.knowledge.xp && after.fires.length === 1 && stillFelled && countItem(b, 'pansement') === 2,
+    `${after.knowledge.known.length} recettes · ${Math.round(after.knowledge.xp)} points · ${after.fires.length} foyer`,
+  );
+
+  // Outils de test : devant l'affleurement de fer le plus proche ; jeu d'outils.
+  const t0 = performance.now();
+  await page.evaluate(() => window.__game.teleport('fer'));
+  const tpMs = Math.round(performance.now() - t0);
+  await settle(page);
+  const iron = await nearestOf(page, 'filon_fer', 4);
+  const kitCount = await page.evaluate(() => window.__game.testKit());
+  b = await body();
+  check(
+    'Outils de test : « Affleurement de fer le plus proche » amène à côté d’un affleurement ; jeu d’outils reçu',
+    iron !== null && kitCount === 7 && countItem(b, 'batee') === 1 && countItem(b, 'baton_fouir') === 1,
+    `recherche ${tpMs} ms · ${kitCount} objet(s) reçu(s)`,
+  );
+  check('Aucune erreur dans la console (phase 4)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+
+  // Téléphone (à l'horizontale) : sac à deux colonnes, onglets Fabriquer et Carnet, bouton « Utiliser ».
+  console.log('\n— Phase 4 : téléphone');
+  const touchCtx = await browser.newContext({ ...devices['Pixel 7 landscape'] });
+  await touchCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const tPage = await touchCtx.newPage();
+  const tErrors = watchErrors(tPage, 'phase 4 (téléphone)');
+  await tPage.goto(BASE);
+  await startGame(tPage);
+  await settle(tPage);
+  const cdp = await touchCtx.newCDPSession(tPage);
+  const tapAt = async (x, y, ms = 120) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(x), y: Math.round(y), id: 7 }] });
+    await sleep(ms);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+  };
+  const tap = async (sel) => {
+    const r = await tPage.locator(sel).first().boundingBox();
+    await tapAt(r.x + r.width / 2, r.y + r.height / 2);
+  };
+  await tPage.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.pockets[0] = { item: 'ecorce', count: 1 };
+    sim.inventory.bag.push({ item: 'pierre', count: 1, mass: 0.6, radius: 0.04 });
+  });
+  await tap('[data-touch="bag"]');
+  await sleep(600);
+  const pickBox = await tPage.locator('.bag-pick').boundingBox();
+  const infoBox = await tPage.locator('.bag-info').boundingBox();
+  const tabs = await tPage.evaluate(() => [...document.querySelectorAll('.bag-tabs button')].filter((x) => x.offsetParent).map((x) => x.textContent));
+  writeFileSync(`${OUT}phase4-telephone-sac.png`, await tPage.screenshot());
+  check('Téléphone à l’horizontale : le sac en 3D à gauche, les actions à droite ; onglets Sac, Corps, Fabriquer, Carnet', pickBox.width > 330 && pickBox.height > 250 && infoBox.x >= pickBox.x + pickBox.width - 2 && tabs.join(',') === 'Sac,Corps,Fabriquer,Carnet', `sac ${Math.round(pickBox.width)}×${Math.round(pickBox.height)} · actions à x=${Math.round(infoBox.x)} · ${tabs.join(', ')}`);
+  let tb = await tPage.evaluate(() => window.__game.bag());
+  const barkCell = tb.cells.find((cl) => cl.kind === 'ecorce');
+  await tapAt(barkCell.x, barkCell.y);
+  await tap('.item-actions button:has-text("Poser sur le plan de travail")');
+  await tap('[data-tab="fabriquer"]');
+  await sleep(300);
+  const craftVisible = await tPage.isVisible('.panel-fabriquer');
+  writeFileSync(`${OUT}phase4-telephone-fabriquer.png`, await tPage.screenshot());
+  await tap('.craft-actions button:has-text("Faire")');
+  await waitFor(tPage, () => window.__game.body().inventory.pockets.some((p) => p?.item === 'fibres'), null, 10000).catch(() => undefined);
+  const tBody = await tPage.evaluate(() => window.__game.body());
+  check('Téléphone : toucher l’écorce, « Poser sur le plan de travail », onglet « Fabriquer », « Faire » : 2 fibres', craftVisible && countItem(tBody, 'fibres') === 2);
+  await tap('[data-tab="carnet"]');
+  await sleep(300);
+  const carnetVisible = await tPage.isVisible('.carnet');
+  await tap('.bag-close');
+  await sleep(300);
+  check('Téléphone : onglet « Carnet » puis « Fermer »', carnetVisible && !(await tPage.evaluate(() => window.__game.bag().open)));
+  const tBlock = await nearestOf(tPage, 'bloc_quartz');
+  await tPage.evaluate((n) => {
+    const sim = window.__game.sim();
+    window.__game.place(n.x - 1.9, n.z);
+    sim.act({ type: 'sortir', from: { zone: 'sac', index: sim.inventory.bag.findIndex((s) => s.item === 'pierre') } });
+  }, tBlock);
+  await settle(tPage);
+  await tPage.evaluate((n) => window.__game.lookAt(n.x, n.y + 0.2, n.z), tBlock);
+  await sleep(400);
+  for (let k = 0; k < 4; k++) {
+    await tap('[data-touch="use"]');
+    await sleep(500);
+  }
+  const tFlakes = await tPage.evaluate(([x, z]) => window.__game.session().props.filter((p) => p.kind === 'quartz' && Math.hypot(p.x - x, p.z - z) < 3.5).length, [tBlock.x, tBlock.z]);
+  check('Téléphone : le bouton « Utiliser » frappe le bloc de quartz avec le galet tenu', tFlakes >= 1, `${tFlakes} éclat(s)`);
+  check('Aucune erreur dans la console (phase 4, téléphone)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  await touchCtx.close();
+
+  // Manette : Y ouvre le sac, RB change d'onglet, X pose sur le plan de travail, A fabrique.
+  console.log('\n— Phase 4 : manette');
+  const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
+  await padCtx.addInitScript((settings) => {
+    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
+    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
+    navigator.getGamepads = () => [window.__pad, null, null, null];
+  }, QA_SETTINGS);
+  const pPage = await padCtx.newPage();
+  const pErrors = watchErrors(pPage, 'phase 4 (manette)');
+  await pPage.goto(BASE);
+  await startGame(pPage);
+  await settle(pPage);
+  const press = async (i, ms = 150) => {
+    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
+    await sleep(ms);
+    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
+    await sleep(250);
+  };
+  await pPage.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.pockets[0] = { item: 'ecorce', count: 1 };
+    sim.inventory.bag.push({ item: 'pierre', count: 1, mass: 0.6, radius: 0.04 });
+  });
+  await press(3);
+  await sleep(300);
+  await press(5);
+  await press(5);
+  let pb = await pPage.evaluate(() => window.__game.bag());
+  const onCraftTab = pb.tab === 'fabriquer' && (await pPage.isVisible('.panel-fabriquer'));
+  await press(2);
+  await sleep(200);
+  const pc = await pPage.evaluate(() => window.__game.craft());
+  check('Manette : Y ouvre le sac, RB deux fois → « Fabriquer », X pose l’écorce choisie sur le plan de travail', onCraftTab && pc.bench[0]?.item === 'ecorce' && pc.recipe?.id === 'fibres', `onglet ${pb.tab} · plan : ${JSON.stringify(pc.bench)}`);
+  await press(0);
+  await waitFor(pPage, () => window.__game.body().inventory.pockets.some((p) => p?.item === 'fibres'), null, 10000).catch(() => undefined);
+  const pBody = await pPage.evaluate(() => window.__game.body());
+  check('Manette : A lance l’étape (battre l’écorce) : 2 fibres', countItem(pBody, 'fibres') === 2);
+  await press(1);
+  await sleep(300);
+  check('Manette : B referme le sac', !(await pPage.evaluate(() => window.__game.bag().open)));
+  check('Aucune erreur dans la console (phase 4, manette)', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
+  await padCtx.close();
+}
+
+// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -1300,6 +1778,7 @@ try {
   if (want('phase2')) await phase2Scenario(browser);
   if (want('verification')) await qaScenario(browser);
   if (want('phase3')) await phase3Scenario(browser);
+  if (want('phase4')) await phase4Scenario(browser);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();

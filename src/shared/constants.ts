@@ -2,7 +2,7 @@
 // Toute valeur qui influence la simulation doit être identique des deux côtés.
 
 export const GAME_NAME = 'Bienvenue au Zimbabwe';
-export const GAME_VERSION = '0.3.0';
+export const GAME_VERSION = '0.4.0';
 
 /** Version du protocole réseau. Un client et un serveur de versions différentes refusent de se parler. */
 export const PROTOCOL_VERSION = 1;

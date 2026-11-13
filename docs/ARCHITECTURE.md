@@ -8,7 +8,7 @@ Le cahier des charges (§ 14.1) demande de séparer cinq blocs. Voici ce qui exi
 
 | Bloc | Rôle | État |
 | --- | --- | --- |
-| Client web 3D | Affichage, commandes, interface, prédiction | En place (jeu solo, phases 1 à 3) |
+| Client web 3D | Affichage, commandes, interface, prédiction | En place (jeu solo, phases 1 à 4) |
 | Serveur autoritaire chez l'hôte | Référence pour les déplacements, inventaires, combats, constructions, ressources | Phase 8. La simulation est déjà séparée de l'affichage (`src/shared/simulation.ts`) |
 | Sauvegarde locale | Monde sauvegardé chez l'hôte, 3 sauvegardes de sécurité | Phase 8. Module préparé et testé (`src/server/save.ts`) |
 | Synchronisation multijoueur | Échanges client ↔ serveur | Phase 8. Protocole, prédiction et limitation des tentatives préparés |
@@ -62,6 +62,26 @@ Côté client :
 
 La partie solo est sauvegardée dans le navigateur : position, corps, sac, objets ramassés, déplacés ou posés, corps laissés.
 
+### Ressources et fabrication (phase 4)
+
+Ici aussi, tout est dans le code commun, pour que le serveur de l'hôte fasse foi :
+
+| Module | Rôle |
+| --- | --- |
+| `resources.ts` | Gisements (quartz, herbes, argile, fer, or) répartis par biome à partir de la graine ; parties récoltables des arbres ; `WorldState`, l'état du monde modifié par les joueurs (gisements entamés, parties récoltées, arbres abattus, résine), avec sa reconstitution dans le temps et sa sauvegarde |
+| `crafting.ts` | Recettes par étapes, connaissances du joueur (connues, pressenties, points de compétence), qualité et défauts, usure et états, réparations, améliorations, démontage |
+| `items.ts` | Matériaux et outils : masse, volume, propriétés d'outil (usages, durabilité, portée, équilibre, puissance) |
+| `inventory.ts` | Plan de travail (6 emplacements) ; qualité, durabilité, défauts et eau du pot portés par chaque objet |
+| `interaction.ts`, `physics.ts` | Gisements et foyers fixes ; visée des troncs ; reconstruction des collisions quand un arbre tombe ; repousse des objets ramassés |
+| `simulation.ts` | Gestes de récolte et de fabrication, feu, eau, intégration au corps du joueur (endurance) et à la sauvegarde |
+
+Seule la graine décrit le monde d'origine. Ce que les joueurs y changent tient dans `WorldState` et la liste des objets : de simples données, faciles à transmettre et à sauvegarder chez l'hôte en phase 8.
+
+Côté client :
+- `world-view.ts` dessine les gisements, les souches, les feux et leur fumée ;
+- `bag-view.ts` ajoute les onglets « Fabriquer » et « Carnet » et le panneau du foyer ;
+- `bag-scene.ts` affiche le plan de travail au-dessus du sac.
+
 ## 2. Technologies retenues
 
 | Domaine | Choix | Raisons | Alternatives écartées |
@@ -81,7 +101,7 @@ La partie solo est sauvegardée dans le navigateur : position, corps, sac, objet
 
 | Fichier | Taille | Compressé (gzip) |
 | --- | --- | --- |
-| Code du jeu + Babylon.js | 1,37 Mo | 330 Ko |
+| Code du jeu + Babylon.js | 1,43 Mo | 346 Ko |
 | Fil de calcul du terrain | 12 Ko | — |
 | Moteur physique (WebAssembly) | 3,08 Mo | 1,19 Mo |
 
@@ -128,5 +148,6 @@ Le moteur physique est servi comme fichier `.wasm` séparé (et non intégré en
 Décisions prises depuis :
 - **12/11/2026 :** biomes inspirés du Zimbabwe, monde de 16 km × 16 km, apparition au hasard loin des autres joueurs, 10 joueurs au maximum.
 - **13/11/2026 :** décisions confiées par le propriétaire du projet, inspirées de jeux du même style et détaillées dans `docs/PHASE-3.md`. Elles portent sur la réapparition (dernier sommeil, sinon point d'arrivée), la conservation des corps (jusqu'à ce qu'ils soient vidés) et les conditions de secours (perte de connaissance, puis 90 s d'état critique en cas de saignement).
+- **13/11/2026 (phase 4) :** propositions pour la liste des matériaux, leurs propriétés et l'amélioration de l'équipement, inspirées de jeux du même style et détaillées dans `docs/PHASE-4.md`. Ces éléments relèvent de la section 15 : ils restent signalés et modifiables.
 
-Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux, le commerce, les véhicules, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.
+Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux (proposition en place depuis la phase 4, modifiable), le commerce, les véhicules, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.

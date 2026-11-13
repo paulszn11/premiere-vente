@@ -19,12 +19,44 @@ import { CHUNK_SIZE, WATER_LEVEL } from '../../shared/constants';
 import type { PropView } from '../../shared/interaction';
 import type { PropKind } from '../../shared/props';
 import { type Terrain, chunkCoord, chunkKey } from '../../shared/terrain';
-import { type ChunkFlora, SPECIES_LIST, type Species } from '../../shared/vegetation';
+import { type ChunkFlora, SPECIES, SPECIES_LIST, type Species } from '../../shared/vegetation';
 import type { QualityParams } from '../settings';
 import { buildItemMesh } from './item-meshes';
 import type { ChunkJobResult, TerrainJobs } from './terrain-jobs';
 
 const SKY = new Color3(0.62, 0.74, 0.86);
+
+/** Objets affichés à leur taille réelle (les bâtons, bûches, branches et perches utilisent la forme des bûches). */
+const ITEM_RENDER_KINDS: PropKind[] = [
+  'chiffon',
+  'aloes',
+  'fruit_baobab',
+  'figue',
+  'muhacha',
+  'sac',
+  'corps',
+  'quartz',
+  'ecorce',
+  'fibres',
+  'corde',
+  'herbe',
+  'ilala',
+  'argile',
+  'resine',
+  'minerai_fer',
+  'pepite_or',
+  'couteau',
+  'hache',
+  'baton_fouir',
+  'lance',
+  'archet',
+  'pot_cru',
+  'pot',
+  'batee',
+  'pansement',
+  'foyer',
+];
+const NODE_RENDER_KINDS: PropKind[] = ['bloc_quartz', 'filon_fer', 'touffe_herbe', 'gisement_argile', 'gravier_or'];
 const UNDERWATER = new Color3(0.05, 0.2, 0.24);
 
 interface ChunkRecord {
@@ -154,6 +186,12 @@ export class WorldView {
   private readonly logMesh: Mesh;
   /** Petits objets, sacs posés et corps (une forme par type, à l'échelle réelle). */
   private readonly itemMeshes = new Map<PropKind, Mesh>();
+  /** Gisements (taille 1, mis à l'échelle). */
+  private readonly nodeMeshes = new Map<PropKind, Mesh>();
+  private readonly flameMesh: Mesh;
+  private readonly smokeMesh: Mesh;
+  /** Arbre abattu : on affiche sa souche à la place (fourni par la session). */
+  treeFelled: ((cx: number, cz: number, index: number) => boolean) | null = null;
   private readonly chunks = new Map<string, ChunkRecord>();
   private readonly floraCache = new Map<string, ChunkFlora>();
   private desired = new Map<string, Desired>();
@@ -209,12 +247,52 @@ export class WorldView {
     const log = cyl(1, 2, 2, 8, 0);
     log.transform(Matrix.RotationZ(Math.PI / 2));
     this.logMesh = buildMesh('bûches', scene, this.material, [[log, 0.45, 0.33, 0.22]]);
-    for (const kind of ['chiffon', 'aloes', 'fruit_baobab', 'figue', 'muhacha', 'sac', 'corps'] as const) {
+    for (const kind of ITEM_RENDER_KINDS) {
       const mesh = buildItemMesh(`objets ${kind}`, kind, scene, this.material);
       mesh.alwaysSelectAsActiveMesh = true;
       mesh.isVisible = false;
       this.itemMeshes.set(kind, mesh);
     }
+    for (const kind of NODE_RENDER_KINDS) {
+      const mesh = buildItemMesh(`gisements ${kind}`, kind, scene, this.material);
+      mesh.alwaysSelectAsActiveMesh = true;
+      mesh.isVisible = false;
+      this.nodeMeshes.set(kind, mesh);
+    }
+    this.flora.set('souche', buildMesh('souches', scene, this.material, [[cyl(0.55, 2, 2.4, 7, 0.27), 0.42, 0.32, 0.22]]));
+    // Feu : flammes lumineuses et colonne de fumée visible de loin (pour signaler sa position).
+    const flameMat = new StandardMaterial('flammes', scene);
+    flameMat.emissiveColor = new Color3(1, 0.55, 0.12);
+    flameMat.diffuseColor = new Color3(0, 0, 0);
+    flameMat.disableLighting = true;
+    this.flameMesh = new Mesh('flammes', scene);
+    CreateCylinderVertexData({ height: 0.7, diameterTop: 0, diameterBottom: 0.45, tessellation: 7 }).applyToMesh(this.flameMesh);
+    this.flameMesh.material = flameMat;
+    this.flameMesh.isPickable = false;
+    this.flameMesh.alwaysSelectAsActiveMesh = true;
+    this.flameMesh.isVisible = false;
+    const smokeMat = new StandardMaterial('fumée', scene);
+    smokeMat.diffuseColor = new Color3(0.55, 0.55, 0.56);
+    smokeMat.emissiveColor = new Color3(0.35, 0.35, 0.36);
+    smokeMat.specularColor = new Color3(0, 0, 0);
+    smokeMat.alpha = 0.32;
+    smokeMat.backFaceCulling = false;
+    this.smokeMesh = new Mesh('fumée', scene);
+    // Colonne qui s'élargit en montant ; transparente au pied (on voit le feu) et en haut (elle se dissipe).
+    const smoke = CreateCylinderVertexData({ height: 1, diameterTop: 4, diameterBottom: 0.35, tessellation: 8, subdivisions: 6, cap: 0 });
+    const sp = smoke.positions!;
+    const sc: number[] = [];
+    for (let i = 0; i < sp.length; i += 3) {
+      const t = sp[i + 1]! + 0.5;
+      sc.push(1, 1, 1, Math.max(0, t < 0.12 ? t / 0.12 : 1 - (t - 0.12) / 0.88));
+    }
+    smoke.colors = sc;
+    smoke.applyToMesh(this.smokeMesh);
+    this.smokeMesh.hasVertexAlpha = true;
+    this.smokeMesh.material = smokeMat;
+    this.smokeMesh.isPickable = false;
+    this.smokeMesh.alwaysSelectAsActiveMesh = true;
+    this.smokeMesh.isVisible = false;
     this.applyFog();
   }
 
@@ -334,10 +412,17 @@ export class WorldView {
         if (Math.sqrt(dx * dx + dz * dz) > r + 0.5) continue;
         const f = this.floraCache.get(chunkKey(this.center.cx + dx, this.center.cz + dz));
         if (!f) continue;
-        for (const t of f.trees) {
+        const ccx = this.center.cx + dx;
+        const ccz = this.center.cz + dz;
+        f.trees.forEach((t, ti) => {
+          if (this.treeFelled?.(ccx, ccz, ti)) {
+            const r = SPECIES[t.species].trunkRadius * t.scale;
+            add('souche', (b, i) => writeMatrix(b, i, t.x, t.y - 0.3, t.z, t.rot, r, 1, r));
+            return;
+          }
           trees++;
           add(t.species, (b, i) => writeMatrix(b, i, t.x, t.y - 0.3, t.z, t.rot, t.scale, t.scale, t.scale));
-        }
+        });
         for (const b of f.bushes) add(b.dry ? 'buisson-sec' : 'buisson', (buf, i) => writeMatrix(buf, i, b.x, b.y, b.z, b.rot, b.scale, b.scale, b.scale));
         for (const k of f.rocks) {
           add('rocher', (buf, i) => writeMatrix(buf, i, k.x, k.y, k.z, (k.x * 0.37) % 1, k.r, k.r, k.r));
@@ -363,7 +448,7 @@ export class WorldView {
   /** Met à jour l'affichage des objets déplaçables (positions issues de la simulation). */
   updateProps(views: PropView[]): void {
     const stones = views.filter((v) => v.kind === 'pierre');
-    const logs = views.filter((v) => v.kind === 'buche' || v.kind === 'tronc' || v.kind === 'baton');
+    const logs = views.filter((v) => v.kind === 'buche' || v.kind === 'tronc' || v.kind === 'baton' || v.kind === 'manche' || v.kind === 'perche');
     const fill = (mesh: Mesh, list: PropView[], scale: (v: PropView) => [number, number, number]) => {
       if (list.length === 0) {
         mesh.isVisible = false;
@@ -384,6 +469,20 @@ export class WorldView {
     fill(this.stoneMesh, stones, (v) => [v.radius, v.radius, v.radius]);
     fill(this.logMesh, logs, (v) => [v.length, v.radius, v.radius]);
     for (const [kind, mesh] of this.itemMeshes) fill(mesh, views.filter((v) => v.kind === kind), () => [1, 1, 1]);
+    for (const [kind, mesh] of this.nodeMeshes) fill(mesh, views.filter((v) => v.kind === kind), (v) => [v.size ?? 1, v.size ?? 1, v.size ?? 1]);
+    const lit = views.filter((v) => v.kind === 'foyer' && v.lit);
+    const t = performance.now() * 0.006;
+    fill(this.flameMesh, lit, (v) => {
+      const k = 0.85 + 0.15 * Math.sin(t + v.x);
+      return [k, 0.9 + 0.2 * Math.sin(t * 1.7 + v.z), k];
+    });
+    // Colonne de fumée : 30 m de haut, centrée 15 m au-dessus du foyer.
+    fill(this.smokeMesh, lit.map((v) => ({ ...v, y: v.y + 15, qx: 0, qy: 0, qz: 0, qw: 1 })), () => [1, 30, 1]);
+  }
+
+  /** À appeler quand des arbres sont abattus ou repoussent. */
+  invalidateVegetation(): void {
+    this.vegetationDirty = true;
   }
 
   /** À appeler à chaque image : demande, reçoit et affiche les chunks, dans la limite de temps donnée. */
@@ -450,6 +549,9 @@ export class WorldView {
     this.stoneMesh.dispose();
     this.logMesh.dispose();
     for (const mesh of this.itemMeshes.values()) mesh.dispose();
+    for (const mesh of this.nodeMeshes.values()) mesh.dispose();
+    this.flameMesh.dispose();
+    this.smokeMesh.dispose();
     this.water.dispose();
     this.material.dispose();
     this.waterMaterial.dispose();

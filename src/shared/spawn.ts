@@ -2,8 +2,9 @@
 // des autres, et se retrouver doit être très difficile. Le serveur (phase 8) passera la
 // liste des joueurs existants ; en solo, l'apparition est simplement aléatoire.
 
-import { WATER_LEVEL, WORLD_HALF } from './constants';
+import { CHUNK_SIZE, WATER_LEVEL, WORLD_HALF } from './constants';
 import type { BiomeId } from './geography';
+import { type NodeKind, nodesInChunk } from './resources';
 import { mulberry32 } from './rng';
 import { type Terrain, chunkCoord, chunkKey } from './terrain';
 import { type TreeInstance, floraInChunk } from './vegetation';
@@ -111,8 +112,9 @@ export interface TestDestination {
   biome?: BiomeId;
   x: number;
   z: number;
-  /** Place le joueur dans l'eau profonde, ou face à une paroi à escalader. */
-  kind?: 'eau' | 'paroi';
+  /** Place le joueur dans l'eau profonde, face à une paroi à escalader, ou devant le gisement le plus proche. */
+  kind?: 'eau' | 'paroi' | 'gisement';
+  node?: NodeKind;
 }
 
 export const TEST_DESTINATIONS: TestDestination[] = [
@@ -128,7 +130,37 @@ export const TEST_DESTINATIONS: TestDestination[] = [
   { id: 'hautes_terres', label: 'Hautes terres de l’Est', biome: 'hautes_terres', x: 6400, z: 0 },
   { id: 'lowveld', label: 'Lowveld (savane sèche)', biome: 'lowveld', x: 0, z: -6000 },
   { id: 'kalahari', label: 'Sables du Kalahari', biome: 'kalahari', x: -6500, z: 0 },
+  { id: 'quartz', label: 'Bloc de quartz le plus proche', x: 0, z: 0, kind: 'gisement', node: 'bloc_quartz' },
+  { id: 'argile', label: 'Gisement d’argile le plus proche', x: 0, z: 0, kind: 'gisement', node: 'gisement_argile' },
+  { id: 'fer', label: 'Affleurement de fer le plus proche', x: 0, z: 0, kind: 'gisement', node: 'filon_fer' },
+  { id: 'or', label: 'Gravier aurifère le plus proche', x: 0, z: 0, kind: 'gisement', node: 'gravier_or' },
 ];
+
+/** Gisement d'un type donné le plus proche d'un point (recherche par anneaux de chunks, 4 km au plus). */
+export function nearestNode(terrain: Terrain, kind: NodeKind, x0: number, z0: number, maxRings = 64): { x: number; z: number; y: number } | null {
+  const c0 = chunkCoord(x0);
+  const r0 = chunkCoord(z0);
+  let best: { x: number; z: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (let ring = 0; ring <= maxRings; ring++) {
+    for (let cz = r0 - ring; cz <= r0 + ring; cz++) {
+      for (let cx = c0 - ring; cx <= c0 + ring; cx++) {
+        if (Math.max(Math.abs(cx - c0), Math.abs(cz - r0)) !== ring) continue;
+        for (const n of nodesInChunk(terrain, cx, cz)) {
+          if (n.kind !== kind) continue;
+          const d = Math.hypot(n.x - x0, n.z - z0);
+          if (d < bestD) {
+            bestD = d;
+            best = { x: n.x, z: n.z, y: n.y };
+          }
+        }
+      }
+    }
+    // Un gisement trouvé à l'anneau r peut être battu par un autre de l'anneau r + 1, pas au-delà.
+    if (best && bestD < ring * CHUNK_SIZE) break;
+  }
+  return best;
+}
 
 export interface ResolvedDestination {
   x: number;
@@ -139,8 +171,23 @@ export interface ResolvedDestination {
 }
 
 /** Trouve un point précis pour une destination de test. */
-export function resolveDestination(terrain: Terrain, d: TestDestination): ResolvedDestination {
+export function resolveDestination(terrain: Terrain, d: TestDestination, from: { x: number; z: number } = { x: d.x, z: d.z }): ResolvedDestination {
   if (d.kind === 'eau') return { x: d.x, y: WATER_LEVEL - 1.3, z: d.z, yaw: null };
+  if (d.kind === 'gisement' && d.node) {
+    const n = nearestNode(terrain, d.node, from.x, from.z);
+    if (n) {
+      // Un pas à côté du gisement, sur la terre ferme, le regard tourné vers lui.
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const x = n.x + Math.cos(a) * 1.9;
+        const z = n.z + Math.sin(a) * 1.9;
+        const h = terrain.heightAt(x, z);
+        if (h < WATER_LEVEL + 0.1) continue;
+        return { x, y: h + 0.2, z, yaw: Math.atan2(n.x - x, n.z - z) };
+      }
+    }
+    return { x: from.x, y: terrain.heightAt(from.x, from.z) + 0.2, z: from.z, yaw: null };
+  }
   if (d.kind === 'paroi') {
     // Pied d'une paroi raide : on cherche une forte pente puis on recule d'un pas.
     for (let ring = 0; ring < 120; ring++) {

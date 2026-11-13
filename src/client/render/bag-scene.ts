@@ -26,13 +26,16 @@ export type BagSlot =
   | { zone: 'sac'; index: number }
   | { zone: 'main' }
   | { zone: 'autre-poche'; index: number }
-  | { zone: 'autre-sac'; index: number };
+  | { zone: 'autre-sac'; index: number }
+  | { zone: 'etabli'; index: number };
 
 export interface BagModel {
   pockets: Array<ItemStack | null>;
   bag: ItemStack[] | null;
   hand: { kind: PropKind; radius: number; length: number } | null;
   other: Container | null;
+  /** Plan de travail (pièces posées pour fabriquer). */
+  bench: ItemStack[];
 }
 
 export interface Cell {
@@ -51,7 +54,39 @@ export interface AreaLabel {
 
 const C = 0.3;
 const BAG_COLS = 6;
-const KINDS: PropKind[] = ['pierre', 'baton', 'chiffon', 'aloes', 'fruit_baobab', 'figue', 'muhacha'];
+const KINDS: PropKind[] = [
+  'pierre',
+  'baton',
+  'chiffon',
+  'aloes',
+  'fruit_baobab',
+  'figue',
+  'muhacha',
+  'buche',
+  'quartz',
+  'ecorce',
+  'fibres',
+  'corde',
+  'herbe',
+  'ilala',
+  'argile',
+  'resine',
+  'minerai_fer',
+  'pepite_or',
+  'manche',
+  'perche',
+  'couteau',
+  'hache',
+  'baton_fouir',
+  'lance',
+  'archet',
+  'pot_cru',
+  'pot',
+  'batee',
+  'pansement',
+];
+/** Objets longs (dessinés en travers de la case). */
+const LONG: PropKind[] = ['baton', 'buche', 'manche', 'perche', 'lance', 'baton_fouir', 'hache', 'archet', 'couteau', 'ilala', 'ecorce'];
 
 export function sameSlot(a: BagSlot | null, b: BagSlot | null): boolean {
   if (!a || !b || a.zone !== b.zone) return false;
@@ -67,6 +102,7 @@ export class BagScene {
   private readonly padSelMat: StandardMaterial;
   private readonly matMat: StandardMaterial;
   private readonly otherMatMat: StandardMaterial;
+  private readonly benchMat: StandardMaterial;
   private readonly dim: Mesh;
   private dynamic: Array<Mesh | InstancedMesh> = [];
   private signature = '';
@@ -113,6 +149,7 @@ export class BagScene {
     this.padSelMat.emissiveColor = new Color3(0.35, 0.28, 0.1);
     this.matMat = flat('toile', new Color3(0.55, 0.48, 0.36));
     this.otherMatMat = flat('toile du corps', new Color3(0.36, 0.31, 0.26));
+    this.benchMat = flat('plan de travail', new Color3(0.46, 0.4, 0.3));
     const dimMat = flat('voile', Color3.Black(), 0.55);
     dimMat.disableLighting = true;
     this.dim = CreateBox('voile', { width: 200, height: 0.01, depth: 200 }, scene);
@@ -145,7 +182,13 @@ export class BagScene {
     this.cells = [];
     this.labels = [];
 
-    // Sac du joueur (grille), puis poches et main en dessous.
+    // Plan de travail (en haut), sac du joueur (grille), puis poches et main en dessous.
+    for (let i = 0; i < BAG_COLS; i++) {
+      const st = model.bench[i] ?? null;
+      this.cells.push({ slot: { zone: 'etabli', index: i }, x: i * C + C / 2, z: 0.62 - C / 2, kind: st ? (st.item as PropKind) : null, count: st?.count ?? 0 });
+    }
+    this.labels.push({ text: 'Plan de travail', x: 0.02, z: 0.62 + 0.07 });
+    this.addMat(-0.06, BAG_COLS * C + 0.06, 0.62 + 0.14, 0.62 - C - 0.06, this.benchMat);
     const bagCount = model.bag ? Math.max(model.bag.length + 1, BAG_COLS * 2) : 0;
     const bagRows = Math.ceil(bagCount / BAG_COLS);
     const top = 0;
@@ -195,7 +238,7 @@ export class BagScene {
       minZ = Math.min(minZ, z);
       this.addMat(ox - 0.06, maxX + 0.06, top + 0.14, z - 0.06, this.otherMatMat);
     }
-    this.bounds = { minX: -0.15, maxX: maxX + 0.15, minZ: minZ - 0.15, maxZ: top + 0.25 };
+    this.bounds = { minX: -0.15, maxX: maxX + 0.15, minZ: minZ - 0.15, maxZ: 0.62 + 0.25 };
 
     for (const cell of this.cells) {
       const sel = sameSlot(cell.slot, this.selected);
@@ -211,9 +254,11 @@ export class BagScene {
       const size = Math.max(ext.x, ext.z) * 2;
       let scale = (C * 0.72) / Math.max(size, 1e-3);
       if (cell.kind === 'pierre') scale = (C * 0.6) / 2;
-      if (cell.kind === 'baton') inst.scaling.set(C * 1.05, 0.022, 0.022);
+      // Bâtons, bûches, branches, perches : forme unitaire (longueur 1, rayon 1), mise à l'échelle.
+      if (cell.kind === 'baton' || cell.kind === 'manche' || cell.kind === 'perche') inst.scaling.set(C * 1.05, 0.022, 0.022);
+      else if (cell.kind === 'buche') inst.scaling.set(C * 0.9, 0.06, 0.06);
       else inst.scaling.setAll(scale);
-      inst.rotation.y = cell.kind === 'baton' ? Math.PI / 4 : 0.3;
+      inst.rotation.y = LONG.includes(cell.kind) ? Math.PI / 4 : 0.3;
       inst.position.set(cell.x, 0.06, cell.z);
       this.dynamic.push(inst);
     }
