@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 5 terminée (177 tests unitaires ; vérifications dans le navigateur en cours).** Le prototype contient :
+**État : phase 5 terminée (181 tests unitaires et 168 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;

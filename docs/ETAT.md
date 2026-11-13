@@ -5,7 +5,8 @@ Mis à jour le 13/11/2026, version 0.5.0.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
 - **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
 - **Phase 4 :** terminée le 13/11/2026 (146 tests unitaires, 151 vérifications navigateur, dont 31 propres à la phase 4). Les éléments de la section 15 qui la concernent (liste des matériaux et leurs propriétés, amélioration de l'équipement) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-4.md`. Validée par le propriétaire du projet le 13/11/2026.
-- **Phase 5 :** terminée le 13/11/2026 (177 tests unitaires ; vérifications navigateur en cours, dont 16 propres à la phase 5). Les éléments de la section 15 qui la concernent (matériaux de construction, leurs propriétés, les améliorations) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-5.md`. Reste à l'essayer sur vos appareils.
+- **Phase 5 :** terminée le 13/11/2026 (181 tests unitaires, 168 vérifications navigateur, dont 16 propres à la phase 5). Les éléments de la section 15 qui la concernent (matériaux de construction, leurs propriétés, les améliorations) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-5.md`. Reste à l'essayer sur vos appareils.
+- **Correction (manette), présente depuis la phase 3 :** maintenir Y ouvrait puis refermait le sac à chaque image (de même pour Start et la pause, et pour une touche du clavier maintenue plus d'une demi-seconde). Un bouton encore enfoncé à l'ouverture du sac ou à la pause est maintenant ignoré jusqu'à ce qu'on le relâche.
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).

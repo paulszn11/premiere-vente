@@ -1,6 +1,10 @@
 # Phase 5 — Construction
 
-**Statut : terminée le 13/11/2026.** Vérifiée par 177 tests unitaires (dont 31 propres à la phase 5) et 16 vérifications de la phase 5 dans un vrai navigateur (ordinateur, téléphone, manette). Reste à l'essayer sur vos appareils.
+**Statut : terminée le 13/11/2026.** Vérifiée par 181 tests unitaires (dont 31 propres à la phase 5) et 168 vérifications dans un vrai navigateur, toutes réussies, dont 16 propres à la phase 5 (ordinateur, téléphone, manette). Reste à l'essayer sur vos appareils.
+
+![Un petit village : case avec porte et toit de chaume, murs de pierre sèche et de torchis, mur en feu, échelle, établi, forge, bas fourneau, coffre](captures/construction-village.png)
+
+![Mode construction : le fantôme vert du plancher suit le regard](captures/construction-plan.png)
 
 ## Ce que demande le cahier des charges
 
@@ -261,6 +265,16 @@ Téléphone :
 Manette : Y, RB jusqu'à « Construire », A trace, RT pose, LT annule.
 
 Captures : `tests/e2e/out/phase5-*.png`.
+
+![L'onglet « Construire » : chaque plan avec ses matériaux](captures/construire-onglet.png)
+
+### Défaut corrigé pendant ces vérifications (présent depuis la phase 3)
+
+- **Le problème.** Maintenir Y sur la manette ouvrait le sac puis le refermait à chaque image ; de même pour Start et la pause.
+- **La cause.** À l'ouverture du sac et à la pause, le jeu oubliait les touches enfoncées. La manette étant relue à chaque image, le bouton encore enfoncé passait pour un nouvel appui. Au clavier, une touche maintenue plus d'une demi-seconde faisait de même (répétition automatique).
+- **La correction.** Une touche ou un bouton encore enfoncé à ce moment est ignoré jusqu'à ce qu'on le relâche.
+- **Tests.** `tests/unit/input.test.ts` (4 tests, manette et clavier) ; dans le navigateur, Y maintenu une seconde laisse le sac ouvert, Start maintenu laisse la pause.
+- **Tests de manette plus fiables.** Les appuis simulés attendent que le jeu ait affiché deux images bouton enfoncé, puis deux images bouton relâché, même quand une image dure longtemps (rendu logiciel).
 
 ## Limites et compromis (signalés)
 
