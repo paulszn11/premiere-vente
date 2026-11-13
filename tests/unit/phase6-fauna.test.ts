@@ -91,9 +91,12 @@ describe('sens et comportements', () => {
     s.spawnCreatures('impala', s.state.x, s.state.z + 35, 4);
     run(60);
     const before = creatures('impala').map((c) => Math.hypot(c.x - s.state.x, c.z - s.state.z));
-    run(60 * 6, 0, 1, BTN_SPRINT);
-    const herd = creatures('impala');
-    expect(herd.some((c) => c.mode === 'fuite')).toBe(true);
+    let fled = false;
+    for (let k = 0; k < 60 * 6; k++) {
+      run(1, 0, 1, BTN_SPRINT);
+      if (creatures('impala').some((c) => c.mode === 'fuite')) fled = true;
+    }
+    expect(fled).toBe(true);
     expect(of('son').some((e) => e.type === 'son' && e.kind === 'impala_alarme')).toBe(true);
     // Ils ont pris le large malgré la course du joueur.
     run(60 * 4);

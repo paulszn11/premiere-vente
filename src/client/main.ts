@@ -14,6 +14,8 @@ import { formatReport } from './perf/benchmark';
 import { BACKEND_LABELS, type EngineResult, createEngine } from './render/engine';
 import { PRESET_LABELS, PRESET_ORDER, type Settings, effectiveQuality, loadSettings, saveSettings } from './settings';
 import { BagView } from './ui/bag-view';
+import { SoundSystem } from './audio/sound';
+import { SPECIES, type SpeciesId } from '../shared/creatures';
 import { renderSettings } from './ui/settings-panel';
 
 type ScreenName = 'loading' | 'home' | 'game' | 'pause' | 'settings' | 'bench';
@@ -123,9 +125,15 @@ async function boot(): Promise<void> {
   const input = new InputManager(canvas, getSettings);
   const touch = new TouchControls($('#touch'), () => session?.setPaused(true));
   input.touch = touch;
+  // Sons : le navigateur ne les autorise qu'après un geste de l'utilisateur.
+  const sound = new SoundSystem(device.mobile);
+  sound.volume = settings.volume;
+  const wakeSound = () => sound.resume();
+  for (const ev of ['pointerdown', 'keydown', 'touchstart'] as const) window.addEventListener(ev, wakeSound, { passive: true });
 
   const update = (patch: Partial<Settings>) => {
     settings = { ...settings, ...patch };
+    if (patch.volume !== undefined) sound.setVolume(settings.volume);
     saveSettings(settings);
     session?.applySettings();
     refreshHome();
@@ -160,6 +168,17 @@ async function boot(): Promise<void> {
           const n = session?.giveBuildKit() ?? 0;
           show('pause');
           toast(`Matériaux posés à côté de vous (${n} objets) ; cordes, herbes et clous dans le sac. Ouvrez le sac, onglet « Construire ».`);
+        },
+        species: (['impala', 'phacochere', 'babouin', 'elephant', 'hyene', 'leopard', 'crocodile'] as SpeciesId[]).map((id) => ({ id, label: SPECIES[id].plural.replace(/^./, (c) => c.toUpperCase()) })),
+        onSpawn: (sp: string) => {
+          const n = session?.spawnCreatures(sp as SpeciesId) ?? 0;
+          show('pause');
+          toast(n ? `${n} ${n > 1 ? SPECIES[sp as SpeciesId].plural : SPECIES[sp as SpeciesId].label} à 25 m devant vous.` : 'Impossible ici.');
+        },
+        onLake: () => {
+          const ok = session?.lakeTest() ?? false;
+          show('pause');
+          toast(ok ? 'Vous nagez au-dessus des eaux profondes du lac. Nagez, et écoutez…' : 'Impossible.');
         },
       };
     },
@@ -215,6 +234,7 @@ async function boot(): Promise<void> {
   const breathBar = $('#status .bar.breath');
   const promptEl = $('#prompt');
   const vignette = $('#vignette');
+  const dreadEl = $('#dread');
   const eyelids = $('#eyelids');
   const gestureEl = $('#gesture');
   const downEl = $('#down-screen');
@@ -233,7 +253,8 @@ async function boot(): Promise<void> {
     promptEl.hidden = !hud.prompt;
     promptEl.textContent = hud.prompt ?? '';
     const hurt = hud.health < 60 ? ((60 - hud.health) / 60) * 0.9 : 0;
-    vignette.style.opacity = String(Math.max(hurt, hud.bleeding ? 0.35 : 0).toFixed(2));
+    vignette.style.opacity = String(Math.max(hurt, hud.bleeding ? 0.35 : 0, hud.strike * 0.85).toFixed(2));
+    dreadEl.style.opacity = hud.dread.toFixed(2);
     vignette.classList.toggle('pulse', hud.bleeding);
     eyelids.style.opacity = String(hud.eyelids);
     const blur = hud.blur > 0.05 ? `blur(${(hud.blur * 2.5).toFixed(1)}px)` : '';
@@ -315,6 +336,11 @@ async function boot(): Promise<void> {
     input,
     autoPreset,
     getSettings,
+    sound,
+    creatureCap: device.mobile ? 24 : 40,
+    get fauna() {
+      return settings.fauna;
+    },
     onTogglePerf: () => update({ showPerf: !settings.showPerf }),
     onStatus: showStatus,
     onMessage: showMessage,
@@ -614,6 +640,25 @@ async function boot(): Promise<void> {
       );
     },
     startBuild: (plan: string) => session?.startBuild(plan as Parameters<GameSession['startBuild']>[0]),
+    /** Créatures proches, groupes, prise en cours (copies). */
+    creatures: () => {
+      const sim = session?.sim;
+      if (!sim) return null;
+      return JSON.parse(
+        JSON.stringify({
+          list: sim.creatureViews(),
+          grab: sim.fauna.grab,
+          trapped: sim.trappedIn,
+          count: sim.fauna.count,
+          enabled: sim.fauna.enabled,
+          carcasses: sim.props.views().filter((v) => v.kind === 'carcasse').map((v) => ({ id: v.id, sp: v.sp, meat: v.meat, x: v.x, y: v.y, z: v.z })),
+          ombre: [...sim.fauna.groups.values()].filter((g) => g.sp === 'ombre').map((g) => ({ attention: g.attention, members: g.members.length, home: g.home })),
+          soundRunning: sound.running,
+        }),
+      );
+    },
+    spawnCreatures: (sp: string, distance = 25, n?: number) => session?.spawnCreatures(sp as SpeciesId, distance, n) ?? 0,
+    lakeTest: () => session?.lakeTest() ?? false,
     stopBuild: () => session?.stopBuild(),
     bag: () => bagView.debug(),
     bagRun: (label: string) => bagView.run(label),

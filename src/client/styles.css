@@ -469,6 +469,7 @@ input[type='range'] {
 /* ——— Phase 3 : corps, gestes, sac ——— */
 
 #vignette,
+#dread,
 #eyelids {
   position: absolute;
   inset: 0;
@@ -493,6 +494,12 @@ input[type='range'] {
 
 #eyelids {
   background: #000;
+}
+
+/* Phase 6 : la peur assombrit les bords de la vue (créature du lac, prédateurs tout près). */
+#dread {
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 35%, rgba(0, 4, 6, 0.95) 100%);
+  transition: opacity 0.6s;
 }
 
 [data-touch='bag'] {

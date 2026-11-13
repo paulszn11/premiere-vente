@@ -1337,6 +1337,32 @@ export class LocalSimulation {
     const s = this.state;
     if (s.mode === MODE_CLIMB || this.vitals.state !== 'eveille') return null;
     const h = this.heldItem();
+    // Phase 6 : tenu par une créature, pris dans un piège, créature visée, carcasse, piège.
+    if (this.fauna.grab) return { action: 'frapper pour vous libérer (ou débattez-vous)', ready: this.useCooldown <= 0, interact: false };
+    if (this.trappedIn) return { action: this.props.defOf(this.trappedIn)?.kind === 'fosse' ? 'sortir de la fosse' : 'dégager votre pied', ready: true, interact: true };
+    const heldTool = h ? ITEMS[h.item].tool : undefined;
+    const prey = this.fauna.enabled ? this.fauna.rayHit(this.eye(), lookDirection(this.yaw, this.pitch), 1.1 + (heldTool?.reach ?? 0.1)) : null;
+    if (prey) {
+      const c = this.fauna.creatures.get(prey.id);
+      if (c) return { action: `frapper ${speciesName(c.sp, 'le')}${h ? '' : ' (à mains nues)'}`, ready: this.useCooldown <= 0, interact: false };
+    }
+    const tp = this.props.target(s, this.yaw, this.pitch);
+    if (tp?.kind === 'carcasse') {
+      const k = this.props.defOf(tp.id)?.carcass;
+      if (k) {
+        if (k.meat <= 0) return { action: 'carcasse : il ne reste que les os', ready: false, interact: false };
+        if (this.time - k.at > CARCASS_ROT) return { action: 'carcasse : la viande est avariée', ready: false, interact: false };
+        return h && hasTag(h.item, 'tranchant') ? { action: `dépecer la carcasse (${k.meat} ${k.meat > 1 ? 'morceaux' : 'morceau'})`, ready: true, interact: false } : { action: 'dépecer : il faut une lame en main', ready: false, interact: false };
+      }
+    }
+    if (tp && TRAP_KINDS.has(tp.kind)) {
+      const t = this.props.defOf(tp.id)?.trap;
+      if (t) {
+        const caught = t.caught && t.caught !== 'joueur' ? this.fauna.creatures.get(t.caught) : null;
+        if (caught && !caught.dead) return { action: `${speciesName(caught.sp, 'un')} est pris`, ready: false, interact: true };
+        return { action: t.armed ? `${PROP_ARTICLE(tp.kind)} est tendu` : `réarmer ${PROP_ARTICLE(tp.kind)}`, ready: !t.armed, interact: true };
+      }
+    }
     if (h?.item === 'pot' && (this.inWater() || this.nearInstall('puits', 2.6))) return { action: 'remplir le pot d’eau', ready: true, interact: false };
     const t = this.props.target(s, this.yaw, this.pitch);
     const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
@@ -2989,7 +3015,7 @@ export class LocalSimulation {
       x,
       y: Math.max(y, water > 0 ? WATER_LEVEL - 0.3 : y) + d.radius * scale * 0.6,
       z,
-      rot: ((((Math.PI / 2 - yaw) / (Math.PI * 2)) % 1) + 1) % 1,
+      rot: ((((yaw - Math.PI / 2) / (Math.PI * 2)) % 1) + 1) % 1,
       radius: Math.max(0.15, d.radius * scale),
       length: Math.max(0.4, d.halfLength * 2 * scale),
       fixed: true,

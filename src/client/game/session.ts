@@ -30,6 +30,10 @@ import { BACKEND_LABELS, type ActiveBackend } from '../render/engine';
 import { TerrainJobs } from '../render/terrain-jobs';
 import { WorldView } from '../render/world-view';
 import { StructureView } from '../render/structure-view';
+import { CreatureView } from '../render/creature-view';
+import type { SoundSystem } from '../audio/sound';
+import { SPECIES, type SpeciesId } from '../../shared/creatures';
+import { inLakeDomain } from '../../shared/fauna';
 import { PointLight } from '@babylonjs/core/Lights/pointLight';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
@@ -59,6 +63,9 @@ export interface HudState {
   eyelids: number;
   gesture: { label: string; progress: number } | null;
   down: DownState | null;
+  /** Phase 6 : éclair rouge après une morsure (0 à 1), assombrissement quand le danger rôde (0 à 1). */
+  strike: number;
+  dread: number;
 }
 
 export interface SessionOptions {
@@ -79,6 +86,12 @@ export interface SessionOptions {
   onBagChange?: (open: boolean) => void;
   /** Mode construction : on trace un plan (libellés des boutons tactiles). */
   onBuildMode?: (active: boolean) => void;
+  /** Sons (créés par l'interface, démarrés au premier geste). */
+  sound?: SoundSystem;
+  /** Créatures réelles au plus (téléphone : 24). */
+  creatureCap?: number;
+  /** Faune active (désactivable pour les tests des autres phases). */
+  fauna?: boolean;
 }
 
 export interface Pose {
@@ -118,6 +131,11 @@ export class GameSession {
   private buildSince = 0;
   /** Lumières des feux et des torches les plus proches (aucune en qualité Basse). */
   private readonly lights: PointLight[] = [];
+  /** Créatures, carcasses, traces de sang (phase 6). */
+  readonly creatureView: CreatureView;
+  private strikeAt = -1e9;
+  private lastRustle = 0;
+  private dread = 0;
   readonly jobs: TerrainJobs;
   readonly perf = new PerfMonitor();
   /** Temps de calcul de chaque image côté processeur (simulation + préparation du rendu). */
@@ -160,6 +178,8 @@ export class GameSession {
     const sim = await LocalSimulation.create(seed, {
       spawnSeed,
       heightProvider: jobs.heightProvider,
+      creatureCap: opts.creatureCap ?? 40,
+      ...(opts.fauna === false ? { fauna: false } : {}),
       ...(start ? { start: { x: start.x, y: start.y, z: start.z } } : {}),
       ...(save !== undefined ? { save } : {}),
     });
@@ -195,6 +215,7 @@ export class GameSession {
     smat.diffuseColor = new Color3(1, 1, 1);
     smat.specularColor = new Color3(0, 0, 0);
     this.structures = new StructureView(this.scene, smat, (x, z) => terrain.heightAt(x, z));
+    this.creatureView = new CreatureView(this.scene);
     // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
     opts.onBuildMode?.(false);
     this.applySettings();
@@ -214,6 +235,7 @@ export class GameSession {
     this.params = q.params;
     this.world.setQuality(q.params);
     this.camera.maxZ = this.world.viewDistance * 1.05 + 60;
+    this.creatureView.range = q.preset === 'low' ? 90 : q.preset === 'medium' ? 130 : 180;
     if (!s.adaptiveResolution) this.adaptive.reset();
     this.applyScaling();
   }
@@ -275,6 +297,72 @@ export class GameSession {
     const r = resolveDestination(this.terrain, dest, { x: this.sim.state.x, z: this.sim.state.z });
     this.sim.teleport(r.x, r.y, r.z);
     if (r.yaw !== null) this.yaw = r.yaw;
+    this.pitch = 0;
+    this.biome = null;
+    return true;
+  }
+
+  /** Créatures, sons proches, peur (phase 6). */
+  private updateFauna(sim: LocalSimulation, views: ReturnType<LocalSimulation['props']['views']>, x: number, y: number, z: number, now: number, dt: number): void {
+    const creatures = sim.creatureViews();
+    this.creatureView.update(creatures, views, sim.fauna.blood, (px, pz) => this.terrain.heightAt(px, pz), { x, y, z }, now / 1000);
+    // Danger : prédateur qui rôde, encercle ou attaque tout près ; créature du lac dans les parages.
+    let danger = 0;
+    let ombre = 0;
+    for (const c of creatures) {
+      const d = Math.hypot(c.x - x, c.z - z);
+      const arch = SPECIES[c.sp].archetype;
+      if (c.sp === 'ombre') {
+        ombre = Math.max(ombre, Math.max(0, 1 - Math.hypot(d, c.y - y) / 70));
+        continue;
+      }
+      if (arch === 'meute' || arch === 'embuscade' || arch === 'aquatique' || c.mode === 'charge' || c.mode === 'menace') {
+        const hot = c.mode === 'attaque' || c.mode === 'encercle' || c.mode === 'charge' || c.mode === 'traque' || c.mode === 'rode' || c.mode === 'menace';
+        if (hot) danger = Math.max(danger, Math.max(0, 1 - d / 35));
+      }
+    }
+    if (sim.fauna.grab) danger = 1;
+    const swimming = sim.state.mode === MODE_SWIM || y < WATER_LEVEL;
+    const ombreLevel = swimming ? ombre : ombre * 0.3;
+    this.dread += (Math.max(ombreLevel * 0.8, danger * 0.35) - this.dread) * Math.min(1, dt * 1.5);
+    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: y < WATER_LEVEL, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel });
+    // Frôlements et pas des animaux proches qu'on ne voit pas forcément.
+    if (now - this.lastRustle > 450) {
+      this.lastRustle = now;
+      for (const c of creatures) {
+        if (c.sp === 'ombre' || c.sp === 'vautour' || c.speed < 0.6) continue;
+        const d = Math.hypot(c.x - x, c.z - z);
+        if (d < 22 && Math.random() < 0.5) this.opts.sound?.play(c.sp === 'elephant' ? 'pas_lourd' : 'frolement', c.x, c.y + 0.3, c.z, c.sp === 'crocodile' ? 0.5 : 1);
+      }
+    }
+  }
+
+  /** Outil de test : fait apparaître des créatures devant le joueur. Renvoie leur nombre. */
+  spawnCreatures(sp: SpeciesId, distance = 25, n?: number): number {
+    const sim = this.sim;
+    if (!sim) return 0;
+    const s = sim.state;
+    const x = s.x + Math.sin(this.yaw) * distance;
+    const z = s.z + Math.cos(this.yaw) * distance;
+    if (sp === 'ombre') return this.lakeTest() ? 1 : 0;
+    return sim.spawnCreatures(sp, x, z, n).length;
+  }
+
+  /** Outil de test : nager au-dessus des eaux profondes du lac, là où rôde la créature. */
+  lakeTest(): boolean {
+    const sim = this.sim;
+    if (!sim) return false;
+    const g = [...sim.fauna.groups.values()].find((x) => x.sp === 'ombre');
+    if (!g) return false;
+    let tx = g.home.x;
+    let tz = g.home.z;
+    for (let k = 0; k < 40 && !inLakeDomain(this.terrain, tx, tz, 8); k++) {
+      tx = g.home.x + Math.cos(k) * k * 30;
+      tz = g.home.z + Math.sin(k) * k * 30;
+    }
+    sim.teleport(tx, WATER_LEVEL - 1.2, tz);
+    g.attention = Math.max(g.attention, 0.5);
+    g.returnAt = 0;
     this.pitch = 0;
     this.biome = null;
     return true;
@@ -452,6 +540,14 @@ export class GameSession {
       shakeP = (Math.random() - 0.5) * 0.03 * Math.min(1, s.stumble);
       shakeR = Math.sin(now * 0.02) * 0.05 * Math.min(1, s.stumble);
     }
+    // Morsure, charge : la vue tremble ; tenu par une créature : secousses continues.
+    const struck = Math.max(0, 1 - (now - this.strikeAt) / 400);
+    const held = sim.fauna.grab ? 0.6 : 0;
+    if (struck > 0 || held > 0) {
+      const k = Math.max(struck, held);
+      shakeP += (Math.random() - 0.5) * 0.08 * k;
+      shakeR += (Math.random() - 0.5) * 0.12 * k;
+    }
     const sprinting = hs > 4 && s.grounded;
     this.fovBoost += ((sprinting ? 6 : 0) - this.fovBoost) * Math.min(1, dt * 4);
     const settings = this.opts.getSettings();
@@ -471,6 +567,7 @@ export class GameSession {
     const planning = this.buildPlan && !bag?.isOpen && v.state === 'eveille';
     this.structures.setPreview(planning ? sim.previewPlan(this.buildPlan!, this.buildTurn) : null);
     this.updateLights(views, x, camY, z, now);
+    this.updateFauna(sim, views, x, camY, z, now, dt);
     this.scene.render();
     if (bag?.isOpen) bag.frame(dt);
     this.lastCpuMs = performance.now() - now;
@@ -504,6 +601,8 @@ export class GameSession {
         eyelids: v.microSleep > 0 ? 1 : 0,
         gesture: g ? { label: g.label, progress: 1 - g.left / g.total } : null,
         down: this.downState(),
+        strike: Math.max(0, 1 - (now - this.strikeAt) / 600),
+        dread: this.dread,
       });
     }
   };
@@ -737,6 +836,14 @@ export class GameSession {
       case 'noyade':
         msg('Vous manquez d’air ! Remontez à la surface.', 'danger');
         break;
+      case 'son':
+        this.opts.sound?.play(ev.kind, ev.x, ev.y, ev.z);
+        break;
+      case 'attaque':
+        this.strikeAt = performance.now();
+        break;
+      case 'touche':
+        break;
       case 'message':
         msg(ev.text, ev.tone);
         break;
@@ -939,6 +1046,7 @@ export class GameSession {
   dispose(): void {
     this.stop();
     this.world.dispose();
+    this.creatureView.dispose();
     this.jobs.dispose();
     this.sim?.dispose();
     this.instr.dispose();

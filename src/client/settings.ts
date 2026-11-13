@@ -51,6 +51,10 @@ export interface Settings {
   worldSeed: number | null;
   /** Graine du point d'apparition du joueur dans ce monde (au hasard, loin des autres en multijoueur). */
   spawnSeed: number | null;
+  /** Volume des sons (0 à 1). */
+  volume: number;
+  /** Créatures (désactivables seulement pour les tests automatiques des autres phases ; pas dans le panneau). */
+  fauna: boolean;
 }
 
 const STORAGE_KEY = 'baz.settings.v1';
@@ -72,6 +76,8 @@ export function defaultSettings(): Settings {
     bindings: defaultBindings(),
     worldSeed: null,
     spawnSeed: null,
+    volume: 0.8,
+    fauna: true,
   };
 }
 
@@ -105,6 +111,8 @@ export function normalizeSettings(raw: unknown): Settings {
     bindings: normalizeBindings(r.bindings),
     worldSeed: seed,
     spawnSeed: validSeed(r.spawnSeed),
+    volume: num(r.volume, 0, 1, d.volume),
+    fauna: typeof r.fauna === 'boolean' ? r.fauna : d.fauna,
   };
 }
 

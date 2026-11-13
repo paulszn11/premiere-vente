@@ -395,7 +395,7 @@ export class BagView {
       }
       if (canDismantle(st.item)) out.push({ label: 'Démonter', run: () => this.act({ type: 'demonter', from }) });
       if (st.item === 'pot' && sim.inWater()) out.push({ label: 'Remplir d’eau', run: () => this.act({ type: 'remplir', from }) });
-      if (fire && this.otherProp && (st.item === 'pot' || st.item === 'pot_cru') && !fire.fire.pot) {
+      if (fire && this.otherProp && (st.item === 'pot' || st.item === 'pot_cru' || (st.item === 'viande_crue' && fire.def.kind === 'foyer')) && !fire.fire.pot) {
         const prop = this.otherProp;
         out.push({ label: 'Poser sur le feu', run: () => this.act({ type: 'poser_feu', prop, from }) });
       }
@@ -458,7 +458,7 @@ export class BagView {
       const prop = this.otherProp;
       if (!fire.fire.lit) out.push({ label: 'Allumer le feu (archet + herbes sèches)', run: () => this.act({ type: 'allumer', prop }) });
       out.push({ label: 'Ajouter du bois', run: () => this.act({ type: 'alimenter', prop }) });
-      if (fire.fire.pot) out.push({ label: 'Reprendre le pot', run: () => this.act({ type: 'reprendre_feu', prop }) });
+      if (fire.fire.pot) out.push({ label: fire.fire.pot.item.startsWith('viande') ? 'Reprendre la viande' : 'Reprendre le pot', run: () => this.act({ type: 'reprendre_feu', prop }) });
     }
     if (other && this.otherProp) {
       const prop = this.otherProp;
@@ -575,6 +575,8 @@ export class BagView {
       const f = fire.fire;
       let pot = '';
       if (f.pot?.item === 'pot_cru') pot = ` · pot en cuisson (${Math.min(100, Math.round((f.cook / 90) * 100))} %)`;
+      else if (f.pot?.item === 'viande_crue') pot = ` · la viande grille (${Math.min(100, Math.round((f.cook / 45) * 100))} %)`;
+      else if (f.pot?.item === 'viande_cuite') pot = ' · la viande est cuite : reprenez-la';
       else if (f.pot?.item === 'pot') pot = f.pot.w === 2 ? ' · l’eau bout' : f.pot.w === 1 ? ` · l’eau chauffe (${Math.min(100, Math.round((f.cook / 30) * 100))} %)` : ' · pot vide sur le feu';
       title = `${fire.def.kind === 'forge' ? 'Forge' : 'Foyer'} ${f.lit ? `allumé${fire.def.kind === 'forge' ? 'e' : ''} (${Math.ceil(f.fuel / 60)} min de bois)` : `éteint${fire.def.kind === 'forge' ? 'e' : ''}`}${pot} · ${title}`;
     }

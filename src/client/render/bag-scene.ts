@@ -91,6 +91,8 @@ const KINDS: PropKind[] = [
   'boulons',
   'hache_fer',
   'couteau_fer',
+  'viande_crue',
+  'viande_cuite',
 ];
 /** Objets longs (dessinés en travers de la case). */
 const LONG: PropKind[] = ['baton', 'buche', 'manche', 'perche', 'lance', 'baton_fouir', 'hache', 'archet', 'couteau', 'ilala', 'ecorce', 'torche', 'hache_fer', 'couteau_fer', 'barre_fer'];

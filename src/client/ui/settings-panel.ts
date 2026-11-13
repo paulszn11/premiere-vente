@@ -13,7 +13,18 @@ export interface SettingsPanelDeps {
   getSettings: () => Settings;
   update: (patch: Partial<Settings>) => void;
   /** Outils de test (téléportation), disponibles pendant une partie. */
-  testTools?: (() => { destinations: Array<{ id: string; label: string }>; info: string; onTeleport: (id: string) => void; onKit: () => void; onBuildKit: () => void } | null) | undefined;
+  testTools?:
+    | (() => {
+        destinations: Array<{ id: string; label: string }>;
+        info: string;
+        onTeleport: (id: string) => void;
+        onKit: () => void;
+        onBuildKit: () => void;
+        species: Array<{ id: string; label: string }>;
+        onSpawn: (sp: string) => void;
+        onLake: () => void;
+      } | null)
+    | undefined;
 }
 
 function esc(s: string): string {
@@ -64,7 +75,10 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     <button type="button" id="set-go">Y aller</button>
     <p class="note" id="set-pos">${esc(tools.info)}</p>
     <button type="button" id="set-kit">Recevoir un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet)</button>
-    <button type="button" id="set-buildkit">Recevoir des matériaux de construction (posés à côté de vous)</button>`
+    <button type="button" id="set-buildkit">Recevoir des matériaux de construction (posés à côté de vous)</button>
+    <label class="row"><span>Créatures</span><select id="set-species">${tools.species.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
+    <button type="button" id="set-spawn">Faire apparaître à 25 m devant vous</button>
+    <button type="button" id="set-lake">Nager au-dessus des eaux profondes du lac (là où rôde la créature)</button>`
     : '';
 
   deps.root.innerHTML = `
@@ -84,6 +98,9 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     <p class="note">Les touches sont repérées par leur position : sur un clavier AZERTY, « Avancer » est la touche Z. Les sticks de la manette servent toujours au déplacement (gauche) et au regard (droit).</p>
     <div class="binds">${bindingRows}</div>
     <button type="button" id="set-reset-binds">Réinitialiser les commandes</button>
+    <h3>Son</h3>
+    ${range('set-volume', 'Volume', s.volume, 0, 1, 0.05, pct)}
+    <p class="note">Les sons sont fabriqués par le navigateur et placés dans l'espace : un casque aide à situer les animaux.</p>
     <h3>Affichage</h3>
     ${check('set-perf', 'Afficher les infos de performance (touche F3)', s.showPerf)}
     ${testSection}
@@ -115,6 +132,12 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
   });
   root.querySelector('#set-kit')?.addEventListener('click', () => tools?.onKit());
   root.querySelector('#set-buildkit')?.addEventListener('click', () => tools?.onBuildKit());
+  root.querySelector('#set-spawn')?.addEventListener('click', () => {
+    const sel = root.querySelector<HTMLSelectElement>('#set-species');
+    if (sel && tools) tools.onSpawn(sel.value);
+  });
+  root.querySelector('#set-lake')?.addEventListener('click', () => tools?.onLake());
+  live('set-volume', pct, 'volume');
   live('set-scale', pct, 'renderScale');
   live('set-fov', (v) => `${v}°`, 'fov');
   live('set-mouse', mult, 'mouseSensitivity');

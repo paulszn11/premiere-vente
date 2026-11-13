@@ -67,6 +67,12 @@ const ITEM_RENDER_KINDS: PropKind[] = [
   'puits',
   'fourneau',
   'forge',
+  // Phase 6 : viande et pièges (les carcasses sont dessinées par l'affichage des créatures).
+  'viande_crue',
+  'viande_cuite',
+  'collet',
+  'assommoir',
+  'fosse',
 ];
 const NODE_RENDER_KINDS: PropKind[] = ['bloc_quartz', 'filon_fer', 'touffe_herbe', 'gisement_argile', 'gravier_or'];
 const UNDERWATER = new Color3(0.05, 0.2, 0.24);

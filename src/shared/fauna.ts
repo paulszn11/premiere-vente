@@ -167,6 +167,8 @@ export interface Creature {
   /** Bouchées prises sur une carcasse. */
   fed: number;
   dead: boolean;
+  /** Hauteur du sol sous la créature (mise à jour quand elle bouge). */
+  groundY: number;
 }
 
 interface Spot {
@@ -260,6 +262,8 @@ const TRAIL_STEP = 3;
 const TRAIL_LIFE = 600;
 const BLOOD_LIFE = 1200;
 const LEOPARD_RETURN = 3600;
+/** États où une créature doit réagir vite (décisions plus fréquentes). */
+const ACTIVE_MODES = new Set<string>(['fuite', 'menace', 'charge', 'traque', 'rode', 'encercle', 'attaque', 'repli', 'saisit', 'chasse', 'vol', 'cercle']);
 const OMBRE_RETURN = 900;
 
 const TAU = Math.PI * 2;
@@ -307,6 +311,7 @@ export class Fauna {
   private lastSites = -999;
   private lastEco = 0;
   private lastSound = new Map<string, number>();
+  private tickCount = 0;
   private player: FaunaPlayer | null = null;
   private env: FaunaEnv | null = null;
   /** Créatures réelles au plus (téléphone : 24). */
@@ -600,6 +605,7 @@ export class Fauna {
       spottedUntil: -1e9,
       fed: 0,
       dead: false,
+      groundY: this.terrain.heightAt(x, z),
     };
     c.goalYaw = c.yaw;
     this.creatures.set(c.id, c);
@@ -673,6 +679,7 @@ export class Fauna {
     this.player = player;
     this.env = env;
     if (!this.enabled) return;
+    this.tickCount++;
     this.trackPlayer(player);
     if (this.wild && time - this.lastSites > 5) {
       this.lastSites = time;
@@ -696,7 +703,9 @@ export class Fauna {
         const elapsed = time - c.lastThink;
         c.lastThink = time;
         const far = dist2(c.x, c.z, player.x, player.z);
-        c.nextThink = time + (far < 80 ? 0.1 : far < 160 ? 0.25 : 0.5);
+        // Plus souvent quand il se passe quelque chose ; moins souvent pour un animal calme ou lointain.
+        const busy = c.alert > 0.3 || ACTIVE_MODES.has(c.mode) || this.grab?.id === c.id;
+        c.nextThink = time + (far < 80 ? (busy ? 0.1 : 0.25) : far < 160 ? (busy ? 0.2 : 0.4) : 0.6);
         this.perceive(c, elapsed);
         this.think(c, elapsed);
       }
@@ -1114,11 +1123,11 @@ export class Fauna {
     } else if (g.sp === 'vautour') {
       // Rien : chaque vautour décide seul.
     } else {
-      // Hardes (impalas) et familles : rester groupés.
-      if (dist2(g.gx, g.gz, center.x, center.z) < 15 || this.rand() < 0.01) {
+      // Hardes (impalas) et familles : rester groupés, en dérivant lentement en broutant.
+      if (dist2(g.gx, g.gz, center.x, center.z) < 4 || this.rand() < 0.005) {
         const a = this.rand() * TAU;
-        g.gx = center.x + Math.cos(a) * 40;
-        g.gz = center.z + Math.sin(a) * 40;
+        g.gx = center.x + Math.cos(a) * 15;
+        g.gz = center.z + Math.sin(a) * 15;
       }
     }
   }
@@ -1298,8 +1307,9 @@ export class Fauna {
     if (c.mode !== 'paitre' && c.mode !== 'errer') this.setMode(c, 'paitre');
     if (this.rand() < 0.04) this.setMode(c, c.mode === 'paitre' ? 'errer' : 'paitre');
     const dc = dist2(c.x, c.z, g.gx, g.gz);
-    if (c.mode === 'errer' || dc > 30) this.goTo(c, d, g.gx + (this.rand() - 0.5) * 10, g.gz + (this.rand() - 0.5) * 10, d.walk, 3);
-    else c.goalSpeed = this.rand() < 0.3 ? d.walk * 0.4 : 0;
+    if (dc > 30) this.goTo(c, d, g.gx, g.gz, d.walk, 3);
+    else if (c.mode === 'errer') this.goTo(c, d, g.gx + (this.rand() - 0.5) * 10, g.gz + (this.rand() - 0.5) * 10, d.walk * 0.5, 3);
+    else c.goalSpeed = this.rand() < 0.3 ? d.walk * 0.3 : 0;
   }
 
   private thinkDefensive(c: Creature, d: SpeciesDef, g: Group): void {
@@ -2137,6 +2147,22 @@ export class Fauna {
 
   // ——— Déplacements ———
 
+  /** Test rapide (hauteur déjà connue, sans pente) : bords du monde, profondeur d'eau. */
+  private passableAt(d: SpeciesDef, x: number, z: number, h: number): boolean {
+    if (Math.abs(x) > WORLD_HALF - 300 || Math.abs(z) > WORLD_HALF - 300) return false;
+    const depth = WATER_LEVEL - h;
+    if (d.minDepth > 0 && depth < d.minDepth) return false;
+    return depth <= d.maxWade;
+  }
+
+  /** Hauteur où se tient la créature (sol, nage en surface, crocodile à fleur d'eau). */
+  private surfaceAt(c: Creature, d: SpeciesDef): number {
+    const depth = WATER_LEVEL - c.groundY;
+    if (c.sp === 'crocodile' && depth > 0.6) return WATER_LEVEL - 0.35;
+    if (depth > d.height * 0.85 * c.scale) return WATER_LEVEL - d.height * 0.7 * c.scale;
+    return c.groundY;
+  }
+
   private passable(d: SpeciesDef, x: number, z: number): boolean {
     if (Math.abs(x) > WORLD_HALF - 300 || Math.abs(z) > WORLD_HALF - 300) return false;
     const h = this.terrain.heightAt(x, z);
@@ -2192,25 +2218,28 @@ export class Fauna {
     if (c.hp < c.maxHp * 0.3) cap *= 0.7;
     if (c.stagger > 0) cap = 0;
     if (c.windup > 0 && !grabbed) cap = Math.min(cap, d.run);
-    const depth = this.depthAt(c.x, c.z);
+    const depth = WATER_LEVEL - c.groundY;
     if (c.sp !== 'crocodile' && d.archetype !== 'abysse' && d.archetype !== 'charognard' && depth > d.height * 0.85) cap = Math.min(cap, d.swim);
     c.speed += clamp(cap - c.speed, -d.accel * 1.5 * dt, d.accel * dt);
     if (c.speed < 0.02 && cap === 0) c.speed = 0;
     if (c.speed > 0) {
       const nx = c.x + Math.sin(c.yaw) * c.speed * dt;
       const nz = c.z + Math.cos(c.yaw) * c.speed * dt;
-      if (this.passable(d, nx, nz)) {
+      // Une seule hauteur de terrain par pas (la pente est vérifiée par les sondes, à la décision).
+      const h = this.terrain.heightAt(nx, nz);
+      if (this.passableAt(d, nx, nz, h)) {
         c.x = nx;
         c.z = nz;
+        c.groundY = h;
         c.blocked = false;
       } else {
         c.speed = 0;
         c.blocked = true;
       }
     }
-    // Les membres d'un groupe ne se chevauchent pas.
+    // Les membres d'un groupe ne se chevauchent pas (vérifié 10 fois par seconde).
     const g = this.groups.get(c.group);
-    if (g && g.members.length > 1 && d.archetype !== 'charognard') {
+    if (g && g.members.length > 1 && d.archetype !== 'charognard' && (this.tickCount + Number(c.id.slice(1))) % 6 === 0) {
       for (const id of g.members) {
         if (id === c.id) continue;
         const o = this.creatures.get(id);
@@ -2218,12 +2247,14 @@ export class Fauna {
         const min = (d.radius * c.scale + d.radius * o.scale) * 1.6;
         const dd = dist2(c.x, c.z, o.x, o.z);
         if (dd > 0.01 && dd < min) {
-          const push = ((min - dd) / dd) * 0.5 * Math.min(1, dt * 8);
+          const push = ((min - dd) / dd) * 0.5 * Math.min(1, dt * 48);
           const px = (c.x - o.x) * push;
           const pz = (c.z - o.z) * push;
-          if (this.passable(d, c.x + px, c.z + pz)) {
+          const h = this.terrain.heightAt(c.x + px, c.z + pz);
+          if (this.passableAt(d, c.x + px, c.z + pz, h)) {
             c.x += px;
             c.z += pz;
+            c.groundY = h;
           }
         }
       }
@@ -2231,14 +2262,11 @@ export class Fauna {
     if (c.goalY !== null && (d.archetype === 'abysse' || d.archetype === 'charognard')) {
       const vy = clamp(c.goalY - c.y, -3 * dt, 3 * dt);
       c.y += vy;
-      if (d.archetype === 'abysse') {
-        const bottom = this.terrain.heightAt(c.x, c.z);
-        c.y = clamp(c.y, bottom + 0.6, WATER_LEVEL - 1.2);
-      }
+      if (d.archetype === 'abysse') c.y = clamp(c.y, c.groundY + 0.6, WATER_LEVEL - 1.2);
     } else if (d.archetype === 'charognard') {
-      c.y = this.terrain.heightAt(c.x, c.z);
+      c.y = c.groundY;
     } else {
-      const target = this.surfaceY(c.sp, c.x, c.z, c);
+      const target = this.surfaceAt(c, d);
       c.y += clamp(target - c.y, -6 * dt, 6 * dt);
       if (Math.abs(target - c.y) > 2) c.y = target;
     }
