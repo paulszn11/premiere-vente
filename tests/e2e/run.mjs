@@ -1213,15 +1213,17 @@ async function phase3Scenario(browser) {
   await sleep(2400);
   const tBody = await tPage.evaluate(() => window.__game.body());
   check('Téléphone : « Utiliser » mange la figue tenue en main', tBody.held === null && countItem(tBody, 'figue') === 2 && tBody.vitals.digest.length === 1);
-  await tPage.evaluate(() => {
+  const sleepAct = await tPage.evaluate(() => {
     window.__game.sim().vitals.fatigue = 70;
-    window.__game.act({ type: 'dormir' });
+    return window.__game.act({ type: 'dormir' });
   });
   await sleep(600);
   const wakeVisible = await tPage.isVisible('#btn-wake');
+  const asleep = await tPage.evaluate(() => window.__game.body().vitals.posture);
   await tap('#btn-wake');
   await sleep(300);
-  check('Téléphone : endormi, le bouton « Se réveiller » réveille (l’écran couvre le joystick)', wakeVisible && (await tPage.evaluate(() => window.__game.body().vitals.posture)) === 'debout');
+  const awake = await tPage.evaluate(() => window.__game.body().vitals.posture);
+  check('Téléphone : endormi, le bouton « Se réveiller » réveille (l’écran couvre le joystick)', wakeVisible && asleep === 'endormi' && awake === 'debout', `dormir : ${JSON.stringify(sleepAct)} · bouton visible : ${wakeVisible} · ${asleep} → ${awake}`);
   check('Aucune erreur dans la console (phase 3, téléphone)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
   await touchCtx.close();
 
@@ -1269,7 +1271,12 @@ async function phase3Scenario(browser) {
   await sleep(300);
   check('Manette : B referme le sac', !(await pPage.evaluate(() => window.__game.bag().open)));
   await injure(pPage, 'torse', 'coupure', true);
-  await pPage.evaluate(() => (window.__game.sim().vitals.health = 0.3));
+  // Sans digestion en cours (la nourriture compenserait le saignement).
+  await pPage.evaluate(() => {
+    const v = window.__game.sim().vitals;
+    v.digest = [];
+    v.health = 0.3;
+  });
   await waitFor(pPage, () => window.__game.body().vitals.state === 'critique', null, 5000);
   await press(2, 2600);
   await sleep(300);

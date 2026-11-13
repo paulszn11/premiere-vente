@@ -54,6 +54,8 @@ body {
 
 .screen.overlay {
   background: rgba(5, 8, 7, 0.6);
+  /* Au-dessus du sac, de l'écran « à terre » et des messages. */
+  z-index: 8;
 }
 
 .panel {
@@ -372,7 +374,8 @@ input[type='range'] {
 
 #message {
   z-index: 6;
-  position: absolute;
+  position: fixed;
+  pointer-events: none;
   left: 50%;
   top: max(16px, env(safe-area-inset-top));
   transform: translateX(-50%);

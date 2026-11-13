@@ -21,17 +21,10 @@
       <div id="crosshair" aria-hidden="true"></div>
       <div id="click-hint" hidden>Cliquez dans le jeu pour jouer</div>
       <div id="prompt" hidden></div>
-      <div id="message" role="status" hidden></div>
       <div id="gesture" hidden><span class="label"></span><div class="bar"><span></span></div></div>
       <div id="status">
         <div class="bar stamina" hidden><span></span><i class="cap"></i></div>
         <div class="bar breath" hidden><span></span></div>
-      </div>
-      <div id="down-screen" hidden>
-        <p class="title"></p>
-        <p class="detail"></p>
-        <button type="button" id="btn-give-up" hidden>Abandonner</button>
-        <button type="button" id="btn-wake" hidden>Se réveiller</button>
       </div>
       <pre id="perf" hidden></pre>
     </div>
@@ -49,6 +42,15 @@
       <button type="button" class="tbtn" data-touch="sprint">Courir</button>
       <button type="button" class="tbtn big" data-touch="jump">Sauter</button>
     </div>
+
+    <!-- Hors de #hud : un élément « fixed » crée sa propre couche, il faut ces deux-là au-dessus des commandes tactiles. -->
+    <div id="down-screen" hidden>
+      <p class="title"></p>
+      <p class="detail"></p>
+      <button type="button" id="btn-give-up" hidden>Abandonner</button>
+      <button type="button" id="btn-wake" hidden>Se réveiller</button>
+    </div>
+    <div id="message" role="status" hidden></div>
 
     <section id="bag-view" hidden>
       <div class="bag-pick" aria-hidden="true"></div>

@@ -378,6 +378,10 @@ async function boot(): Promise<void> {
     touch.show(false);
     $('#hud').hidden = true;
     $('#perf').hidden = true;
+    $('#down-screen').hidden = true;
+    $('#message').hidden = true;
+    canvas.style.filter = '';
+    lastBlur = '';
     refreshHome();
     show('home');
     updateRotateHint();

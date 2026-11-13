@@ -106,13 +106,13 @@ Il y aura des joueurs sur ordinateur, sur téléphone et sur tablette. Tout ce q
 | Nourriture | Fruit du baobab : +20 en 40 s. Figue : +5 en 12 s. Muhacha : +7 en 15 s. Au plus 3 aliments en digestion à la fois. Manger est un geste de 1,5 à 3 s |
 | Énergie | L'effort la consomme. Elle fixe l'endurance maximale : la partie hachurée de la barre montre ce qui n'est plus disponible. On la retrouve en s'asseyant (R) ou en dormant |
 | Fatigue | Elle monte en environ 3 h de jeu. Au-delà de 50, l'énergie maximale baisse ; au-delà de 85, la vision se trouble ; au-delà de 90, viennent des micro-sommeils. À 100, on s'endort sur place |
-| Sommeil | Maintenir R. Cela dure environ 3 minutes réelles, sans accélérer le temps. Bouger réveille. Après une minute de sommeil, l'endroit devient le point de réapparition |
+| Sommeil | Maintenir R (au doigt : « Sac », onglet « Corps », « Dormir »). Cela dure environ 3 minutes réelles, sans accélérer le temps. Bouger réveille (au doigt : bouton « Se réveiller »). Après une minute de sommeil, l'endroit devient le point de réapparition |
 | Blessures | Six zones du corps. Contusions, entorses, fractures, coupures légères ou profondes, commotions. Les chutes graves en provoquent selon la hauteur, le sol, la posture et les blessures déjà présentes |
 | Effets | Jambe cassée : on boite, sans courir, sauter ni grimper, et marcher sans attelle provoque un choc puis une perte de connaissance. Bras cassé : pas d'escalade, pas d'objet à deux mains, pas de lancer. Entorse : on boite un peu. La douleur et la fièvre réduisent l'endurance |
 | Soins | Chiffons, en déchirant sa chemise ou son pantalon : un chiffon arrête un saignement ou maintient une entorse. Attelle : 2 bâtons et 2 chiffons. Aloès : désinfecte et calme la douleur. Chaque soin est un geste de 3 à 8 s, que bouger interrompt |
 | Infections | Une plaie bandée sans être désinfectée peut s'infecter quelques minutes plus tard : fièvre, perte de santé et d'énergie. L'aloès la guérit |
 | Examen du corps | Silhouette colorée (saigne, fracture, entorse, contusion, infectée, soignée), jauges de santé, d'énergie et de fatigue, niveau de douleur, détail de chaque zone et soins possibles avec le matériel disponible |
-| Perte de connaissance | À 0 de santé sans saignement : réveil seul au bout de 30 s, avec 10 de santé. Avec un saignement : état critique, 90 s avant la mort, avec un bouton « Abandonner ». Inconscient dans l'eau : noyade |
+| Perte de connaissance | À 0 de santé sans saignement : réveil seul au bout de 30 s, avec 10 de santé. Avec un saignement : état critique, 90 s avant la mort. On peut abandonner avec un bouton, ou en maintenant « Prendre » 2 s au clavier et à la manette. Inconscient dans l'eau : noyade |
 | Secours (pour la phase 8) | Un autre joueur pourra bander la plaie et relever le blessé, ou traîner son corps. La règle est écrite et testée ; elle sera branchée avec le multijoueur |
 | Mort | Chute mortelle, noyade, hémorragie, infection ou abandon. On voit son corps de l'extérieur, puis on se réveille 5 s plus tard |
 | Corps | Il reste avec le sac et les poches jusqu'à ce qu'il soit vidé. Il est sauvegardé ; on peut le fouiller, tout reprendre, remettre son sac sur son dos, ou le traîner |
@@ -137,7 +137,7 @@ Sur petit écran, le sac a deux onglets, « Sac » et « Corps ».
 | Suite | Résultat |
 | --- | --- |
 | `npm test` (Vitest) : inventaire (poches, sac, volume, pierres, vêtements, lecture des sauvegardes), objets du monde, énergie, fatigue, sommeil, nourriture, saignements, caillots, fractures, attelles, choc, bras cassé, infections, chutes, perte de connaissance, état critique, secours, noyade ; simulation complète : ramasser, ranger, poches, déchirer, charge, manger, bander, attelle, repos, sommeil, mort, corps, réapparition, fouille, corps vidé qui disparaît, chute et noyade mortelles, sauvegarde | **{UNIT} / {UNIT}** (dont 50 pour la phase 3) |
-| `npm run test:e2e -- --webgpu` (Chromium) : phases 1 et 2, et la phase 3 sur ordinateur, téléphone et manette (33 vérifications) | **{E2E} / {E2E}** |
+| `npm run test:e2e -- --webgpu` (Chromium) : phases 1 et 2, et la phase 3 sur ordinateur, téléphone et manette (35 vérifications) | **{E2E} / {E2E}** |
 
 Le scénario « phase 3 » joue dans le navigateur :
 - ramasser une figue, un bâton et un fruit ;
@@ -148,8 +148,8 @@ Le scénario « phase 3 » joue dans le navigateur :
 - subir une chute de 16 m ;
 - atteindre l'état critique, abandonner, mourir, réapparaître, retrouver son corps et tout reprendre ;
 - quitter puis recharger la partie ;
-- au doigt : « Sac », onglets, « Utiliser » ;
-- à la manette : Y, stick, A, B.
+- au doigt : « Sac », onglets, « Utiliser », « Se réveiller » ;
+- à la manette : Y, stick, A, B, et maintenir X pour abandonner.
 
 ### Problèmes trouvés par les tests et corrigés
 
@@ -158,6 +158,8 @@ Le scénario « phase 3 » joue dans le navigateur :
 - **Le curseur restait capturé quand on était à terre :** impossible de cliquer « Abandonner ». Il est libéré dès qu'on perd connaissance.
 - **À la manette, le stick sautait parfois deux cases** et X déclenchait deux actions. La répétition est plus lente au départ, et chaque bouton a un seul rôle.
 - **Fermer le sac à la manette pendant une image provoquait une erreur.** C'est corrigé.
+- **Au doigt, les écrans « à terre » et « sommeil » étaient sous la couche des commandes tactiles :** impossible de toucher « Abandonner » ou « Se réveiller ». Ils sont maintenant au-dessus, et l'écran de sommeil a un bouton « Se réveiller », car il couvre le joystick.
+- **À la manette, on ne pouvait pas abandonner.** Il suffit maintenant de maintenir X (ou E au clavier) 2 secondes.
 - **Vue à la mort :** la caméra se trouvait dans le corps. Elle se place maintenant au-dessus.
 - **Sur téléphone, des étiquettes du sac restaient affichées dans l'onglet « Corps ».** C'est corrigé.
 - **Les tests navigateur laissaient un serveur ouvert** après chaque exécution. Il est maintenant bien arrêté.
