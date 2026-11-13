@@ -8,7 +8,7 @@ Mis à jour le 13/11/2026, version 0.4.0.
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).
-- **Appareil réel** : à vérifier sur un vrai téléphone, une tablette et un ordinateur. Rapport reçu : iPhone, phase 1, 60 images/s à tous les niveaux.
+- **Appareil réel** : à vérifier sur un vrai téléphone, une tablette et un ordinateur. Rapports reçus : iPhone (phase 1), 60 images/s à tous les niveaux ; ordinateur tactile Linux à puce Mali-G57 (version 0.4.0, écran 90 Hz), 90 images/s à tous les niveaux, Ultra compris (1 % bas ≥ 77, calcul ≤ 3 ms).
 
 ## Terminé — phase 1
 
