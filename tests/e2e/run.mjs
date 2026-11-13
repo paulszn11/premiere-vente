@@ -1246,7 +1246,9 @@ async function phase3Scenario(browser) {
   await pPage.goto(BASE);
   await startGame(pPage);
   await settle(pPage);
-  const press = async (i, ms = 150) => {
+  // Appui de 300 ms : sur une machine lente (rendu logiciel, moins de 10 images/s), un appui plus bref
+  // peut tomber entre deux images et passer inaperçu.
+  const press = async (i, ms = 300) => {
     await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
     await sleep(ms);
     await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
@@ -1263,11 +1265,13 @@ async function phase3Scenario(browser) {
   let pb = await pPage.evaluate(() => window.__game.bag());
   const opened = pb.open && pb.selected?.zone === 'poche' && pb.selected.index === 0;
   await pPage.evaluate(() => (window.__pad.axes = [1, 0, 0, 0]));
-  await sleep(230);
+  await sleep(175);
+  const midStick = await pPage.evaluate(() => ({ move: window.__game.input().move, sel: window.__game.bag().selected, fps: Math.round(window.__game.session().fps) }));
+  await sleep(175);
   await pPage.evaluate(() => (window.__pad.axes = [0, 0, 0, 0]));
   await sleep(300);
   pb = await pPage.evaluate(() => window.__game.bag());
-  check('Manette : Y ouvre le sac, le stick passe à la poche voisine', opened && pb.selected?.zone === 'poche' && pb.selected.index === 1, JSON.stringify(pb.selected));
+  check('Manette : Y ouvre le sac, le stick passe à la poche voisine', opened && pb.selected?.zone === 'poche' && pb.selected.index === 1, `${JSON.stringify(pb.selected)} · onglet ${pb.tab} · ouvert ${opened} · pendant : ${JSON.stringify(midStick)}`);
   await press(0);
   await waitFor(pPage, () => window.__game.body().vitals.digest.length === 1, null, 10000).catch(() => undefined);
   await sleep(200);
@@ -1731,7 +1735,9 @@ async function phase4Scenario(browser) {
   await pPage.goto(BASE);
   await startGame(pPage);
   await settle(pPage);
-  const press = async (i, ms = 150) => {
+  // Appui de 300 ms : sur une machine lente (rendu logiciel, moins de 10 images/s), un appui plus bref
+  // peut tomber entre deux images et passer inaperçu.
+  const press = async (i, ms = 300) => {
     await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
     await sleep(ms);
     await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
@@ -2060,7 +2066,9 @@ async function phase5Scenario(browser) {
   await pPage.goto(BASE);
   await startGame(pPage);
   await settle(pPage);
-  const press = async (i, ms = 150) => {
+  // Appui de 300 ms : sur une machine lente (rendu logiciel, moins de 10 images/s), un appui plus bref
+  // peut tomber entre deux images et passer inaperçu.
+  const press = async (i, ms = 300) => {
     await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
     await sleep(ms);
     await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
