@@ -3,7 +3,8 @@
 // manette. Aucun glisser-déposer n'est nécessaire : on touche un objet, puis une action.
 
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
-import type { PlayerAction } from '../../shared/actions';
+import type { BuildRef, PlayerAction } from '../../shared/actions';
+import { INSTALL_PLANS, type Need, PIECE_PLANS, PLANS, PLAN_IDS, type PlanId, maxHp, needLabel, pieceTransform, repairNeeds, stepsOf } from '../../shared/building';
 import { RECIPES, RECIPE_IDS, canDismantle, conditionOf, experimentHint, improveOptions, repairOptions, skillLevel } from '../../shared/crafting';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
 import { ITEMS, type ItemId, itemName } from '../../shared/items';
@@ -30,6 +31,8 @@ export interface BagViewDeps {
   input: InputManager;
   onClose: () => void;
   onMessage: (text: string, tone: Tone) => void;
+  /** Tracer un plan (mode construction). */
+  onBuild: (plan: PlanId) => void;
 }
 
 interface ActionButton {
@@ -38,9 +41,9 @@ interface ActionButton {
   disabled?: boolean;
 }
 
-type Tab = 'sac' | 'corps' | 'fabriquer' | 'carnet';
-const TABS: Tab[] = ['sac', 'corps', 'fabriquer', 'carnet'];
-type ListKey = 'item' | 'body' | 'zone' | 'bench' | 'craft';
+type Tab = 'sac' | 'corps' | 'fabriquer' | 'construire' | 'carnet';
+const TABS: Tab[] = ['sac', 'corps', 'fabriquer', 'construire', 'carnet'];
+type ListKey = 'item' | 'body' | 'zone' | 'bench' | 'craft' | 'plans';
 
 const fmtKg = (kg: number): string => `${kg < 10 ? kg.toFixed(1).replace('.', ',') : Math.round(kg)} kg`;
 const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
@@ -70,15 +73,19 @@ export class BagView {
   private readonly bag: BagScene;
   private sim: LocalSimulation | null = null;
   private otherProp: string | null = null;
+  /** Pièce de construction ou chantier ouvert (E dessus). */
+  private otherBuild: BuildRef | null = null;
   private selected: BagSlot | null = { zone: 'poche', index: 0 };
   private zone: Zone | null = null;
   private tab: Tab = 'sac';
   private navCooldown = 0;
+  /** Plan choisi à la manette dans l'onglet « Construire ». */
+  private planIndex = 0;
   private navHeld = false;
   private buttons: ActionButton[] = [];
   /** Listes de boutons à jour ; les boutons affichés ne sont recréés que si les libellés changent. */
-  private readonly lists: Record<ListKey, ActionButton[]> = { item: [], body: [], zone: [], bench: [], craft: [] };
-  private readonly listSig: Record<ListKey, string> = { item: '', body: '', zone: '', bench: '', craft: '' };
+  private readonly lists: Record<ListKey, ActionButton[]> = { item: [], body: [], zone: [], bench: [], craft: [], plans: [] };
+  private readonly listSig: Record<ListKey, string> = { item: '', body: '', zone: '', bench: '', craft: '', plans: '' };
   private zoneLines!: HTMLElement;
   private zoneButtons_!: HTMLElement;
   private readonly el: Record<string, HTMLElement>;
@@ -103,6 +110,8 @@ export class BagView {
       craftActions: q('.craft-actions'),
       craftHint: q('.craft-hint'),
       carnet: q('.carnet'),
+      plans: q('.plans'),
+      buildInfo: q('.build-info'),
     };
     this.badges = q('.bag-badges');
     this.zoneLines = document.createElement('div');
@@ -133,21 +142,25 @@ export class BagView {
   }
 
   /** Ouvre le sac (et, si donné, le contenu d'un corps ou d'un sac posé à fouiller). */
-  open(sim: LocalSimulation, otherProp: string | null = null): void {
+  open(sim: LocalSimulation, otherProp: string | null = null, build: BuildRef | null = null): void {
     this.sim = sim;
-    this.otherProp = otherProp;
+    // L'établi ouvre directement la fabrication.
+    const etabli = otherProp ? sim.props.defOf(otherProp)?.kind === 'etabli' : false;
+    this.otherProp = etabli ? null : otherProp;
+    this.otherBuild = build;
     this.open_ = true;
     this.deps.root.hidden = false;
-    this.selected = otherProp ? { zone: 'autre-poche', index: 0 } : { zone: 'poche', index: 0 };
-    if (otherProp && !sim.props.container(otherProp)?.pockets.length) this.selected = { zone: 'autre-sac', index: 0 };
+    this.selected = this.otherProp ? { zone: 'autre-poche', index: 0 } : { zone: 'poche', index: 0 };
+    if (this.otherProp && !sim.props.container(this.otherProp)?.pockets.length) this.selected = { zone: 'autre-sac', index: 0 };
     this.bag.setSelected(this.selected);
-    this.setTab('sac');
+    this.setTab(etabli ? 'fabriquer' : 'sac');
   }
 
   close(): void {
     this.open_ = false;
     this.sim = null;
     this.otherProp = null;
+    this.otherBuild = null;
     this.deps.root.hidden = true;
     this.badges.textContent = '';
   }
@@ -168,6 +181,36 @@ export class BagView {
     if (!sim) return;
     const r = sim.act(a);
     if (r.message) this.deps.onMessage(r.message, r.ok ? 'info' : 'alerte');
+  }
+
+  /** Bas fourneau ouvert (à portée). */
+  private otherFurnace() {
+    const sim = this.sim;
+    if (!sim || !this.otherProp) return null;
+    const def = sim.props.defOf(this.otherProp);
+    const pos = sim.props.position(this.otherProp);
+    if (!def?.furnace || !pos) return null;
+    if (Math.hypot(pos.x - sim.state.x, pos.z - sim.state.z) > 3.4) return null;
+    return { def, f: def.furnace };
+  }
+
+  /** Pièce ou chantier ouvert (à portée), avec ce qu'on en sait. */
+  private openedBuild() {
+    const sim = this.sim;
+    const b = this.otherBuild;
+    if (!sim || !b) return null;
+    const st = sim.state;
+    if (b.kind === 'site') {
+      const site = sim.build.site(b.id);
+      if (!site || Math.hypot(site.x - st.x, site.z - st.z) > 4.5) return null;
+      return { kind: 'site' as const, plan: site.plan, steps: PLANS[site.plan].steps, step: site.step, piece: null };
+    }
+    const s = sim.build.structure(b.s);
+    const p = s?.pieces.find((q) => q.id === b.p);
+    if (!s || !p) return null;
+    const t = pieceTransform(s, p.slot);
+    if (Math.hypot(t.x - st.x, t.z - st.z) > 4.5) return null;
+    return { kind: 'piece' as const, plan: p.plan, steps: stepsOf(p.plan, p.stilts), step: p.step, piece: p };
   }
 
   /** Foyer ouvert (à portée). */
@@ -200,7 +243,8 @@ export class BagView {
       this.deps.onClose();
       return;
     }
-    if (this.otherProp && !this.otherContainer() && !this.otherFire()) {
+    if (this.otherBuild && !this.openedBuild()) this.otherBuild = null;
+    if (this.otherProp && !this.otherContainer() && !this.otherFire() && !this.otherFurnace()) {
       this.otherProp = null;
       if (this.selected?.zone.startsWith('autre')) this.select({ zone: 'poche', index: 0 });
     }
@@ -235,6 +279,12 @@ export class BagView {
     if (Math.hypot(mx, my) < 0.55) {
       this.navCooldown = 0;
       this.navHeld = false;
+    } else if (this.navCooldown <= 0 && this.tab === 'construire' && Math.abs(my) > Math.abs(mx)) {
+      // Onglet « Construire » : le stick choisit un plan.
+      const n = this.knownPlans().length;
+      if (n) this.planIndex = (this.planIndex + (my > 0 ? -1 : 1) + n) % n;
+      this.navCooldown = this.navHeld ? 0.16 : 0.4;
+      this.navHeld = true;
     } else if (this.navCooldown <= 0 && this.el.pick!.getClientRects().length > 0) {
       // Le stick choisit une case tant que le sac est à l'écran (sur grand écran, aussi pendant la fabrication).
       const horizontal = Math.abs(mx) > Math.abs(my);
@@ -247,7 +297,7 @@ export class BagView {
     // Onglet « Fabriquer » : A fabrique (étape suivante), X pose l'objet choisi sur le plan de travail (ou le reprend).
     const crafting = this.tab === 'fabriquer';
     const first = input.codePressed('Pad:0') || input.codePressed('Enter') || (input.pressed('interact') && !input.codePressed('Pad:2'));
-    const a = crafting ? this.lists.craft[0] : this.buttons[0];
+    const a = crafting ? this.lists.craft[0] : this.tab === 'construire' ? this.lists.plans[this.planIndex] : this.buttons[0];
     if (first && a && !a.disabled) a.run();
     if (!this.open_) return;
     const x = crafting ? this.buttons.find((b) => b.label === 'Poser sur le plan de travail' || b.label === 'Reprendre') : this.buttons[1];
@@ -299,6 +349,7 @@ export class BagView {
   /** État d'un outil : « neuf (118/120), qualité bonne, durci au feu ». */
   private toolText(st: ItemStack | null): string {
     if (!st) return '';
+    if (st.item === 'torche') return st.d !== undefined ? `brûlera encore ${Math.max(1, Math.round(st.d / 60))} min` : '';
     const cond = conditionOf(st);
     const parts: string[] = [];
     if (cond) parts.push(`${cond} (${st.d}/${st.dm})`);
@@ -366,9 +417,9 @@ export class BagView {
         out.push({ label: 'Prendre en main', run: () => this.act({ type: 'sortir', from }) });
         if (s.zone === 'poche' && sim.inventory.bag) out.push({ label: 'Mettre dans le sac', run: () => this.act({ type: 'deplacer', from, to: 'sac' }) });
         if (s.zone === 'sac' && ITEMS[item].pocket) out.push({ label: 'Mettre en poche', run: () => this.act({ type: 'deplacer', from, to: 'poche' }) });
-        if (other?.def.kind === 'sac' && other.c.bag && this.otherProp) {
+        if ((other?.def.kind === 'sac' || other?.def.kind === 'coffre') && other.c.bag && this.otherProp) {
           const prop = this.otherProp;
-          out.push({ label: 'Ranger dans le sac posé', run: () => this.act({ type: 'deposer_dans', prop, from }) });
+          out.push({ label: other.def.kind === 'coffre' ? 'Ranger dans le coffre' : 'Ranger dans le sac posé', run: () => this.act({ type: 'deposer_dans', prop, from }) });
         }
         out.push({ label: 'Poser au sol', run: () => this.act({ type: 'poser', from }) });
         toolButtons(from);
@@ -376,6 +427,31 @@ export class BagView {
         const prop = this.otherProp;
         const from: Slot = { zone: s.zone === 'autre-poche' ? 'poche' : 'sac', index: s.index };
         out.push({ label: 'Prendre', run: () => this.act({ type: 'prendre_dans', prop, from }) });
+      }
+    }
+    const furnace = this.otherFurnace();
+    if (furnace && this.otherProp) {
+      const prop = this.otherProp;
+      const f = furnace.f;
+      out.push({ label: `Charger du minerai (${f.ore}/4)`, disabled: f.ore >= 4 || sim.available('minerai_fer') < 1, run: () => this.act({ type: 'fourneau', prop, op: 'minerai' }) });
+      out.push({ label: 'Ajouter du bois', run: () => this.act({ type: 'fourneau', prop, op: 'bois' }) });
+      if (!f.lit) out.push({ label: 'Allumer le fourneau', disabled: f.fuel <= 0, run: () => this.act({ type: 'allumer', prop }) });
+      out.push({ label: 'Actionner le soufflet', disabled: !f.lit || f.ore < 2, run: () => this.act({ type: 'fourneau', prop, op: 'souffler' }) });
+      if (f.blooms > 0) out.push({ label: `Retirer la loupe de fer (${f.blooms})`, run: () => this.act({ type: 'fourneau', prop, op: 'loupe' }) });
+    }
+    const ob = this.openedBuild();
+    if (ob && this.otherBuild) {
+      const ref = this.otherBuild;
+      if (ob.step < ob.steps.length) {
+        out.push({ label: `Faire : ${ob.steps[ob.step]!.label.toLowerCase()}`, run: () => this.act({ type: 'chantier', target: ref }) });
+        out.push({ label: 'Abandonner le chantier', run: () => this.act({ type: 'annuler_chantier', target: ref }) });
+      } else if (ob.piece && ref.kind === 'piece') {
+        const p = ob.piece;
+        if (PLANS[p.plan].piece === 'porte') out.push({ label: p.open ? 'Fermer la porte' : 'Ouvrir la porte', run: () => this.act({ type: 'piece', s: ref.s, p: ref.p, op: 'porte' }) });
+        if (p.burning > 0) out.push({ label: 'Éteindre (pot d’eau)', run: () => this.act({ type: 'piece', s: ref.s, p: ref.p, op: 'eteindre' }) });
+        if (p.hp < maxHp(p)) out.push({ label: `Réparer (${repairNeeds(p).map(needLabel).join(', ')})`, run: () => this.act({ type: 'piece', s: ref.s, p: ref.p, op: 'reparer' }) });
+        if (p.plan === 'mur_clayonnage' && p.mat === 'bois') out.push({ label: 'Enduire de torchis (3 boules d’argile)', run: () => this.act({ type: 'piece', s: ref.s, p: ref.p, op: 'torchis' }) });
+        out.push({ label: 'Démonter', run: () => this.act({ type: 'piece', s: ref.s, p: ref.p, op: 'demonter' }) });
       }
     }
     if (fire && this.otherProp) {
@@ -482,14 +558,25 @@ export class BagView {
     let title = inv.bag
       ? `Sac : ${vol.toFixed(1).replace('.', ',')} / ${BAG_CAPACITY_L} L · charge portée ${fmtKg(load)}${load > 25 ? ' (trop lourd pour courir)' : ''}`
       : `Pas de sac · ${POCKET_COUNT} poches · charge ${fmtKg(load)}`;
-    if (other) title += other.def.kind === 'corps' ? ' · vous fouillez un corps' : ` · sac posé (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
+    if (other) title += other.def.kind === 'corps' ? ' · vous fouillez un corps' : ` · ${other.def.kind === 'coffre' ? 'coffre' : 'sac posé'} (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
+    const furnace = this.otherFurnace();
+    if (furnace) {
+      const f = furnace.f;
+      title = `Bas fourneau ${f.lit ? `allumé (${Math.ceil(f.fuel / 60)} min de bois, chaleur ${Math.round(f.heat)} %)` : `éteint (${Math.ceil(f.fuel / 60)} min de bois)`} · minerai ${f.ore}/4 · fer ${Math.round((f.work / 24) * 100)} %${f.blooms ? ` · ${f.blooms} loupe prête` : ''} · ${title}`;
+    }
+    const ob = this.openedBuild();
+    if (ob) {
+      const label = PLANS[ob.plan].label;
+      if (ob.step < ob.steps.length) title = `Chantier : ${label.toLowerCase()} · étape ${ob.step + 1}/${ob.steps.length} (${ob.steps[ob.step]!.label.toLowerCase()} : ${ob.steps[ob.step]!.needs.map(needLabel).join(', ') || 'rien à apporter'}) · ${title}`;
+      else if (ob.piece) title = `${label} · stabilité ${Math.round(ob.piece.support * 100)} % · état ${ob.piece.hp}/${maxHp(ob.piece)}${ob.piece.mat === 'torchis' ? ' · torchis' : ''}${ob.piece.iron ? ' · fixé au fer' : ''}${ob.piece.burning > 0 ? ' · EN FEU' : ''} · ${title}`;
+    }
     const fire = this.otherFire();
     if (fire) {
       const f = fire.fire;
       let pot = '';
       if (f.pot?.item === 'pot_cru') pot = ` · pot en cuisson (${Math.min(100, Math.round((f.cook / 90) * 100))} %)`;
       else if (f.pot?.item === 'pot') pot = f.pot.w === 2 ? ' · l’eau bout' : f.pot.w === 1 ? ` · l’eau chauffe (${Math.min(100, Math.round((f.cook / 30) * 100))} %)` : ' · pot vide sur le feu';
-      title = `Foyer ${f.lit ? `allumé (${Math.ceil(f.fuel / 60)} min de bois)` : 'éteint'}${pot} · ${title}`;
+      title = `${fire.def.kind === 'forge' ? 'Forge' : 'Foyer'} ${f.lit ? `allumé${fire.def.kind === 'forge' ? 'e' : ''} (${Math.ceil(f.fuel / 60)} min de bois)` : `éteint${fire.def.kind === 'forge' ? 'e' : ''}`}${pot} · ${title}`;
     }
     this.setText(this.el.title!, title);
 
@@ -544,6 +631,41 @@ export class BagView {
     }
     this.renderButtons(this.el.bodyActions!, 'body', this.bodyButtons());
     this.refreshCraft();
+    this.refreshBuild();
+  }
+
+  /** Plans connus, dans l'ordre : pièces puis installations. */
+  private knownPlans(): PlanId[] {
+    const k = this.sim!.knowledge.plans;
+    return [...PIECE_PLANS, ...INSTALL_PLANS].filter((id) => k.includes(id));
+  }
+
+  /** Onglet « Construire » : les plans connus, leurs matériaux, et un bouton pour tracer chacun. */
+  private refreshBuild(): void {
+    const plans = this.knownPlans();
+    if (this.planIndex >= plans.length) this.planIndex = Math.max(0, plans.length - 1);
+    const total = (id: PlanId): Need[] => {
+      const m = new Map<ItemId, number>();
+      for (const st of PLANS[id].steps) for (const [item, n] of st.needs) m.set(item, (m.get(item) ?? 0) + n);
+      return [...m];
+    };
+    const tools = (id: PlanId) => [...new Set(PLANS[id].steps.map((st) => st.tool).filter((t) => t !== null))].map((t) => TOOL_NEEDS[t!]);
+    this.renderButtons(
+      this.el.plans!,
+      'plans',
+      plans.map((id, i) => ({
+        label: `${i === this.planIndex && this.deps.input.lastDevice === 'gamepad' ? '▶ ' : ''}Tracer : ${PLANS[id].label.toLowerCase()} (${total(id).map(needLabel).join(', ') || 'rien à apporter'})`,
+        run: () => this.deps.onBuild(id),
+      })),
+    );
+    const unknown = PLAN_IDS.length - plans.length;
+    const withTools = plans.filter((id) => tools(id).length);
+    this.setHtml(
+      this.el.buildInfo!,
+      `<p>Tracez un plan, puis apportez les matériaux (sur vous ou posés à côté du chantier) et faites chaque étape avec « Utiliser » en le visant. Les pièces s’accrochent les unes aux autres sur une grille de 2 m ; un plancher se pose sur pilotis au-dessus d’une pente ou de l’eau.</p>` +
+        (withTools.length ? `<p>Outils : ${withTools.map((id) => `${PLANS[id].label.toLowerCase()} (${tools(id).join(', ')})`).join(' ; ')}.</p>` : '') +
+        (unknown > 0 ? `<p class="note">${unknown} plan${unknown > 1 ? 's' : ''} encore inconnu${unknown > 1 ? 's' : ''} : de nouveaux matériaux donneront des idées.</p>` : ''),
+    );
   }
 
   /** Onglets « Fabriquer » (plan de travail, étapes) et « Carnet » (recettes). */
@@ -597,6 +719,7 @@ export class BagView {
       this.el.carnet!,
       `<p>Fabrication : niveau ${lvl} (${Math.round(k.xp)} points). Plus le niveau monte, meilleurs sont les objets et plus les gestes sont rapides.</p>` +
         `<h4>Recettes connues</h4><ul>${known.join('')}</ul>` +
+        `<h4>Plans de construction</h4><ul>${this.knownPlans().map((id) => `<li><strong>${PLANS[id].label}</strong> : ${PLANS[id].description}</li>`).join('')}</ul>` +
         (hinted.length ? `<h4>Idées</h4><ul>${hinted.join('')}</ul>` : '') +
         (unknown > 0 ? `<p class="note">${unknown} recette${unknown > 1 ? 's' : ''} encore inconnue${unknown > 1 ? 's' : ''} : ramassez de nouveaux matériaux, expérimentez sur le plan de travail.</p>` : ''),
     );
@@ -611,7 +734,8 @@ export class BagView {
       other: this.otherProp,
       cells: this.bag.cells.map((c) => ({ slot: c.slot, kind: c.kind, count: c.count, ...this.bag.toScreen(c.x, c.z) })),
       actions: this.buttons.map((b) => b.label),
-      all: [...this.lists.item, ...this.lists.zone, ...this.lists.body, ...this.lists.bench, ...this.lists.craft].map((b) => (b.disabled ? `(${b.label})` : b.label)),
+      all: [...this.lists.item, ...this.lists.zone, ...this.lists.body, ...this.lists.bench, ...this.lists.craft, ...this.lists.plans].map((b) => (b.disabled ? `(${b.label})` : b.label)),
+      build: this.otherBuild,
     };
   }
 
@@ -622,7 +746,7 @@ export class BagView {
 
   /** Clique une action par son libellé (tests). */
   run(label: string): boolean {
-    const b = [...this.lists.item, ...this.lists.zone, ...this.lists.body, ...this.lists.bench, ...this.lists.craft].find((x) => x.label === label || (label.endsWith('…') && x.label.startsWith(label.slice(0, -1))));
+    const b = [...this.lists.item, ...this.lists.zone, ...this.lists.body, ...this.lists.bench, ...this.lists.craft, ...this.lists.plans].find((x) => x.label === label || (label.endsWith('…') && x.label.startsWith(label.slice(0, -1))));
     if (!b || b.disabled) return false;
     b.run();
     return true;

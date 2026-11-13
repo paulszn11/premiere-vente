@@ -11,9 +11,9 @@ import type { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
 import type { Scene } from '@babylonjs/core/scene';
 import type { PropKind } from '../../shared/props';
 
-type Part = [VertexData, number, number, number];
+export type Part = [VertexData, number, number, number];
 
-function colored(vd: VertexData, r: number, g: number, b: number): VertexData {
+export function colored(vd: VertexData, r: number, g: number, b: number): VertexData {
   const count = vd.positions!.length / 3;
   const colors = new Float32Array(count * 4);
   for (let i = 0; i < count; i++) colors.set([r, g, b, 1], i * 4);
@@ -21,7 +21,7 @@ function colored(vd: VertexData, r: number, g: number, b: number): VertexData {
   return vd;
 }
 
-function box(w: number, h: number, d: number, x = 0, y = 0, z = 0, rotY = 0, rotZ = 0): VertexData {
+export function box(w: number, h: number, d: number, x = 0, y = 0, z = 0, rotY = 0, rotZ = 0): VertexData {
   const vd = CreateBoxVertexData({ width: w, height: h, depth: d });
   vd.transform(Matrix.RotationYawPitchRoll(rotY, 0, rotZ).multiply(Matrix.Translation(x, y, z)));
   return vd;
@@ -34,7 +34,7 @@ function ball(dx: number, dy: number, dz: number, segments: number, x = 0, y = 0
 }
 
 /** Cylindre couché le long de l'axe X. */
-function rod(length: number, diameter: number, tess: number, x = 0, y = 0, z = 0, rotY = 0): VertexData {
+export function rod(length: number, diameter: number, tess: number, x = 0, y = 0, z = 0, rotY = 0): VertexData {
   const vd = CreateCylinderVertexData({ height: length, diameter, tessellation: tess });
   vd.transform(Matrix.RotationZ(Math.PI / 2).multiply(Matrix.RotationY(rotY)).multiply(Matrix.Translation(x, y, z)));
   return vd;
@@ -51,7 +51,7 @@ const SKIN: [number, number, number] = [0.42, 0.29, 0.21];
 const CLOTH: [number, number, number] = [0.27, 0.32, 0.4];
 
 /** Cylindre debout. */
-function can(height: number, diameter: number, tess: number, y = 0, top = diameter): VertexData {
+export function can(height: number, diameter: number, tess: number, y = 0, top = diameter): VertexData {
   const vd = CreateCylinderVertexData({ height, diameterTop: top, diameterBottom: diameter, tessellation: tess });
   vd.transform(Matrix.Translation(0, y, 0));
   return vd;
@@ -276,6 +276,18 @@ export function itemParts(kind: PropKind): Part[] {
       return parts;
     }
   }
+}
+
+/** Assemble des pièces colorées en un seul maillage. */
+export function meshFromParts(name: string, parts: Part[], scene: Scene, material: StandardMaterial): Mesh {
+  const [first, ...rest] = parts.map(([vd, r, g, b]) => colored(vd, r, g, b));
+  const merged = rest.length ? first!.merge(rest, true) : first!;
+  const mesh = new Mesh(name, scene);
+  merged.applyToMesh(mesh, false);
+  mesh.material = material;
+  mesh.isPickable = false;
+  mesh.hasVertexAlpha = false;
+  return mesh;
 }
 
 /** Construit le maillage d'un objet (à l'échelle réelle). */

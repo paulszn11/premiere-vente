@@ -1378,7 +1378,7 @@ async function phase4Scenario(browser) {
   const restStamina = () => page.evaluate(() => (window.__game.sim().state.stamina = window.__game.sim().state.staminaMax));
 
   let c = await craft();
-  check('Départ : 5 recettes connues (fibres, corde, couteau, bâton à fouir, foyer), plan de travail vide', c.knowledge.known.length === 5 && c.bench.length === 0, c.knowledge.known.join(', '));
+  check('Départ : 6 recettes connues (fibres, corde, couteau, bâton à fouir, foyer, torche), plan de travail vide', c.knowledge.known.length === 6 && c.knowledge.known.includes('torche') && c.bench.length === 0, c.knowledge.known.join(', '));
 
   // 1. Tailler le quartz : un galet en main, F maintenu sur le bloc.
   const stoneId = await aimAtNearestStone(page);
@@ -1763,7 +1763,344 @@ async function phase4Scenario(browser) {
   await padCtx.close();
 }
 
-// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,performance,captures,webgpu pour ne lancer que certains scénarios.
+/** Centre d'une pièce dans le monde (même calcul que building.ts). */
+const PIECE_CENTER = `(st, slot, dy) => {
+  const G = 2, H = 2.4;
+  let lx, lz;
+  if (slot.t === 'f' || slot.t === 'r') { lx = (slot.i + 0.5) * G; lz = (slot.j + 0.5) * G; }
+  else if (slot.t === 'c') { lx = slot.i * G; lz = slot.j * G; }
+  else if (slot.d === 'x') { lx = (slot.i + 0.5) * G; lz = slot.j * G; }
+  else { lx = slot.i * G; lz = (slot.j + 0.5) * G; }
+  const c = Math.cos(st.yaw), n = Math.sin(st.yaw);
+  return { x: st.x + lx * c + lz * n, y: st.y + slot.k * H + dy, z: st.z - lx * n + lz * c };
+}`;
+
+/** Point du monde à partir de coordonnées locales d'une construction. */
+const LOCAL = `(st, lx, ly, lz) => { const c = Math.cos(st.yaw), n = Math.sin(st.yaw); return { x: st.x + lx * c + lz * n, y: st.y + ly, z: st.z - lx * n + lz * c }; }`;
+
+async function phase5Scenario(browser) {
+  console.log('\n— Phase 5 : construction (ordinateur)');
+  const ctx = await browser.newContext({ viewport: { width: 1000, height: 560 } });
+  await ctx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'phase 5');
+  await page.goto(BASE);
+  await startGame(page);
+  await settle(page);
+  const build = () => page.evaluate(() => window.__game.build());
+  const message = () => page.textContent('#message');
+  // Un coin dégagé : on s'écarte un peu de l'arrivée.
+  await page.evaluate(() => {
+    const s = window.__game.sim().state;
+    window.__game.place(s.x + 14, s.z + 10);
+  });
+  await settle(page);
+  await sleep(500);
+  let b = await build();
+  check('Départ : plans de construction connus (plancher, murs, porte, toit…), aucun chantier', b.plans.includes('sol_rondins') && b.plans.includes('mur_pierre') && !b.plans.includes('forge') && b.structures.length === 0, b.plans.join(', '));
+
+  // 1. Onglet « Construire » : tracer un plancher.
+  await page.keyboard.press('Tab');
+  await waitFor(page, () => window.__game.bag().open, null, 5000);
+  await sleep(300);
+  await page.click('[data-tab="construire"]');
+  await sleep(300);
+  const planButtons = await page.evaluate(() => [...document.querySelectorAll('.plans button')].map((x) => x.textContent));
+  await page.click('.plans button:has-text("plancher en rondins")');
+  await sleep(400);
+  b = await build();
+  const bagClosed = !(await page.evaluate(() => window.__game.bag().open));
+  check('Onglet « Construire » : la liste des plans avec leurs matériaux ; « Tracer » ferme le sac et passe en mode construction', bagClosed && b.mode === 'sol_rondins' && planButtons.some((t) => /4 bûches/.test(t)), planButtons.slice(0, 2).join(' | '));
+  await page.evaluate(() => {
+    const s = window.__game.sim().state;
+    const yaw = window.__game.session().yaw;
+    const x = s.x + Math.sin(yaw) * 3;
+    const z = s.z + Math.cos(yaw) * 3;
+    window.__game.lookAt(x, window.__game.sim().terrain.heightAt(x, z), z);
+  });
+  await sleep(500);
+  b = await build();
+  const promptPlan = await page.textContent('#prompt');
+  writeFileSync(`${OUT}phase5-fantome.png`, await page.screenshot());
+  await page.keyboard.press('KeyR');
+  await sleep(300);
+  const turned = (await build()).turn;
+  check('Le fantôme suit le regard (vert : possible) ; R le tourne', b.preview?.ok === true && /poser le plan/.test(promptPlan ?? '') && turned === 1, `« ${promptPlan} »`);
+  await page.mouse.down();
+  await sleep(120);
+  await page.mouse.up();
+  await sleep(500);
+  b = await build();
+  const placed = b.structures.length === 1 && b.structures[0].pieces[0].step === 0;
+  await page.mouse.down({ button: 'right' });
+  await sleep(120);
+  await page.mouse.up({ button: 'right' });
+  await sleep(300);
+  b = await build();
+  check('Clic gauche : le plan est posé (chantier) ; clic droit : fin du mode construction', placed && b.mode === null, await message());
+
+  // 2. Apporter les matériaux et assembler (F).
+  const st0 = b.structures[0];
+  const floorCenter = await page.evaluate(([fn, st]) => eval(fn)(st, st.pieces[0].slot, 0), [PIECE_CENTER, st0]);
+  // Bûches posées à côté du chantier ; cordes en poche ; une perche et un bâton à fouir pour les pilotis s'il en faut.
+  await page.evaluate(([c]) => {
+    const sim = window.__game.sim();
+    for (let k = 0; k < 4; k++) sim.props.spawnDynamic({ kind: 'buche', x: c.x + 1.8 + k * 0.25, y: c.y + 0.6, z: c.z + 0.6, rot: 0.25, radius: 0.07, length: 0.6 });
+    sim.inventory.pockets[0] = { item: 'corde', count: 2 };
+    sim.inventory.bag.push({ item: 'perche', count: 2 }, { item: 'baton_fouir', count: 1, q: 70, d: 80, dm: 80 });
+  }, [floorCenter]);
+  const nSteps = 2 + (st0.pieces[0].stilts > 0 ? 1 : 0);
+  await sleep(800);
+  const hintMissing = await page.evaluate(([c]) => {
+    window.__game.lookAt(c.x, c.y - 0.1, c.z);
+    return null;
+  }, [floorCenter]);
+  await sleep(400);
+  const promptSite = await page.textContent('#prompt');
+  for (let step = 0; step < nSteps; step++) {
+    await page.keyboard.press('KeyF');
+    await waitFor(page, (n) => window.__game.build().structures[0]?.pieces[0]?.step > n, step, 15000).catch(() => undefined);
+    await sleep(300);
+  }
+  b = await build();
+  const floor = b.structures[0].pieces[0];
+  check(
+    'Bûches posées à côté, cordes en poche : F fait chaque étape (pilotis s’il le faut, rondins, ligature), le plancher est terminé et solide',
+    floor.step === nSteps && floor.hp > 0 && b.colliders > 0,
+    `${st0.pieces[0].stilts} pilotis · indication : « ${promptSite} » · ${await message()}`,
+  );
+  void hintMissing;
+
+  // 3. Une porte sur le bord avant, assemblée à la main.
+  const st1 = b.structures[0];
+  const doorAim = await page.evaluate(([fn, st]) => eval(fn)(st, 1, 1.2, 0), [LOCAL, st1]);
+  const r = await page.evaluate(([aim]) => window.__game.act({ type: 'planifier', plan: 'porte', aim, turn: 0, on: null }), [doorAim]);
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.bag.push({ item: 'perche', count: 2 }, { item: 'baton', count: 6 }, { item: 'couteau', count: 1, q: 70, d: 120, dm: 120 });
+    sim.inventory.pockets[0] = { item: 'corde', count: 1 };
+  });
+  // On se place devant la porte (côté extérieur), face à elle.
+  const outside = await page.evaluate(([fn, st]) => eval(fn)(st, 1, 0, -1.6), [LOCAL, st1]);
+  await page.evaluate(([o]) => window.__game.place(o.x, o.z), [outside]);
+  await sleep(600);
+  await page.evaluate(([a]) => window.__game.lookAt(a.x, a.y, a.z), [doorAim]);
+  await sleep(300);
+  for (let step = 0; step < 3; step++) {
+    await page.keyboard.press('KeyF');
+    await waitFor(page, (n) => (window.__game.build().structures[0]?.pieces.find((p) => p.plan === 'porte')?.step ?? 0) > n, step, 15000).catch(() => undefined);
+    await sleep(300);
+  }
+  b = await build();
+  const door = b.structures[0].pieces.find((p) => p.plan === 'porte');
+  check('Plan de porte tracé sur le bord du plancher, trois étapes (montants, battant, attaches) : porte terminée', r?.ok && door?.step === 3, r?.message ?? '');
+  // La porte fermée arrête le joueur ; E l'ouvre ; on entre.
+  const localZ = () => page.evaluate((st) => {
+    const s = window.__game.sim().state;
+    const c = Math.cos(st.yaw), n = Math.sin(st.yaw);
+    return (s.x - st.x) * n + (s.z - st.z) * c;
+  }, st1);
+  await page.keyboard.down('KeyW');
+  await sleep(1500);
+  await page.keyboard.up('KeyW');
+  const blockedZ = await localZ();
+  await page.evaluate(([a]) => window.__game.lookAt(a.x, a.y, a.z), [doorAim]);
+  await sleep(300);
+  const promptDoor = await page.textContent('#prompt');
+  await page.keyboard.press('KeyE');
+  await sleep(500);
+  const opened = (await build()).structures[0].pieces.find((p) => p.plan === 'porte').open;
+  await page.evaluate((st) => {
+    window.__game.session().yaw = st.yaw;
+    window.__game.session().pitch = 0;
+  }, st1);
+  // Sur une pente, le plancher peut dépasser d'une marche : on saute en avançant, comme un joueur.
+  await page.keyboard.down('KeyW');
+  await sleep(500);
+  await page.keyboard.press('Space');
+  await sleep(1300);
+  await page.keyboard.up('KeyW');
+  const insideZ = await localZ();
+  writeFileSync(`${OUT}phase5-porte.png`, await page.screenshot());
+  check('Porte fermée : on bute dessus ; E l’ouvre ; on entre dans la case', blockedZ < -0.2 && opened && insideZ > 0.5, `bloqué à z=${blockedZ.toFixed(2)} · « ${promptDoor} » · dedans à z=${insideZ.toFixed(2)}`);
+
+  // 4. Le feu : une torche allumée à un foyer enflamme un mur ; on l'éteint depuis le panneau du mur.
+  await page.evaluate((st) => {
+    const sim = window.__game.sim();
+    const c = Math.cos(st.yaw), n = Math.sin(st.yaw);
+    const at = (lx, ly, lz) => ({ x: st.x + lx * c + lz * n, y: st.y + ly, z: st.z - lx * n + lz * c });
+    // Mur du fond, construit directement (le chemin complet est vérifié plus haut).
+    const aim = at(1, 1.2, 2);
+    const pl = sim.build.placement({ plan: 'mur_clayonnage', aim, yaw: 0, turn: 0, player: at(1, 0, 1) });
+    const ref = sim.build.apply(pl);
+    while (!sim.build.advance(ref.s, ref.p, false)) {}
+    const f = at(1, 0, 1.2);
+    sim.props.spawnDynamic({ kind: 'foyer', x: f.x + 0.6, y: st.y + 0.12, z: f.z, rot: 0, radius: 0.45, length: 0, fixed: true, fire: { lit: true, fuel: 900, pot: null, cook: 0 } });
+    sim.inventory.bag.push({ item: 'pot', count: 1, q: 70, d: 200, dm: 200, w: 1 });
+    sim.inventory.bag.unshift({ item: 'torche', count: 1, d: 600, dm: 600 });
+    sim.act({ type: 'sortir', from: { zone: 'sac', index: 0 } });
+  }, st1);
+  await sleep(600);
+  await page.keyboard.press('KeyF');
+  await sleep(400);
+  const torchMsg = await message();
+  const wallAim = await page.evaluate(([fn, st]) => eval(fn)(st, 1, 1.2, 2), [LOCAL, st1]);
+  await page.evaluate(([a]) => window.__game.lookAt(a.x, a.y, a.z), [wallAim]);
+  await sleep(300);
+  const promptFire = await page.textContent('#prompt');
+  await page.keyboard.press('KeyF');
+  await sleep(2500);
+  b = await build();
+  const wall = b.structures[0].pieces.find((p) => p.plan === 'mur_clayonnage');
+  writeFileSync(`${OUT}phase5-feu.png`, await page.screenshot());
+  check('Torche allumée au foyer (F), puis F sur le mur de clayonnage : il prend feu et s’abîme', /allume/.test(torchMsg ?? '') && wall?.burning > 0 && wall.hp < 220, `« ${promptFire} » · état ${wall?.hp}`);
+  await page.evaluate(() => window.__game.act({ type: 'ranger' }));
+  await sleep(300);
+  await page.evaluate(([a]) => window.__game.lookAt(a.x, a.y, a.z), [wallAim]);
+  await sleep(300);
+  await page.keyboard.press('KeyE');
+  await waitFor(page, () => window.__game.bag().open, null, 5000).catch(() => undefined);
+  await sleep(400);
+  const panelTitle = await page.textContent('.bag-title');
+  const putOut = await page.locator('.item-actions button:has-text("Éteindre")').count();
+  if (putOut) await page.click('.item-actions button:has-text("Éteindre")');
+  await sleep(400);
+  b = await build();
+  const wall2 = b.structures[0].pieces.find((p) => p.plan === 'mur_clayonnage');
+  check('E sur le mur : son panneau (stabilité, état, EN FEU) ; « Éteindre (pot d’eau) » éteint le feu', /EN FEU/.test(panelTitle ?? '') && wall2.burning === 0, `« ${panelTitle} »`);
+  await page.keyboard.press('Tab');
+  await sleep(300);
+
+  // 5. Sauvegarde : quitter, recharger, reprendre.
+  const before = await build();
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000);
+  await page.click('#btn-quit');
+  await waitFor(page, () => window.__game.screen() === 'home', null, 10000);
+  await page.reload();
+  await startGame(page);
+  await settle(page);
+  const after = await build();
+  const count = (x) => x.structures.reduce((n, st) => n + st.pieces.length, 0);
+  check('Quitter, recharger : les constructions sont conservées (pièces, porte ouverte)', count(after) === count(before) && after.structures[0].pieces.find((p) => p.plan === 'porte')?.open === true, `${count(after)} pièces`);
+  const kit = await page.evaluate(() => window.__game.buildKit());
+  await sleep(800);
+  const nearKit = await page.evaluate(() => {
+    const st = window.__game.session();
+    return st.props.filter((p) => ['buche', 'perche', 'baton', 'pierre', 'argile'].includes(p.kind) && Math.hypot(p.x - st.state.x, p.z - st.state.z) < 3.5).length;
+  });
+  check('Outil de test : matériaux de construction posés à côté du joueur', kit === 48 && nearKit >= 40, `${kit} objets, ${nearKit} à portée`);
+  check('Aucune erreur dans la console (phase 5)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+
+  // Téléphone : onglet Construire, boutons « Poser », « Tourner », « Annuler ».
+  console.log('\n— Phase 5 : téléphone');
+  const touchCtx = await browser.newContext({ ...devices['Pixel 7 landscape'] });
+  await touchCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const tPage = await touchCtx.newPage();
+  const tErrors = watchErrors(tPage, 'phase 5 (téléphone)');
+  await tPage.goto(BASE);
+  await startGame(tPage);
+  await settle(tPage);
+  const cdp = await touchCtx.newCDPSession(tPage);
+  const tapAt = async (x, y, ms = 120) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(x), y: Math.round(y), id: 7 }] });
+    await sleep(ms);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+  };
+  const tap = async (sel) => {
+    const rect = await tPage.locator(sel).first().boundingBox();
+    await tapAt(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  };
+  await tPage.evaluate(() => {
+    const s = window.__game.sim().state;
+    window.__game.place(s.x - 12, s.z + 10);
+  });
+  await settle(tPage);
+  await tap('[data-touch="bag"]');
+  await sleep(500);
+  await tap('[data-tab="construire"]');
+  await sleep(300);
+  writeFileSync(`${OUT}phase5-telephone-construire.png`, await tPage.screenshot());
+  await tap('.plans button:has-text("poteau")');
+  await sleep(400);
+  const labels = await tPage.evaluate(() => ['throw', 'interact', 'use'].map((n) => document.querySelector(`[data-touch="${n}"]`).textContent));
+  await tPage.evaluate(() => {
+    const s = window.__game.sim().state;
+    const yaw = window.__game.session().yaw;
+    const x = s.x + Math.sin(yaw) * 2.5;
+    const z = s.z + Math.cos(yaw) * 2.5;
+    window.__game.lookAt(x, window.__game.sim().terrain.heightAt(x, z), z);
+  });
+  await sleep(400);
+  await tap('[data-touch="throw"]');
+  await sleep(400);
+  let tb = await tPage.evaluate(() => window.__game.build());
+  const tPlaced = tb.structures.length === 1;
+  await tap('[data-touch="use"]');
+  await sleep(300);
+  tb = await tPage.evaluate(() => window.__game.build());
+  const back = await tPage.evaluate(() => document.querySelector('[data-touch="throw"]').textContent);
+  check('Téléphone : « Tracer », boutons « Poser · Tourner · Annuler », « Poser » pose le plan, « Annuler » revient au jeu', labels.join(',') === 'Poser,Tourner,Annuler' && tPlaced && tb.mode === null && back === 'Lancer', labels.join(', '));
+  check('Aucune erreur dans la console (phase 5, téléphone)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  await touchCtx.close();
+
+  // Manette : Y, RB jusqu'à « Construire », A trace, RT pose, LT annule.
+  console.log('\n— Phase 5 : manette');
+  const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
+  await padCtx.addInitScript((settings) => {
+    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
+    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
+    navigator.getGamepads = () => [window.__pad, null, null, null];
+  }, QA_SETTINGS);
+  const pPage = await padCtx.newPage();
+  const pErrors = watchErrors(pPage, 'phase 5 (manette)');
+  await pPage.goto(BASE);
+  await startGame(pPage);
+  await settle(pPage);
+  const press = async (i, ms = 150) => {
+    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
+    await sleep(ms);
+    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
+    await sleep(250);
+  };
+  await pPage.evaluate(() => {
+    const s = window.__game.sim().state;
+    window.__game.place(s.x + 14, s.z + 10);
+  });
+  await settle(pPage);
+  await press(3);
+  await press(5);
+  await press(5);
+  await press(5);
+  const tab = (await pPage.evaluate(() => window.__game.bag())).tab;
+  await press(0);
+  await sleep(300);
+  let pb = await pPage.evaluate(() => window.__game.build());
+  const mode = pb.mode;
+  await pPage.evaluate(() => {
+    const s = window.__game.sim().state;
+    const yaw = window.__game.session().yaw;
+    const x = s.x + Math.sin(yaw) * 3;
+    const z = s.z + Math.cos(yaw) * 3;
+    window.__game.lookAt(x, window.__game.sim().terrain.heightAt(x, z), z);
+  });
+  await sleep(400);
+  await press(7);
+  await sleep(300);
+  pb = await pPage.evaluate(() => window.__game.build());
+  const pPlaced = pb.structures.length === 1;
+  await press(6);
+  await sleep(300);
+  pb = await pPage.evaluate(() => window.__game.build());
+  check('Manette : Y, RB ×3 → « Construire », A trace le premier plan, RT pose, LT annule', tab === 'construire' && mode === 'sol_rondins' && pPlaced && pb.mode === null, `onglet ${tab} · mode ${mode}`);
+  check('Aucune erreur dans la console (phase 5, manette)', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
+  await padCtx.close();
+}
+
+// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -1779,6 +2116,7 @@ try {
   if (want('verification')) await qaScenario(browser);
   if (want('phase3')) await phase3Scenario(browser);
   if (want('phase4')) await phase4Scenario(browser);
+  if (want('phase5')) await phase5Scenario(browser);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();

@@ -8,7 +8,7 @@ Le cahier des charges (§ 14.1) demande de séparer cinq blocs. Voici ce qui exi
 
 | Bloc | Rôle | État |
 | --- | --- | --- |
-| Client web 3D | Affichage, commandes, interface, prédiction | En place (jeu solo, phases 1 à 4) |
+| Client web 3D | Affichage, commandes, interface, prédiction | En place (jeu solo, phases 1 à 5) |
 | Serveur autoritaire chez l'hôte | Référence pour les déplacements, inventaires, combats, constructions, ressources | Phase 8. La simulation est déjà séparée de l'affichage (`src/shared/simulation.ts`) |
 | Sauvegarde locale | Monde sauvegardé chez l'hôte, 3 sauvegardes de sécurité | Phase 8. Module préparé et testé (`src/server/save.ts`) |
 | Synchronisation multijoueur | Échanges client ↔ serveur | Phase 8. Protocole, prédiction et limitation des tentatives préparés |
@@ -82,6 +82,21 @@ Côté client :
 - `bag-view.ts` ajoute les onglets « Fabriquer » et « Carnet » et le panneau du foyer ;
 - `bag-scene.ts` affiche le plan de travail au-dessus du sac.
 
+### Construction (phase 5)
+
+| Module | Rôle |
+| --- | --- |
+| `building.ts` | Catalogue des plans (pièces et installations), étapes et matériaux. Grille de 2 m par construction : origine, cap, cases, bords, coins, niveaux. Règles de pose (sol, pilotis, eau, occupation, joueur dans le chemin), stabilité (meilleur chemin d'appuis depuis le sol, algorithme déterministe), points de vie, dégâts selon l'outil et le matériau, réparation, matériaux récupérés, volumes pour la visée, sauvegarde contrôlée. Aucune dépendance au moteur physique ni à l'affichage |
+| `structure-physics.ts` | Collisions fixes des pièces terminées, seulement près du joueur (§ 14.5). Les échelles sont dans le groupe du terrain (escaladables), les murs non. Les chocs violents sont signalés par le moteur physique (événements de force de contact) |
+| `simulation.ts` | Tracer un plan, étapes de chantier (matériaux sur soi ou posés à côté), fixations en fer, portes, coups, incendies, effondrements par vagues avec débris physiques, installations (coffre, établi, puits, bas fourneau, forge), torches |
+
+Comme pour le reste, ce que les joueurs construisent tient dans de simples données (`BuildState`) : faciles à transmettre et à sauvegarder chez l'hôte en phase 8. Chaque action (tracer, faire une étape, réparer, démonter, ouvrir une porte) est une demande vérifiée par `readAction`.
+
+Côté client :
+- `structure-view.ts` dessine les pièces (instances), les chantiers translucides, les pilotis, les portes, les flammes des incendies et le fantôme du plan ;
+- `session.ts` gère le mode construction et quelques lumières de feu ;
+- `bag-view.ts` ajoute l'onglet « Construire » et les panneaux des pièces et du fourneau.
+
 ## 2. Technologies retenues
 
 | Domaine | Choix | Raisons | Alternatives écartées |
@@ -149,5 +164,6 @@ Décisions prises depuis :
 - **12/11/2026 :** biomes inspirés du Zimbabwe, monde de 16 km × 16 km, apparition au hasard loin des autres joueurs, 10 joueurs au maximum.
 - **13/11/2026 :** décisions confiées par le propriétaire du projet, inspirées de jeux du même style et détaillées dans `docs/PHASE-3.md`. Elles portent sur la réapparition (dernier sommeil, sinon point d'arrivée), la conservation des corps (jusqu'à ce qu'ils soient vidés) et les conditions de secours (perte de connaissance, puis 90 s d'état critique en cas de saignement).
 - **13/11/2026 (phase 4) :** propositions pour la liste des matériaux, leurs propriétés et l'amélioration de l'équipement, inspirées de jeux du même style et détaillées dans `docs/PHASE-4.md`. Ces éléments relèvent de la section 15 : ils restent signalés et modifiables.
+- **13/11/2026 (phase 5) :** propositions pour les matériaux de construction, leurs propriétés (résistance, poids, combustion) et les améliorations des constructions, détaillées dans `docs/PHASE-5.md`. Elles relèvent elles aussi de la section 15 : signalées et modifiables.
 
 Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux (proposition en place depuis la phase 4, modifiable), le commerce, les véhicules, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.

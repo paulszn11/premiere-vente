@@ -642,15 +642,32 @@ input[type='range'] {
 }
 
 .panel-fabriquer,
+.panel-construire,
 .panel-carnet,
 #bag-view.tab-fabriquer .panel-corps,
+#bag-view.tab-construire .panel-corps,
 #bag-view.tab-carnet .panel-corps {
   display: none;
 }
 
 #bag-view.tab-fabriquer .panel-fabriquer,
+#bag-view.tab-construire .panel-construire,
 #bag-view.tab-carnet .panel-carnet {
   display: block;
+}
+
+.build-info p,
+.build-info li {
+  font-size: 0.85rem;
+}
+
+.build-info ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.build-info .note {
+  color: var(--muted);
 }
 
 .bag-body h3 {
@@ -695,7 +712,8 @@ input[type='range'] {
 }
 
 .bench-list,
-.craft-actions {
+.craft-actions,
+.plans {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -703,7 +721,8 @@ input[type='range'] {
 }
 
 .bench-list button,
-.craft-actions button {
+.craft-actions button,
+.plans button {
   min-height: 40px;
   padding: 6px 12px;
 }
@@ -854,6 +873,7 @@ input[type='range'] {
   }
   #bag-view.tab-corps .bag-body,
   #bag-view.tab-fabriquer .bag-body,
+  #bag-view.tab-construire .bag-body,
   #bag-view.tab-carnet .bag-body {
     display: block;
   }
@@ -861,6 +881,8 @@ input[type='range'] {
   #bag-view.tab-corps .bag-info,
   #bag-view.tab-fabriquer .bag-pick,
   #bag-view.tab-fabriquer .bag-info,
+  #bag-view.tab-construire .bag-pick,
+  #bag-view.tab-construire .bag-info,
   #bag-view.tab-carnet .bag-pick,
   #bag-view.tab-carnet .bag-info {
     display: none;
@@ -934,9 +956,13 @@ input[type='range'] {
   .body-actions button,
   .zone-detail button,
   .bench-list button,
-  .craft-actions button {
+  .craft-actions button,
+  .plans button {
     min-height: 38px;
     padding: 4px 10px;
+  }
+  .bag-tabs button {
+    padding: 4px 8px;
   }
 }
 

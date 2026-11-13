@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 4 terminée (146 tests unitaires, 151 vérifications dans le navigateur).** Le prototype contient :
+**État : phase 5 terminée (177 tests unitaires ; vérifications dans le navigateur en cours).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -19,6 +19,11 @@ Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le n
   - un plan de travail sur la toile du sac, des recettes par étapes et un carnet, avec découverte et expérimentation ;
   - qualité, usure, réparations, améliorations et démontage des outils ;
   - le feu, l'eau bouillie, les pansements propres, et une fumée visible de loin ;
+- la construction (phase 5) :
+  - on trace un plan qui s'accroche aux pièces voisines, puis on l'assemble étape par étape avec les matériaux et les outils ;
+  - planchers (sur pilotis au-dessus des pentes et de l'eau), murs de clayonnage et de torchis, murs en pierre sèche, portes, toits de chaume, échelles, clôtures d'épines ;
+  - stabilité : sans appui, les pièces s'effondrent en débris ; on peut aussi détruire à l'outil, par les chocs ou par le feu ;
+  - installations : coffre, établi, puits, bas fourneau et forge (le fer : clous, boulons, outils), torches ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
 
@@ -53,8 +58,19 @@ Toutes les touches se changent dans « Réglages » → « Commandes ».
 Dans le sac :
 - toucher ou cliquer un objet affiche ses actions, dont « Poser sur le plan de travail » ;
 - l'onglet « Fabriquer » montre la recette reconnue et ses étapes, avec le bouton « Faire » ;
-- l'onglet « Carnet » liste les recettes connues et les idées ;
-- à la manette, LB et RB changent d'onglet ; dans « Fabriquer », X pose l'objet choisi sur le plan de travail et A fabrique.
+- l'onglet « Construire » liste les plans connus avec leurs matériaux : « Tracer » passe en mode construction ;
+- l'onglet « Carnet » liste les recettes et les plans connus, et les idées ;
+- à la manette, LB et RB changent d'onglet ; dans « Fabriquer », X pose l'objet choisi sur le plan de travail et A fabrique ; dans « Construire », le stick choisit un plan et A le trace.
+
+En mode construction :
+
+| Action | Clavier / souris | Manette | Tactile |
+| --- | --- | --- | --- |
+| Poser le plan | Clic gauche | RT | « Poser » |
+| Tourner le plan | R ou E | LB, RB ou X | « Tourner » |
+| Annuler | Clic droit ou F | LT | « Annuler » |
+
+Ensuite, « Utiliser » sur le chantier fait l'étape suivante (les matériaux peuvent être sur vous ou posés à côté). E sur une pièce ouvre une porte ou montre la pièce : réparer, enduire de torchis, démonter, éteindre un feu.
 
 Pour bien démarrer :
 1. Prenez un galet (E) et frappez un bloc de quartz blanc (clic droit maintenu) : des éclats tranchants tombent.
@@ -64,7 +80,8 @@ Pour bien démarrer :
 Pour essayer rapidement chaque région, ouvrez le menu pause, puis « Réglages » → « Outils de test ». Vous y trouverez :
 - la téléportation vers le lac (nage), une paroi de granit (escalade) et chaque biome ;
 - la téléportation à côté du gisement de quartz, d'argile, de fer ou d'or le plus proche ;
-- un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet).
+- un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet) ;
+- des matériaux de construction posés à côté de vous (bûches, perches, bâtons, pierres, argile, cordes, herbes, clous).
 
 Ces outils seront retirés ou réservés à l'hôte en multijoueur.
 
@@ -96,7 +113,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; les deux sur ordinateur, téléphone et manette).
+- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; chacun sur ordinateur, téléphone et manette).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
@@ -105,7 +122,8 @@ Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 ```
 src/shared/     code commun au client et au futur serveur : géographie, relief, flore,
                 objets, inventaire, corps du joueur (santé, blessures), ressources
-                (gisements, arbres), fabrication (recettes, qualité, usure), actions,
+                (gisements, arbres), fabrication (recettes, qualité, usure), construction
+                (plans, stabilité, dégâts, collisions des pièces), actions,
                 physique, déplacements, simulation à pas fixe, apparitions,
                 protocole, codes de monde
 src/client/     jeu dans le navigateur : rendu (Babylon.js), commandes, réglages,
@@ -130,3 +148,4 @@ Le projet Vercel `bienvenue-au-zimbabwe` construit le site avec `npm run build` 
 - [`docs/PHASE-2.md`](docs/PHASE-2.md) : monde et déplacements (carte, décisions, tests, limites)
 - [`docs/PHASE-3.md`](docs/PHASE-3.md) : survie et inventaire (décisions inspirées d'autres jeux, tests, limites)
 - [`docs/PHASE-4.md`](docs/PHASE-4.md) : ressources et fabrication (matériaux, recettes, outils, feu, tests, limites)
+- [`docs/PHASE-5.md`](docs/PHASE-5.md) : construction (décisions, difficultés techniques, stabilité, destruction, installations, fer, tests, limites)

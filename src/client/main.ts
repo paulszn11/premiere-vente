@@ -156,6 +156,11 @@ async function boot(): Promise<void> {
           show('pause');
           toast(n === 7 ? 'Jeu d’outils reçu : regardez dans le sac.' : `Jeu d’outils : ${n} objet(s) reçu(s), le reste ne rentre pas.`);
         },
+        onBuildKit: () => {
+          const n = session?.giveBuildKit() ?? 0;
+          show('pause');
+          toast(`Matériaux posés à côté de vous (${n} objets) ; cordes, herbes et clous dans le sac. Ouvrez le sac, onglet « Construire ».`);
+        },
       };
     },
   };
@@ -273,6 +278,7 @@ async function boot(): Promise<void> {
     input,
     onClose: () => session?.closeBag(),
     onMessage: showMessage,
+    onBuild: (plan) => session?.startBuild(plan),
   });
   const rotateHint = $('#rotate-hint');
   const updateRotateHint = () => {
@@ -318,6 +324,16 @@ async function boot(): Promise<void> {
       if (text !== null) el.textContent = text;
     },
     bag: bagView,
+    onBuildMode: (active) => {
+      // Mode construction : les boutons tactiles changent de rôle.
+      const label = (name: string, text: string) => {
+        const el = document.querySelector<HTMLElement>(`[data-touch="${name}"]`);
+        if (el) el.textContent = text;
+      };
+      label('throw', active ? 'Poser' : 'Lancer');
+      label('interact', active ? 'Tourner' : 'Prendre');
+      label('use', active ? 'Annuler' : 'Utiliser');
+    },
     onBagChange: (open) => {
       $('#crosshair').hidden = open;
       if (open) {
@@ -525,6 +541,7 @@ async function boot(): Promise<void> {
       },
     teleport: (id: string) => session?.teleport(id) ?? false,
     testKit: () => session?.giveTestKit() ?? 0,
+    buildKit: () => session?.giveBuildKit() ?? 0,
     /** Simulation complète (diagnostic). */
     sim: () => session?.sim ?? null,
     /** Oriente le regard vers un point (tests). */
@@ -580,6 +597,24 @@ async function boot(): Promise<void> {
       );
     },
     act: (a: unknown) => session?.act(a as Parameters<GameSession['act']>[0]) ?? null,
+    /** Constructions, chantiers, plans connus, mode construction (copies). */
+    build: () => {
+      const sim = session?.sim;
+      if (!sim || !session) return null;
+      return JSON.parse(
+        JSON.stringify({
+          structures: sim.build.structures.map((st) => ({ id: st.id, x: st.x, y: st.y, z: st.z, yaw: st.yaw, pieces: st.pieces })),
+          sites: sim.build.sites,
+          plans: sim.knowledge.plans,
+          mode: session.buildPlan,
+          turn: session.buildTurn,
+          preview: session.buildPlan ? sim.previewPlan(session.buildPlan, session.buildTurn) : null,
+          colliders: sim.structPhys.count,
+        }),
+      );
+    },
+    startBuild: (plan: string) => session?.startBuild(plan as Parameters<GameSession['startBuild']>[0]),
+    stopBuild: () => session?.stopBuild(),
     bag: () => bagView.debug(),
     bagRun: (label: string) => bagView.run(label),
     openBag: (prop: string | null = null) => session?.openBag(prop),

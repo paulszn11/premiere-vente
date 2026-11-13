@@ -9,7 +9,8 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Scene } from '@babylonjs/core/scene';
 import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, TICK_DT, WATER_LEVEL } from '../../shared/constants';
 import { BIOME_LABELS, type BiomeId, SURFACE_LABELS } from '../../shared/geography';
-import type { PlayerAction } from '../../shared/actions';
+import type { BuildRef, PlayerAction } from '../../shared/actions';
+import { PLANS, type PlanId } from '../../shared/building';
 import { ensureToolMeta } from '../../shared/crafting';
 import { type ItemStack, store } from '../../shared/inventory';
 import { ITEMS } from '../../shared/items';
@@ -28,6 +29,10 @@ import { AdaptiveResolution, PerfMonitor, computeStats } from '../perf/perf-moni
 import { BACKEND_LABELS, type ActiveBackend } from '../render/engine';
 import { TerrainJobs } from '../render/terrain-jobs';
 import { WorldView } from '../render/world-view';
+import { StructureView } from '../render/structure-view';
+import { PointLight } from '@babylonjs/core/Lights/pointLight';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
+import { Color3 } from '@babylonjs/core/Maths/math.color';
 import type { BagView } from '../ui/bag-view';
 import { PRESETS, PRESET_LABELS, type QualityParams, type QualityPreset, type Settings, effectiveQuality } from '../settings';
 
@@ -72,6 +77,8 @@ export interface SessionOptions {
   bag?: BagView;
   /** Le sac s'ouvre ou se ferme (curseur, commandes tactiles). */
   onBagChange?: (open: boolean) => void;
+  /** Mode construction : on trace un plan (libellés des boutons tactiles). */
+  onBuildMode?: (active: boolean) => void;
 }
 
 export interface Pose {
@@ -102,6 +109,15 @@ export class GameSession {
   readonly scene: Scene;
   readonly camera: FreeCamera;
   readonly world: WorldView;
+  /** Constructions, chantiers et fantôme du plan tracé. */
+  readonly structures: StructureView;
+  /** Plan en cours de traçage (mode construction), et sa rotation en crans de 15°. */
+  buildPlan: PlanId | null = null;
+  buildTurn = 0;
+  /** Début du mode construction (un clic dans le premier tiers de seconde ne pose rien). */
+  private buildSince = 0;
+  /** Lumières des feux et des torches les plus proches (aucune en qualité Basse). */
+  private readonly lights: PointLight[] = [];
   readonly jobs: TerrainJobs;
   readonly perf = new PerfMonitor();
   /** Temps de calcul de chaque image côté processeur (simulation + préparation du rendu). */
@@ -175,6 +191,12 @@ export class GameSession {
     this.instr = new SceneInstrumentation(this.scene);
     const { params } = effectiveQuality(opts.getSettings(), opts.autoPreset);
     this.world = new WorldView(this.scene, terrain, jobs, params);
+    const smat = new StandardMaterial('constructions', this.scene);
+    smat.diffuseColor = new Color3(1, 1, 1);
+    smat.specularColor = new Color3(0, 0, 0);
+    this.structures = new StructureView(this.scene, smat, (x, z) => terrain.heightAt(x, z));
+    // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
+    opts.onBuildMode?.(false);
     this.applySettings();
     if (sim) {
       const s = sim.state;
@@ -279,6 +301,33 @@ export class GameSession {
     return given;
   }
 
+  /** Outil de test : de quoi construire une case, posé au sol à côté du joueur (et quelques cordes en poche). */
+  giveBuildKit(): number {
+    const sim = this.sim;
+    if (!sim) return 0;
+    const s = sim.state;
+    let n = 0;
+    const drop = (kind: Parameters<LocalSimulation['props']['spawnDynamic']>[0]['kind'], radius: number, length: number, count: number) => {
+      for (let k = 0; k < count; k++) {
+        const a = (n * 2.39996) % (Math.PI * 2);
+        const r = 1.2 + (n % 5) * 0.25;
+        const x = s.x + Math.cos(a) * r;
+        const z = s.z + Math.sin(a) * r;
+        sim.props.spawnDynamic({ kind, x, y: sim.terrain.heightAt(x, z) + 0.5 + (n % 3) * 0.2, z, rot: (n * 0.17) % 1, radius, length });
+        n++;
+      }
+    };
+    drop('buche', 0.07, 0.6, 8);
+    drop('perche', 0.025, 1.8, 8);
+    drop('baton', 0.022, 0.75, 16);
+    drop('pierre', 0.08, 0, 10);
+    drop('argile', 0.06, 0, 6);
+    store(sim.inventory, { item: 'corde', count: 6 });
+    store(sim.inventory, { item: 'herbe', count: 10 });
+    store(sim.inventory, { item: 'clous', count: 24 });
+    return n;
+  }
+
   private key(action: Action): string {
     const code = this.opts.getSettings().bindings[action][0];
     if (this.opts.device.touch) {
@@ -304,8 +353,8 @@ export class GameSession {
       if (input.isDown('jump')) buttons |= BTN_JUMP;
       if (input.isDown('sprint')) buttons |= BTN_SPRINT;
       if (input.isDown('crouch')) buttons |= BTN_CROUCH;
-      if (input.isDown('interact')) buttons |= BTN_INTERACT;
-      if (input.isDown('throw')) buttons |= BTN_THROW;
+      if (input.isDown('interact') && !this.buildPlan) buttons |= BTN_INTERACT;
+      if (input.isDown('throw') && !this.buildPlan) buttons |= BTN_THROW;
     } else if (bagOpen && !this.paused) {
       // À genoux devant son sac ouvert.
       buttons = BTN_CROUCH;
@@ -416,7 +465,12 @@ export class GameSession {
       this.worldVersion = sim.world.version;
       this.world.invalidateVegetation();
     }
-    this.world.updateProps(sim.props.views());
+    const views = sim.props.views();
+    this.world.updateProps(views);
+    this.structures.update(sim.build, x, z, now / 1000);
+    const planning = this.buildPlan && !bag?.isOpen && v.state === 'eveille';
+    this.structures.setPreview(planning ? sim.previewPlan(this.buildPlan!, this.buildTurn) : null);
+    this.updateLights(views, x, camY, z, now);
     this.scene.render();
     if (bag?.isOpen) bag.frame(dt);
     this.lastCpuMs = performance.now() - now;
@@ -463,6 +517,12 @@ export class GameSession {
     if (v.state !== 'eveille' || v.posture === 'endormi' || sim.gesture) return null;
     if (v.posture === 'assis') return this.opts.device.touch ? 'Bougez pour vous lever · « Sac » pour dormir' : `${this.key('rest')} : se lever (maintenir : dormir) · bouger : se lever`;
     if (s.mode === MODE_CLIMB) return `${this.key('crouch')} : lâcher · ${this.key('jump')} : sauter en arrière`;
+    if (this.buildPlan) {
+      const pl = sim.previewPlan(this.buildPlan, this.buildTurn);
+      const name = PLANS[this.buildPlan].label.toLowerCase();
+      const base = this.opts.device.touch ? `« Poser » : ${name} · « Tourner » · « Annuler »` : `${this.key('throw')} : poser le plan (${name}) · ${this.key('rest')} : tourner · ${this.key('use')} : annuler`;
+      return pl.ok ? `${base}${pl.stilts ? ` · ${pl.stilts} pilotis` : ''}` : `${pl.reason} · ${base}`;
+    }
     const held = sim.props.held;
     const hint = sim.useHint();
     const hintText = hint ? `${this.key(hint.interact ? 'interact' : 'use')} : ${hint.action}` : null;
@@ -485,6 +545,14 @@ export class GameSession {
       return `${this.key('interact')} : foyer (${f?.lit ? `allumé, ${Math.ceil(f.fuel / 60)} min de bois` : 'éteint'})`;
     }
     if (t.kind === 'gravier_or') return `${this.key('interact')} : examiner le gravier qui brille`;
+    if (t.kind === 'coffre') return `${this.key('interact')} : ouvrir le coffre`;
+    if (t.kind === 'etabli') return `${this.key('interact')} : établi (fabriquer plus vite et mieux)`;
+    if (t.kind === 'puits') return `${this.key('interact')} : puiser de l’eau (il faut un pot)`;
+    if (t.kind === 'forge') return `${this.key('interact')} : forge (${sim.props.defOf(t.id)?.fire?.lit ? 'allumée' : 'éteinte'})`;
+    if (t.kind === 'fourneau') {
+      const f = sim.props.defOf(t.id)?.furnace;
+      return `${this.key('interact')} : bas fourneau (${f?.lit ? `allumé, chaleur ${Math.round(f.heat)} %` : 'éteint'})`;
+    }
     if (t.fixed) return null;
     if (t.kind === 'corps') return `${this.key('interact')} : fouiller le corps`;
     if (t.kind === 'sac') return `${this.key('interact')} : ouvrir le sac à dos`;
@@ -518,6 +586,19 @@ export class GameSession {
     if (v.state !== 'eveille') return;
     if (input.pressed('bag')) {
       this.openBag(null);
+      return;
+    }
+    if (this.buildPlan) {
+      // Mode construction : poser le plan, le tourner, ou ranger le plan.
+      if (input.pressed('use')) {
+        this.stopBuild();
+        return;
+      }
+      if (input.pressed('rest') || input.pressed('interact') || input.pressed('pocketNext')) this.buildTurn = (this.buildTurn + 1) % 24;
+      if (input.pressed('throw') && performance.now() - this.buildSince > 350) {
+        const { aim, on } = sim.aimPoint();
+        this.doAct({ type: 'planifier', plan: this.buildPlan, aim, turn: this.buildTurn, on });
+      }
       return;
     }
     // Utiliser : un appui, ou maintenir pour enchaîner les coups d'outil.
@@ -574,13 +655,13 @@ export class GameSession {
     this.opts.onMessage?.('Vos poches sont vides.', 'info');
   }
 
-  /** Ouvre le sac (et un corps ou un sac posé à fouiller). */
-  openBag(otherProp: string | null): void {
+  /** Ouvre le sac (et un corps ou un sac posé à fouiller, un coffre, une pièce de construction). */
+  openBag(otherProp: string | null, build: BuildRef | null = null): void {
     const sim = this.sim;
     const bag = this.opts.bag;
     if (!sim || !bag || sim.vitals.state !== 'eveille' || this.paused) return;
     if (sim.vitals.posture === 'endormi') return;
-    bag.open(sim, otherProp);
+    bag.open(sim, otherProp, build);
     this.opts.input.clear();
     this.opts.onBagChange?.(true);
   }
@@ -591,6 +672,51 @@ export class GameSession {
     bag.close();
     this.opts.input.clear();
     this.opts.onBagChange?.(false);
+  }
+
+  /** Mode construction : tracer ce plan (le fantôme suit le regard). */
+  startBuild(plan: PlanId): void {
+    if (!this.sim?.knowledge.plans.includes(plan)) return;
+    this.buildPlan = plan;
+    this.buildTurn = 0;
+    this.buildSince = performance.now();
+    this.closeBag();
+    this.opts.onBuildMode?.(true);
+    this.opts.onMessage?.(`Tracez le plan : ${PLANS[plan].label.toLowerCase()}. Vert : possible ; rouge : impossible.`, 'info');
+  }
+
+  stopBuild(): void {
+    if (!this.buildPlan) return;
+    this.buildPlan = null;
+    this.structures.setPreview(null);
+    this.opts.onBuildMode?.(false);
+  }
+
+  /** Lumières orangées des feux, des torches et des incendies les plus proches. */
+  private updateLights(views: ReturnType<NonNullable<GameSession['sim']>['props']['views']>, x: number, y: number, z: number, now: number): void {
+    const want = this.preset === 'low' ? 0 : 2;
+    while (this.lights.length < want) {
+      const l = new PointLight(`feu ${this.lights.length}`, new Vector3(0, -1000, 0), this.scene);
+      l.diffuse = new Color3(1, 0.62, 0.3);
+      l.specular = new Color3(0, 0, 0);
+      l.range = 10;
+      l.intensity = 0;
+      this.lights.push(l);
+    }
+    if (!this.lights.length) return;
+    const sources: Array<{ x: number; y: number; z: number; d: number }> = [];
+    for (const v of views) if (v.lit) sources.push({ x: v.x, y: v.y + 0.5, z: v.z, d: Math.hypot(v.x - x, v.y - y, v.z - z) });
+    for (const b of this.structures.burning) sources.push({ ...b, y: b.y + 0.5, d: Math.hypot(b.x - x, b.y - y, b.z - z) });
+    sources.sort((a, b) => a.d - b.d);
+    this.lights.forEach((l, i) => {
+      const src = i < want ? sources[i] : undefined;
+      if (!src || src.d > 40) {
+        l.intensity = 0;
+        return;
+      }
+      l.position.set(src.x, src.y, src.z);
+      l.intensity = 1.1 + 0.25 * Math.sin(now * 0.013 + i * 2.1) + 0.1 * Math.sin(now * 0.031 + i);
+    });
   }
 
   /** État critique ou inconscient : mourir tout de suite. */
@@ -615,10 +741,11 @@ export class GameSession {
         msg(ev.text, ev.tone);
         break;
       case 'ouvrir':
-        this.openBag(ev.prop);
+        this.openBag(ev.prop || null, ev.build ?? null);
         break;
       case 'mort':
         this.closeBag();
+        this.stopBuild();
         break;
       case 'reapparition': {
         this.biome = null;

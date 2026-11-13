@@ -1,6 +1,6 @@
 # Phase 5 — Construction
 
-**Statut : en cours (commencée le 13/11/2026).**
+**Statut : terminée le 13/11/2026.** Vérifiée par 177 tests unitaires (dont 31 propres à la phase 5) et 16 vérifications de la phase 5 dans un vrai navigateur (ordinateur, téléphone, manette). Reste à l'essayer sur vos appareils.
 
 ## Ce que demande le cahier des charges
 
@@ -77,7 +77,7 @@
 
 | Installation | Rôle | Inspirée de |
 | --- | --- | --- |
-| Coffre en bois | rangement de 40 L, ouvert comme un sac posé | Tous les jeux de survie |
+| Coffre en bois | rangement de 30 L, ouvert comme un sac posé | Tous les jeux de survie |
 | Établi | à proximité : meilleure qualité et gestes plus rapides pour la fabrication | Valheim (confort de l'établi) |
 | Torche (fabriquée sur le plan de travail) | **lumière**, à tenir ou à planter ; s'allume à un feu ; brûle 10 à 20 min | The Forest, Green Hell |
 | Puits (près des fleuves et des zones humides) | remplir son pot sans aller au fleuve | — |
@@ -109,6 +109,170 @@ Elles demandent des métaux et des pièces qui n'existent pas encore : cuivre, a
 | Lumière sur téléphone | Nombre de lumières limité selon la qualité (aucune en Basse), créées une fois pour éviter de recompiler les matériaux |
 | Sauvegardes existantes | Les anciennes sauvegardes se relisent : simplement aucune construction |
 | Réseau (phase 8) | Chaque action est une demande vérifiée (place, distance, matériaux, appuis), comme pour la fabrication |
+
+## Ce qui a été fait
+
+### Plans, chantiers, étapes
+
+| Plan | Pièce | Étapes et matériaux | Points de vie |
+| --- | --- | --- | --- |
+| Plancher en rondins | case 2 × 2 m | (pilotis : 1 perche par coin, bâton à fouir) · poser les rondins (4 bûches) · ligaturer (2 cordes, ou 2 boulons) | 260 |
+| Dallage en pierre | case, sol presque plat | poser et caler les pierres (30 kg, galet) | 600 |
+| Poteau | coin | dresser (1 perche, ou 1 boulon de plus) | 200 |
+| Mur de clayonnage | bord | dresser les montants (2 perches) · tresser (6 bâtons) · ligaturer (1 corde, ou 6 clous) | 220 ; torchis : 400 |
+| Mur en pierre sèche | bord | trois assises (20, 20 et 15 kg de pierres, galet) | 700 |
+| Porte en perches | bord | encadrement (2 perches) · battant (6 bâtons, outil tranchant) · attaches (1 corde, ou 4 clous) | 200 |
+| Toit de chaume | case, sur les murs | charpente (2 perches, 1 corde) · chaume (8 brassées d'herbes) | 120 |
+| Échelle | bord | montants (2 perches, 4 bâtons) · barreaux (1 corde) | 100 |
+| Clôture d'épines | bord | planter et entrelacer (4 bâtons, 2 branches, bâton à fouir) | 150 |
+| Coffre, établi, puits, bas fourneau, forge | posés librement (sur le sol ou un plancher) | voir l'onglet « Construire » | — |
+
+Fonctionnement du chantier :
+- Les matériaux comptent s'ils sont sur soi, en main ou posés à moins de 2,5 m du chantier. Ceux posés à côté servent en premier.
+- Les pierres comptent au poids et s'utilisent entières : le jeu choisit celles qui gaspillent le moins.
+- Avec des clous ou des boulons sur soi, les ligatures sont clouées : 30 % de points de vie en plus et de meilleurs appuis.
+- On peut abandonner un chantier : 80 % de ce qui y était posé revient au sol.
+
+### Stabilité
+
+La stabilité vient du sol. Une pièce plantée dans le terrain vaut 100 %, ou 95 % sur pilotis. Elle se transmet de pièce en pièce, multipliée à chaque passage :
+
+| Passage | Coefficient |
+| --- | --- |
+| Plancher vers ce qu'il porte | 0,93 (dallage : 0,98) |
+| Mur ou poteau vers ce qu'il porte | bois 0,88, torchis 0,90, pierre 0,97, poteau 0,92 |
+| Porte-à-faux d'un plancher au voisin | bois 0,45 (au fer : 0,50), dallage 0,30 |
+| Murs voisins qui se tiennent par un coin | 0,30 (pierre : 0,25) |
+| Pierre portée par du bois | × 0,75 |
+
+- Sous 20 %, une pièce s'effondre. On peut avancer d'une case de 2 m en porte-à-faux au-delà du dernier appui, pas deux.
+- Les effondrements se font par vagues (toutes les 0,25 s). Chaque pièce tombée laisse 40 % de ses matériaux en débris physiques, au plus dix objets.
+- Les installations posées sur un plancher qui disparaît tombent avec lui, et le contenu d'un coffre se répand au sol.
+
+### Destruction
+
+| Outil | Chaume | Bois | Torchis | Pierre |
+| --- | --- | --- | --- | --- |
+| Hache | 25 | 18 | 6 | 1 |
+| Outil tranchant (couteau, éclat) | 12 | 6 | 2 | 0,5 |
+| Galet | 8 | 6 | 12 | 7 |
+| Lance | 6 | 4 | 3 | 0,5 |
+
+Les valeurs sont des points de vie par coup, multipliés par la puissance de l'outil (une hache en fer : × 1,6).
+
+Les autres sources de dégâts :
+- **Chocs.** Au-delà de 700 N de force de contact, mesurée par le moteur physique : une pierre lancée, un débris qui tombe. La pierre en subit 30 %, le torchis 60 %.
+- **Feu.** Le bois perd 8 points de vie par seconde, le chaume 12. Toutes les 0,5 s, le feu passe à chaque voisin combustible avec 6 % de chance.
+  - Un foyer posé sur un plancher de bois l'enflamme tôt ou tard : un dallage de pierre est sûr.
+  - Un pot d'eau éteint le feu.
+- **Réparer** rend 40 % des points de vie avec un peu du matériau : une bûche ou deux bâtons, une boule d'argile, 6 kg de pierres ou 3 brassées d'herbes.
+- **Démonter** rend jusqu'à 75 % des matériaux, selon l'état. Les cordes, clous, herbes et argile se perdent.
+
+### Installations et fer
+
+| Installation | Fonctionnement |
+| --- | --- |
+| Coffre | E l'ouvre ; on y range comme dans un sac posé (30 L) |
+| Établi | à moins de 3 m, les gestes de fabrication vont 20 % plus vite et la qualité gagne l'équivalent de deux niveaux de compétence ; E ouvre la fabrication |
+| Puits | seulement si le sol est à moins de 4 m au-dessus de l'eau (près des fleuves et des vleis) ; on y remplit son pot (E, ou « Utiliser » avec le pot) |
+| Bas fourneau | on charge jusqu'à 4 morceaux de minerai et du bois, on allume (torche, ou archet et herbes), puis on actionne le soufflet (4 s, épuisant). Au-dessus de 60 % de chaleur, chaque coup de soufflet avance la réduction : six coups font une loupe de fer pour deux morceaux de minerai |
+| Forge | se nourrit et s'allume comme un foyer ; allumée, elle permet de forger sur le plan de travail |
+
+Les recettes de la forge (la forge doit être allumée à moins de 3 m) :
+
+| Recette | Pièces | Étapes |
+| --- | --- | --- |
+| Barre de fer | une loupe | chauffer, battre au galet |
+| Clous (12) | une barre | étirer, couper |
+| Boulons (8) | deux barres | forger les tiges, refouler les têtes |
+| Hache en fer | deux barres + une branche | souder les barres à la forge, forger le tranchant, emmancher. Durabilité 600, puissance 1,6 |
+| Couteau en fer | une barre + une branche | forger la lame, emmancher. Durabilité 400, puissance 1,5 |
+
+Les torches se fabriquent sur le plan de travail :
+- bâton et herbe : 10 min de flamme ;
+- bâton et résine : 20 min.
+
+Une torche s'allume à un feu (« Utiliser » à côté). Allumée, elle éclaire et allume foyers, forges et fourneaux sans archet. Elle peut aussi mettre le feu au bois et au chaume. Rangée dans le sac, elle s'éteint et garde ce qui lui reste à brûler.
+
+### Interface et commandes
+
+- **Tracer un plan.** Le sac a un nouvel onglet « Construire ». Chaque plan connu y figure avec ses matériaux ; « Tracer » ferme le sac et passe en mode construction.
+- **Le fantôme** (vert ou rouge) suit le regard et s'accroche aux pièces voisines. L'indication dit pourquoi un plan est impossible : trop loin d'un appui, terrain trop haut, déjà occupé, trop loin, vous êtes dans le chemin…
+- **Les commandes en mode construction :**
+
+  | Action | Clavier et souris | Manette | Tactile |
+  | --- | --- | --- | --- |
+  | Poser le plan | clic gauche | RT | « Poser » |
+  | Tourner le plan (crans de 15°) | R ou E | LB, RB ou X | « Tourner » |
+  | Annuler | clic droit ou F | LT | « Annuler » |
+
+- **Faire une étape.** « Utiliser » sur un chantier fait l'étape suivante. L'indication dit ce qu'il faut et ce qui manque.
+- **E sur une pièce.**
+  - Une porte s'ouvre ou se ferme, même les mains prises.
+  - Les autres pièces ouvrent leur panneau : stabilité, état, réparer, torchis, démonter, éteindre. Pour un chantier : faire l'étape, abandonner.
+- **À la manette, dans le sac :** le stick choisit un plan dans « Construire », A le trace.
+- **Lumière.** Les feux, forges, fourneaux, torches et incendies les plus proches éclairent, avec une flamme qui vacille : deux lumières au plus, aucune en qualité Basse. Elles serviront surtout la nuit et dans les grottes (phase 9).
+- **Outil de test.** « Recevoir des matériaux de construction » pose à côté de vous de quoi bâtir une case : 8 bûches, 8 perches, 16 bâtons, 10 pierres, 6 boules d'argile. Il met aussi dans le sac 6 cordes, 10 brassées d'herbes et 24 clous.
+
+## Tests
+
+### Tests unitaires (Vitest)
+
+- `tests/unit/phase5-building.test.ts` (18 tests) :
+  - grille et changement de repère ;
+  - pose sur sol plat, sur une pente (pilotis), sur l'eau (jusqu'à 3,5 m) ;
+  - accroche à la grille voisine, refus si occupé, trop loin, ou si le joueur est dans le chemin ;
+  - stabilité : murs sur plancher à pilotis, étage, porte-à-faux limité, effondrement en cascade, pierre sur bois, toit sur poteaux ;
+  - un chantier ne porte rien ;
+  - dégâts selon l'outil et le matériau, réparation, torchis, fixation au fer, démontage ;
+  - puits près de l'eau seulement ; installation sur un plancher ;
+  - plans connus et appris ;
+  - sauvegarde et relecture, données trafiquées ignorées, identifiants jamais réutilisés ; déterminisme.
+- `tests/unit/phase5-simulation.test.ts` (13 tests) :
+  - tracer un plancher et l'assembler avec des bûches posées à côté ; on marche dessus ;
+  - clous utilisés en priorité ; abandon d'un chantier ;
+  - porte qui bloque, s'ouvre, refuse de se refermer sur soi, s'ouvre les mains prises ;
+  - une échelle s'escalade, un mur non ;
+  - effondrement de l'étage en débris ;
+  - la hache détruit un mur ; une pierre lancée l'abîme ;
+  - incendie à la torche, extinction, torchis ininflammable ;
+  - coffre sur plancher, sauvegarde, chute avec le plancher ;
+  - puits ;
+  - chaîne complète minerai, fourneau, loupe, forge, barre, clous ; forge éteinte refusée ;
+  - établi plus rapide ; torches ;
+  - actions réseau vérifiées ; plan inconnu ou trop loin refusé.
+
+### Dans un vrai navigateur (Playwright, scénario `phase5`)
+
+Ordinateur, avec les vraies touches et la souris :
+1. L'onglet « Construire », puis « Tracer » : le sac se ferme et le mode construction s'active.
+2. Le fantôme suit le regard ; R le tourne ; clic gauche pose le plan ; clic droit arrête.
+3. Matériaux posés à côté, F à chaque étape : le plancher est terminé et solide.
+4. Une porte sur le bord, trois étapes. Fermée, elle arrête le joueur ; E l'ouvre ; on entre dans la case.
+5. Une torche allumée au foyer (F) met le feu au mur de clayonnage. E sur le mur montre son panneau ; « Éteindre » éteint le feu avec le pot d'eau.
+6. Après avoir quitté et rechargé, tout est conservé. L'outil de test pose les matériaux.
+
+Téléphone :
+- « Tracer » ;
+- les boutons deviennent « Poser », « Tourner », « Annuler » ;
+- le plan se pose ;
+- retour au jeu.
+
+Manette : Y, RB jusqu'à « Construire », A trace, RT pose, LT annule.
+
+Captures : `tests/e2e/out/phase5-*.png`.
+
+## Limites et compromis (signalés)
+
+- **Physique des structures, version simplifiée.** La stabilité suit des coefficients par pièce et par matériau : pas de calcul des forces réelles, ni de déformation ou de flexion des poutres. L'effondrement fait tomber de vrais débris physiques.
+- **Formes.** Une grille de 2 m et des pièces droites. Pas de cases rondes (rondavels) ni de pièces de forme libre pour l'instant.
+- **Électricité, machines, automatisation (10.3) :** reportées aux phases 7 et 9, comme expliqué plus haut.
+- **Radeaux flottants :** phase 7 (véhicules). Sur l'eau, on construit pour l'instant sur pilotis.
+- **Grottes :** phase 9.
+- **Les attaques des bases** par les créatures (phase 6) et par d'autres joueurs (phase 8) utiliseront la fonction de dégâts déjà en place. Les installations, elles, ne prennent pas encore de coups ; elles ne disparaissent qu'avec leur plancher ou quand on les démonte.
+- **Sur une pente,** un plancher peut dépasser d'une marche (plus de 35 cm) : il faut sauter pour y monter, ou construire plus bas.
+- **Lumière (compromis mobile).** Deux lumières au plus, aucune en qualité Basse. Sans cycle jour/nuit, l'effet est discret en plein jour.
+- **Téléphone (compromis mobile).** L'onglet « Construire » occupe l'écran. Une fois le plan choisi, on vise et on pose dans le jeu avec les boutons « Poser », « Tourner », « Annuler ».
 
 ## Sources consultées
 

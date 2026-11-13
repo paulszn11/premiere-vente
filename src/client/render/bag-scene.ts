@@ -84,9 +84,16 @@ const KINDS: PropKind[] = [
   'pot',
   'batee',
   'pansement',
+  'torche',
+  'loupe_fer',
+  'barre_fer',
+  'clous',
+  'boulons',
+  'hache_fer',
+  'couteau_fer',
 ];
 /** Objets longs (dessinés en travers de la case). */
-const LONG: PropKind[] = ['baton', 'buche', 'manche', 'perche', 'lance', 'baton_fouir', 'hache', 'archet', 'couteau', 'ilala', 'ecorce'];
+const LONG: PropKind[] = ['baton', 'buche', 'manche', 'perche', 'lance', 'baton_fouir', 'hache', 'archet', 'couteau', 'ilala', 'ecorce', 'torche', 'hache_fer', 'couteau_fer', 'barre_fer'];
 
 export function sameSlot(a: BagSlot | null, b: BagSlot | null): boolean {
   if (!a || !b || a.zone !== b.zone) return false;

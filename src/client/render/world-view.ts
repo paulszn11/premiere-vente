@@ -55,6 +55,18 @@ const ITEM_RENDER_KINDS: PropKind[] = [
   'batee',
   'pansement',
   'foyer',
+  'torche',
+  'loupe_fer',
+  'barre_fer',
+  'clous',
+  'boulons',
+  'hache_fer',
+  'couteau_fer',
+  'coffre',
+  'etabli',
+  'puits',
+  'fourneau',
+  'forge',
 ];
 const NODE_RENDER_KINDS: PropKind[] = ['bloc_quartz', 'filon_fer', 'touffe_herbe', 'gisement_argile', 'gravier_or'];
 const UNDERWATER = new Color3(0.05, 0.2, 0.24);
@@ -470,14 +482,21 @@ export class WorldView {
     fill(this.logMesh, logs, (v) => [v.length, v.radius, v.radius]);
     for (const [kind, mesh] of this.itemMeshes) fill(mesh, views.filter((v) => v.kind === kind), () => [1, 1, 1]);
     for (const [kind, mesh] of this.nodeMeshes) fill(mesh, views.filter((v) => v.kind === kind), (v) => [v.size ?? 1, v.size ?? 1, v.size ?? 1]);
-    const lit = views.filter((v) => v.kind === 'foyer' && v.lit);
+    // Flammes : foyers, forges, fourneaux, torches (plus petites, au bout du manche).
+    const FLAME: Partial<Record<PropView['kind'], [number, number]>> = { foyer: [0, 1], forge: [0.3, 0.8], fourneau: [0.85, 0.7], torche: [0.22, 0.35] };
+    const lit = views.filter((v) => v.lit && FLAME[v.kind]);
     const t = performance.now() * 0.006;
-    fill(this.flameMesh, lit, (v) => {
-      const k = 0.85 + 0.15 * Math.sin(t + v.x);
-      return [k, 0.9 + 0.2 * Math.sin(t * 1.7 + v.z), k];
-    });
-    // Colonne de fumée : 30 m de haut, centrée 15 m au-dessus du foyer.
-    fill(this.smokeMesh, lit.map((v) => ({ ...v, y: v.y + 15, qx: 0, qy: 0, qz: 0, qw: 1 })), () => [1, 30, 1]);
+    fill(
+      this.flameMesh,
+      lit.map((v) => ({ ...v, y: v.y + FLAME[v.kind]![0], qx: 0, qy: 0, qz: 0, qw: 1 })),
+      (v) => {
+        const s = FLAME[v.kind]![1];
+        const k = (0.85 + 0.15 * Math.sin(t + v.x)) * s;
+        return [k, (0.9 + 0.2 * Math.sin(t * 1.7 + v.z)) * s, k];
+      },
+    );
+    // Colonne de fumée : 30 m de haut, centrée 15 m au-dessus du foyer (pas pour les torches).
+    fill(this.smokeMesh, lit.filter((v) => v.kind !== 'torche').map((v) => ({ ...v, y: v.y + 15, qx: 0, qy: 0, qz: 0, qw: 1 })), () => [1, 30, 1]);
   }
 
   /** À appeler quand des arbres sont abattus ou repoussent. */

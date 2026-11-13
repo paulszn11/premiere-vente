@@ -172,6 +172,15 @@ describe('physique des constructions', () => {
     s.teleport(x0, LEVEL + 0.1, z0 + 2);
     h.run(20);
     expect(act({ type: 'piece', s: ref.s, p: ref.p, op: 'porte' }).message).toMatch(/passage/);
+    // Les mains prises (une bûche), E ferme quand même la porte visée, sans lâcher la bûche.
+    s.teleport(x0, LEVEL + 0.1, z0 + 0.5);
+    h.run(20);
+    h.hold(log());
+    h.aim(x0 + 0.75, LEVEL + 1.2, z0 + 2);
+    h.run(1, 0, 0, BTN_INTERACT);
+    h.run(3);
+    expect(s.build.piece(ref.s, ref.p)!.open).toBe(false);
+    expect(s.props.held).not.toBeNull();
     s.dispose();
   });
 

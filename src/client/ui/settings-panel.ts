@@ -13,7 +13,7 @@ export interface SettingsPanelDeps {
   getSettings: () => Settings;
   update: (patch: Partial<Settings>) => void;
   /** Outils de test (téléportation), disponibles pendant une partie. */
-  testTools?: (() => { destinations: Array<{ id: string; label: string }>; info: string; onTeleport: (id: string) => void; onKit: () => void } | null) | undefined;
+  testTools?: (() => { destinations: Array<{ id: string; label: string }>; info: string; onTeleport: (id: string) => void; onKit: () => void; onBuildKit: () => void } | null) | undefined;
 }
 
 function esc(s: string): string {
@@ -63,7 +63,8 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     <label class="row"><span>Aller à</span><select id="set-dest">${tools.destinations.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
     <button type="button" id="set-go">Y aller</button>
     <p class="note" id="set-pos">${esc(tools.info)}</p>
-    <button type="button" id="set-kit">Recevoir un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet)</button>`
+    <button type="button" id="set-kit">Recevoir un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet)</button>
+    <button type="button" id="set-buildkit">Recevoir des matériaux de construction (posés à côté de vous)</button>`
     : '';
 
   deps.root.innerHTML = `
@@ -113,6 +114,7 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     if (sel && tools) tools.onTeleport(sel.value);
   });
   root.querySelector('#set-kit')?.addEventListener('click', () => tools?.onKit());
+  root.querySelector('#set-buildkit')?.addEventListener('click', () => tools?.onBuildKit());
   live('set-scale', pct, 'renderScale');
   live('set-fov', (v) => `${v}°`, 'fov');
   live('set-mouse', mult, 'mouseSensitivity');

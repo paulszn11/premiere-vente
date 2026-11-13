@@ -1,10 +1,11 @@
 # État des fonctionnalités
 
-Mis à jour le 13/11/2026, version 0.4.0.
+Mis à jour le 13/11/2026, version 0.5.0.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
 - **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
-- **Phase 4 :** terminée le 13/11/2026 (146 tests unitaires, 151 vérifications navigateur, dont 31 propres à la phase 4). Les éléments de la section 15 qui la concernent (liste des matériaux et leurs propriétés, amélioration de l'équipement) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-4.md`. Reste à l'essayer sur vos appareils.
+- **Phase 4 :** terminée le 13/11/2026 (146 tests unitaires, 151 vérifications navigateur, dont 31 propres à la phase 4). Les éléments de la section 15 qui la concernent (liste des matériaux et leurs propriétés, amélioration de l'équipement) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-4.md`. Validée par le propriétaire du projet le 13/11/2026.
+- **Phase 5 :** terminée le 13/11/2026 (177 tests unitaires ; vérifications navigateur en cours, dont 16 propres à la phase 5). Les éléments de la section 15 qui la concernent (matériaux de construction, leurs propriétés, les améliorations) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-5.md`. Reste à l'essayer sur vos appareils.
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).
@@ -79,6 +80,21 @@ Légende des tests :
 | Interface : onglets Fabriquer et Carnet, état des outils, panneau du foyer ; doigt, souris, clavier et manette | 13.4, 2.2 | Auto |
 | Sauvegarde du plan de travail, du carnet et de l'état du monde (gisements, arbres, foyers) | 3.3 | Auto |
 
+## Terminé — phase 5 (à valider sur vos appareils)
+
+| Fonctionnalité | Section du cahier | Tests |
+| --- | --- | --- |
+| Tracer un plan (fantôme vert ou rouge) qui s'accroche sur une grille de 2 m ; au doigt, à la souris, à la manette | 10.1, 2.2 | Auto |
+| Chantier assemblé physiquement : étapes avec outils, matériaux sur soi ou posés à côté, bûches et pierres portées à la main | 10.2 | Auto |
+| Pièces : plancher (sur pilotis : pentes, eau), dallage, poteau, mur de clayonnage, torchis, mur en pierre sèche, porte, toit de chaume, échelle, clôture d'épines | 10.1, 10.2 | Auto |
+| Fixations adaptées : cordes, clous et boulons forgés, pierres emboîtées, torchis ; soudure à la forge pour les outils en fer | 10.2 | Auto |
+| Stabilité : appuis venus du sol, porte-à-faux limité, matériaux ; effondrement en cascade et débris physiques | 10.2, 10.4 | Auto |
+| Destruction selon l'outil et le matériau, chocs physiques, incendies qui se propagent, extinction ; réparation, démontage | 10.4, 6.3, 9.7 | Auto |
+| Portes qui bloquent le passage, échelles qui s'escaladent, collisions seulement près du joueur | 10.2, 14.5 | Auto |
+| Installations : coffre, établi, puits, bas fourneau à soufflet, forge ; torches et lumière | 10.3 | Auto |
+| Métallurgie du fer : minerai → loupe → barre → clous, boulons, hache et couteau en fer | 10.3, 9.3 | Auto |
+| Sauvegarde des constructions, chantiers et installations | 3.3 | Auto |
+
 ## Préparé mais pas encore branché (phase 8)
 
 | Élément | Fichier | Tests |
@@ -94,7 +110,7 @@ Légende des tests :
 
 ## En cours
 
-La validation des phases 2, 3 et 4 sur vos appareils.
+La validation des phases 2, 3 et 5 sur vos appareils.
 
 ## Restant
 
@@ -103,7 +119,7 @@ La validation des phases 2, 3 et 4 sur vos appareils.
 | 2 (suivi) | Animation des mains en escalade, prises plus fines ; ruisseaux et chutes d'eau (avec la phase 9) |
 | 3 (suivi) | Objets manipulés à la main dans la vue du sac, examen du corps en vue réelle, vêtements de rechange ; secours entre joueurs (avec la phase 8) |
 | 4 (suivi) | Manipulation libre des pièces en 3D, animations des gestes (coups d'outil, chute des arbres) ; matériel de plongée (avec les phases 6 et 9) ; usage de l'or (commerce, section 15) |
-| 5 | Construction physique, structures, destruction, installations |
+| 5 (suivi) | Électricité, machines, automatisation (avec les phases 7 et 9) ; cases rondes et pièces de forme libre ; radeaux (phase 7) ; constructions dans les grottes (phase 9) ; attaques des bases (phases 6 et 8) |
 | 6 | Intelligence artificielle, écosystème, créatures, détection, combats, horreur sous-marine |
 | 7 | Véhicules et machines |
 | 8 | Serveur chez l'hôte (navigateur et programme compagnon), code privé, connexion WebRTC, synchronisation, permissions, sauvegardes du monde et des joueurs, 10 joueurs |
@@ -118,5 +134,6 @@ La validation des phases 2, 3 et 4 sur vos appareils.
 - Matériel médical : chiffons, attelles, aloès et pansements propres (chiffons bouillis). Pas encore de plantes médicinales ni de médicaments.
 - Les temps de reconstitution (gisements, arbres, fruits) comptent en temps de jeu. Sans cycle jour/nuit (phase 9), ce temps avance comme le temps réel, et seulement pendant qu'on joue.
 - Pas d'animation des gestes : l'outil ne bouge pas à chaque coup et l'arbre abattu disparaît d'un coup en laissant sa souche.
+- Constructions : stabilité par coefficients (pas de calcul de forces ni de déformation), grille de 2 m et pièces droites, au plus deux lumières (aucune en qualité Basse).
 - Les menus se pilotent au clavier, à la souris ou au doigt, pas encore à la manette (sauf Start pour la pause).
 - La résolution adaptative peut baisser inutilement sur un écran limité à 30 images par seconde : désactivable dans les réglages.

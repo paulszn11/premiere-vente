@@ -420,6 +420,15 @@ export class LocalSimulation {
     if (v.state !== 'eveille') {
       if (this.props.held) this.props.drop(s);
       propPressed = 0;
+    } else if ((pressed & BTN_INTERACT) !== 0 && this.props.held) {
+      // Les mains prises (une bûche à rentrer…), E ouvre ou ferme quand même la porte visée.
+      const bt = this.buildTarget();
+      const door = bt?.kind === 'piece' ? this.build.piece(bt.s, bt.p) : undefined;
+      if (bt?.kind === 'piece' && door && PLANS[door.plan].piece === 'porte' && isDone(door)) {
+        propPressed &= ~BTN_INTERACT;
+        const r = this.toggleDoor(bt.s, bt.p);
+        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+      }
     } else if ((pressed & BTN_INTERACT) !== 0 && !this.props.held) {
       // Petits objets rangés directement ; sacs et corps s'ouvrent (affichage).
       const t = this.props.target(s, c.yaw, c.pitch);
@@ -1294,6 +1303,8 @@ export class LocalSimulation {
     if (h?.item === 'pot' && p.burning > 0) return { action: 'éteindre le feu avec l’eau du pot', ready: (this.findWaterPot() !== null), interact: false };
     const state = `stabilité ${Math.round(p.support * 100)} % · état ${Math.round((p.hp / maxHp(p)) * 100)} %${p.burning > 0 ? ' · EN FEU' : ''}`;
     if (h && ITEMS[h.item].tool) return { action: `frapper : ${label.toLowerCase()} (${state})`, ready: true, interact: false };
+    // Les mains prises, E pose l'objet tenu : pas d'options.
+    if (this.props.held) return null;
     return { action: `${label} (${state}) : options`, ready: true, interact: true };
   }
 
