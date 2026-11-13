@@ -52,6 +52,13 @@ export class InputManager {
   private touchEdges = new Set<Action>();
   /** Touches appuyées depuis la dernière image, même déjà relâchées (appui bref). */
   private readonly tapped = new Set<string>();
+  /**
+   * Touches et boutons encore enfoncés au moment d'un clear() (ouverture du sac, pause…) : ils ne
+   * comptent plus tant qu'on ne les a pas relâchés. Sinon, un bouton de manette maintenu, relu à chaque
+   * image, ou la répétition automatique d'une touche, passerait pour un nouvel appui et refermerait
+   * aussitôt ce qu'on vient d'ouvrir.
+   */
+  private readonly suppressed = new Set<string>();
   private mouseDX = 0;
   private mouseDY = 0;
   private lockedAt = -1e9;
@@ -67,7 +74,10 @@ export class InputManager {
     window.addEventListener('blur', () => this.held.clear());
     document.addEventListener('mousemove', this.onMouseMove);
     document.addEventListener('mousedown', this.onMouseDown);
-    window.addEventListener('mouseup', (e) => this.held.delete(`Mouse${e.button}`));
+    window.addEventListener('mouseup', (e) => {
+      this.held.delete(`Mouse${e.button}`);
+      this.suppressed.delete(`Mouse${e.button}`);
+    });
     document.addEventListener('pointerlockchange', () => {
       if (this.locked) this.lockedAt = performance.now();
       this.onPointerLockChange?.(this.locked);
@@ -165,6 +175,14 @@ export class InputManager {
     }
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    if (this.suppressed.has(e.code)) {
+      // Touche maintenue depuis un clear() : sa répétition automatique ne compte pas.
+      if (e.repeat) {
+        if (this.gameActive && this.isBound(e.code)) e.preventDefault();
+        return;
+      }
+      this.suppressed.delete(e.code);
+    }
     if (e.key && e.key.length === 1 && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) this.layout.set(e.code, e.key);
     if (!e.repeat) this.tapped.add(e.code);
     this.held.add(e.code);
@@ -174,6 +192,7 @@ export class InputManager {
 
   private readonly onKeyUp = (e: KeyboardEvent): void => {
     this.held.delete(e.code);
+    this.suppressed.delete(e.code);
   };
 
   private readonly onMouseMove = (e: MouseEvent): void => {
@@ -193,6 +212,7 @@ export class InputManager {
       return;
     }
     if (e.target !== this.canvas) return;
+    this.suppressed.delete(`Mouse${e.button}`);
     if (this.locked) {
       this.held.add(`Mouse${e.button}`);
       this.tapped.add(`Mouse${e.button}`);
@@ -221,7 +241,9 @@ export class InputManager {
   update(dt: number): void {
     const s = this.getSettings();
     const pad = this.pollGamepad();
-    this.current = new Set([...this.held, ...this.padCodes]);
+    // Un bouton de manette relâché depuis le dernier clear() compte de nouveau.
+    for (const c of this.suppressed) if (c.startsWith('Pad:') && !this.padCodes.has(c)) this.suppressed.delete(c);
+    this.current = new Set([...this.held, ...this.padCodes].filter((c) => !this.suppressed.has(c)));
     // Un appui bref (relâché avant cette image) compte quand même pour cette image.
     this.edges = new Set([...[...this.current].filter((c) => !this.prev.has(c)), ...this.tapped]);
     this.tapped.clear();
@@ -288,8 +310,13 @@ export class InputManager {
     return this.edges.has(code);
   }
 
-  /** Oublie les touches maintenues (changement d'écran, perte du focus). */
+  /**
+   * Oublie les touches maintenues (changement d'écran, sac, pause) : celles encore enfoncées ne
+   * compteront qu'après avoir été relâchées puis appuyées de nouveau.
+   */
   clear(): void {
+    for (const c of this.held) this.suppressed.add(c);
+    for (const c of this.readPadButtons()) this.suppressed.add(c);
     this.held.clear();
     this.prev = new Set();
     this.current = new Set();

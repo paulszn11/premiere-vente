@@ -60,6 +60,47 @@ async function waitFor(page, fn, arg, timeout = 30000) {
   return page.waitForFunction(fn, arg, { timeout, polling: 100 });
 }
 
+/**
+ * Script d'initialisation : une manette standard simulée et un compteur d'images (il avance à chaque
+ * image, dans la même boucle requestAnimationFrame que le jeu). À passer à addInitScript.
+ */
+function installTestPad(settings) {
+  if (settings) localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
+  const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
+  window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
+  navigator.getGamepads = () => [window.__pad, null, null, null];
+  window.__frames = 0;
+  const tick = () => {
+    window.__frames++;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/**
+ * Appuis de manette fiables même quand une image dure longtemps (rendu logiciel, shaders compilés à la
+ * première ouverture du sac). Pendant une longue image, les ordres du test s'accumulent puis
+ * s'exécutent d'affilée : un appui et son relâchement tomberaient alors entre deux images, et le jeu ne
+ * verrait rien. On attend donc que le jeu ait affiché deux images bouton enfoncé, puis deux images
+ * bouton relâché.
+ */
+function padControls(page) {
+  const afterFrames = async (n = 2) => {
+    const f0 = await page.evaluate(() => window.__frames);
+    await waitFor(page, ([f, k]) => window.__frames >= f + k, [f0, n], 20000).catch(() => undefined);
+  };
+  const button = (i, down) => page.evaluate(([b, d]) => (window.__pad.buttons[b] = { pressed: d, touched: d, value: d ? 1 : 0 }), [i, down]);
+  const press = async (i, ms = 150) => {
+    await button(i, true);
+    await sleep(ms);
+    await afterFrames();
+    await button(i, false);
+    await afterFrames();
+  };
+  const axes = (v) => page.evaluate((a) => (window.__pad.axes = a), v);
+  return { press, button, axes, afterFrames };
+}
+
 const sess = (page) => page.evaluate(() => window.__game.session());
 
 async function startGame(page) {
@@ -312,11 +353,7 @@ async function touchScenario(browser) {
 async function gamepadScenario(browser) {
   console.log('\n— Manette (simulée)');
   const ctx = await browser.newContext({ viewport: { width: 800, height: 450 } });
-  await ctx.addInitScript(() => {
-    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
-    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
-    navigator.getGamepads = () => [window.__pad, null, null, null];
-  });
+  await ctx.addInitScript(installTestPad);
   const page = await ctx.newPage();
   const errors = watchErrors(page, 'manette');
   await page.goto(BASE);
@@ -355,7 +392,10 @@ async function gamepadScenario(browser) {
     window.__pad.buttons[9] = { pressed: true, touched: true, value: 1 };
   });
   await waitFor(page, () => window.__game.screen() === 'pause', null, 5000);
-  check('Le bouton Start met en pause', true);
+  // Toujours maintenu une seconde plus tard : la pause reste (pas de bascule à chaque image).
+  await sleep(1000);
+  const stillPaused = await page.evaluate(() => window.__game.screen() === 'pause');
+  check('Le bouton Start met en pause (maintenu, la pause reste)', stillPaused);
   check('Aucune erreur dans la console (manette)', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
 }
@@ -792,24 +832,14 @@ async function qaScenario(browser) {
 
   // Manette : X prend, RT lance, B accroupit.
   const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
-  await padCtx.addInitScript((settings) => {
-    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
-    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
-    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
-    navigator.getGamepads = () => [window.__pad, null, null, null];
-  }, QA_SETTINGS);
+  await padCtx.addInitScript(installTestPad, QA_SETTINGS);
   const padPage = await padCtx.newPage();
   const padErrors = watchErrors(padPage, 'manette (objets)');
   await padPage.goto(BASE);
   await startGame(padPage);
   await padPage.evaluate(() => window.__game.teleport('matobo'));
   await settle(padPage);
-  const press = async (i, ms = 150) => {
-    await padPage.evaluate((b) => (window.__pad.buttons[b] = { pressed: true, touched: true, value: 1 }), i);
-    await sleep(ms);
-    await padPage.evaluate((b) => (window.__pad.buttons[b] = { pressed: false, touched: false, value: 0 }), i);
-    await sleep(200);
-  };
+  const { press, button, afterFrames } = padControls(padPage);
   const padStone = await aimAtNearestStone(padPage);
   if (padStone) {
     await press(2);
@@ -826,10 +856,11 @@ async function qaScenario(browser) {
   } else {
     check('Manette : X prend la pierre, RT la lance', false, 'aucune pierre visable');
   }
-  await padPage.evaluate(() => (window.__pad.buttons[1] = { pressed: true, touched: true, value: 1 }));
+  await button(1, true);
   await sleep(500);
+  await afterFrames();
   const padCrouch = (await sess(padPage)).state.crouched;
-  await padPage.evaluate(() => (window.__pad.buttons[1] = { pressed: false, touched: false, value: 0 }));
+  await button(1, false);
   check('Manette : B fait s’accroupir', padCrouch);
   check('Aucune erreur dans la console (manette, objets)', padErrors.length === 0, padErrors.slice(0, 3).join(' | '));
   await padCtx.close();
@@ -1235,25 +1266,13 @@ async function phase3Scenario(browser) {
   // Manette : Y ouvre le sac, le stick choisit, A agit, B ferme.
   console.log('\n— Phase 3 : manette');
   const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
-  await padCtx.addInitScript((settings) => {
-    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
-    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
-    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
-    navigator.getGamepads = () => [window.__pad, null, null, null];
-  }, QA_SETTINGS);
+  await padCtx.addInitScript(installTestPad, QA_SETTINGS);
   const pPage = await padCtx.newPage();
   const pErrors = watchErrors(pPage, 'phase 3 (manette)');
   await pPage.goto(BASE);
   await startGame(pPage);
   await settle(pPage);
-  // Appui de 300 ms : sur une machine lente (rendu logiciel, moins de 10 images/s), un appui plus bref
-  // peut tomber entre deux images et passer inaperçu.
-  const press = async (i, ms = 300) => {
-    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
-    await sleep(ms);
-    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
-    await sleep(250);
-  };
+  const { press, button, axes, afterFrames } = padControls(pPage);
   await pPage.evaluate(() => {
     const sim = window.__game.sim();
     sim.inventory.pockets[0] = { item: 'chiffon', count: 2 };
@@ -1261,17 +1280,15 @@ async function phase3Scenario(browser) {
     sim.vitals.health = 50;
   });
   await press(3);
-  await sleep(300);
   let pb = await pPage.evaluate(() => window.__game.bag());
   const opened = pb.open && pb.selected?.zone === 'poche' && pb.selected.index === 0;
-  await pPage.evaluate(() => (window.__pad.axes = [1, 0, 0, 0]));
-  await sleep(175);
-  const midStick = await pPage.evaluate(() => ({ move: window.__game.input().move, sel: window.__game.bag().selected, fps: Math.round(window.__game.session().fps) }));
-  await sleep(175);
-  await pPage.evaluate(() => (window.__pad.axes = [0, 0, 0, 0]));
-  await sleep(300);
+  // Stick maintenu jusqu'au premier déplacement (au plus 3 s), puis relâché : une seule case.
+  await axes([1, 0, 0, 0]);
+  await waitFor(pPage, () => window.__game.bag().selected?.index !== 0, null, 3000).catch(() => undefined);
+  await axes([0, 0, 0, 0]);
+  await afterFrames();
   pb = await pPage.evaluate(() => window.__game.bag());
-  check('Manette : Y ouvre le sac, le stick passe à la poche voisine', opened && pb.selected?.zone === 'poche' && pb.selected.index === 1, `${JSON.stringify(pb.selected)} · onglet ${pb.tab} · ouvert ${opened} · pendant : ${JSON.stringify(midStick)}`);
+  check('Manette : Y ouvre le sac, le stick passe à la poche voisine', opened && pb.selected?.zone === 'poche' && pb.selected.index === 1, `${JSON.stringify(pb.selected)} · onglet ${pb.tab} · ouvert ${opened}`);
   await press(0);
   await waitFor(pPage, () => window.__game.body().vitals.digest.length === 1, null, 10000).catch(() => undefined);
   await sleep(200);
@@ -1280,6 +1297,16 @@ async function phase3Scenario(browser) {
   await press(1);
   await sleep(300);
   check('Manette : B referme le sac', !(await pPage.evaluate(() => window.__game.bag().open)));
+  // Y maintenu une seconde : le sac s'ouvre et reste ouvert (il ne doit pas s'ouvrir et se fermer à chaque image).
+  await button(3, true);
+  await sleep(1000);
+  await afterFrames(4);
+  const heldOpen = await pPage.evaluate(() => window.__game.bag().open);
+  await button(3, false);
+  await afterFrames();
+  const stillOpen = await pPage.evaluate(() => window.__game.bag().open);
+  await press(1);
+  check('Manette : Y maintenu 1 s ouvre le sac et le laisse ouvert', heldOpen && stillOpen, `pendant : ${heldOpen} · après : ${stillOpen}`);
   await injure(pPage, 'torse', 'coupure', true);
   // Sans digestion en cours (la nourriture compenserait le saignement).
   await pPage.evaluate(() => {
@@ -1724,40 +1751,27 @@ async function phase4Scenario(browser) {
   // Manette : Y ouvre le sac, RB change d'onglet, X pose sur le plan de travail, A fabrique.
   console.log('\n— Phase 4 : manette');
   const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
-  await padCtx.addInitScript((settings) => {
-    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
-    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
-    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
-    navigator.getGamepads = () => [window.__pad, null, null, null];
-  }, QA_SETTINGS);
+  await padCtx.addInitScript(installTestPad, QA_SETTINGS);
   const pPage = await padCtx.newPage();
   const pErrors = watchErrors(pPage, 'phase 4 (manette)');
   await pPage.goto(BASE);
   await startGame(pPage);
   await settle(pPage);
-  // Appui de 300 ms : sur une machine lente (rendu logiciel, moins de 10 images/s), un appui plus bref
-  // peut tomber entre deux images et passer inaperçu.
-  const press = async (i, ms = 300) => {
-    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
-    await sleep(ms);
-    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
-    await sleep(250);
-  };
+  const { press } = padControls(pPage);
   await pPage.evaluate(() => {
     const sim = window.__game.sim();
     sim.inventory.pockets[0] = { item: 'ecorce', count: 1 };
     sim.inventory.bag.push({ item: 'pierre', count: 1, mass: 0.6, radius: 0.04 });
   });
   await press(3);
-  await sleep(300);
+  const padOpened = await pPage.evaluate(() => window.__game.bag().open);
   await press(5);
   await press(5);
   let pb = await pPage.evaluate(() => window.__game.bag());
   const onCraftTab = pb.tab === 'fabriquer' && (await pPage.isVisible('.panel-fabriquer'));
   await press(2);
-  await sleep(200);
   const pc = await pPage.evaluate(() => window.__game.craft());
-  check('Manette : Y ouvre le sac, RB deux fois → « Fabriquer », X pose l’écorce choisie sur le plan de travail', onCraftTab && pc.bench[0]?.item === 'ecorce' && pc.recipe?.id === 'fibres', `onglet ${pb.tab} · plan : ${JSON.stringify(pc.bench)}`);
+  check('Manette : Y ouvre le sac, RB deux fois → « Fabriquer », X pose l’écorce choisie sur le plan de travail', padOpened && onCraftTab && pc.bench[0]?.item === 'ecorce' && pc.recipe?.id === 'fibres', `sac ouvert ${padOpened} · onglet ${pb.tab} · plan : ${JSON.stringify(pc.bench)}`);
   await press(0);
   await waitFor(pPage, () => window.__game.body().inventory.pockets.some((p) => p?.item === 'fibres'), null, 10000).catch(() => undefined);
   const pBody = await pPage.evaluate(() => window.__game.body());
@@ -2055,25 +2069,13 @@ async function phase5Scenario(browser) {
   // Manette : Y, RB jusqu'à « Construire », A trace, RT pose, LT annule.
   console.log('\n— Phase 5 : manette');
   const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
-  await padCtx.addInitScript((settings) => {
-    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
-    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
-    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
-    navigator.getGamepads = () => [window.__pad, null, null, null];
-  }, QA_SETTINGS);
+  await padCtx.addInitScript(installTestPad, QA_SETTINGS);
   const pPage = await padCtx.newPage();
   const pErrors = watchErrors(pPage, 'phase 5 (manette)');
   await pPage.goto(BASE);
   await startGame(pPage);
   await settle(pPage);
-  // Appui de 300 ms : sur une machine lente (rendu logiciel, moins de 10 images/s), un appui plus bref
-  // peut tomber entre deux images et passer inaperçu.
-  const press = async (i, ms = 300) => {
-    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
-    await sleep(ms);
-    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
-    await sleep(250);
-  };
+  const { press } = padControls(pPage);
   await pPage.evaluate(() => {
     const s = window.__game.sim().state;
     window.__game.place(s.x + 14, s.z + 10);
@@ -2085,7 +2087,6 @@ async function phase5Scenario(browser) {
   await press(5);
   const tab = (await pPage.evaluate(() => window.__game.bag())).tab;
   await press(0);
-  await sleep(300);
   let pb = await pPage.evaluate(() => window.__game.build());
   const mode = pb.mode;
   await pPage.evaluate(() => {
