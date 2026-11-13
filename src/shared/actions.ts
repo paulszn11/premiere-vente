@@ -14,6 +14,11 @@ export type BuildRef = { kind: 'piece'; s: string; p: number } | { kind: 'site';
 
 export type PieceOp = 'reparer' | 'torchis' | 'demonter' | 'porte' | 'eteindre';
 export type FurnaceOp = 'minerai' | 'bois' | 'souffler' | 'loupe';
+/** Phase 7. */
+export type VehicleOp = 'monter' | 'pousser' | 'descendre' | 'installer' | 'retirer' | 'reparer' | 'bois' | 'eau' | 'allumer' | 'eteindre' | 'redresser';
+export const VEHICLE_OPS: readonly VehicleOp[] = ['monter', 'pousser', 'descendre', 'installer', 'retirer', 'reparer', 'bois', 'eau', 'allumer', 'eteindre', 'redresser'];
+export type MachineOp = 'bois' | 'eau' | 'allumer' | 'eteindre' | 'reparer';
+export const MACHINE_OPS: readonly MachineOp[] = ['bois', 'eau', 'allumer', 'eteindre', 'reparer'];
 
 export type PlayerAction =
   /** Range l'objet tenu en main (poche, sinon sac). */
@@ -68,6 +73,9 @@ export type PlayerAction =
   /** Bas fourneau : charger du minerai, du bois, actionner le soufflet, retirer une loupe. */
   | { type: 'fourneau'; prop: string; op: FurnaceOp }
   /** Interrompt le geste en cours. */
+  /** Phase 7 : véhicule (monter, pousser, pièces, chaudière…) ; machine (chaudière, réparation). */
+  | { type: 'vehicule'; v: string; op: VehicleOp; slot?: string }
+  | { type: 'machine'; prop: string; op: MachineOp }
   | { type: 'interrompre' }
   /** État critique ou inconscient : mourir tout de suite (personne ne peut venir). */
   | { type: 'abandonner' };
@@ -114,6 +122,8 @@ const TYPES = new Set([
   'annuler_chantier',
   'piece',
   'fourneau',
+  'vehicule',
+  'machine',
 ]);
 
 function readSlot(raw: unknown, allowHand: boolean): HandOrSlot | null {
@@ -188,7 +198,7 @@ export function readAction(raw: unknown): PlayerAction | null {
       return typeof r.index === 'number' && Number.isInteger(r.index) && r.index >= 0 && r.index < BENCH_SLOTS ? { type: 'etabli_reprendre', index: r.index } : null;
     case 'reparer': {
       const from = readSlot(r.from, true);
-      return from && (r.kind === 'religaturer' || r.kind === 'affuter' || r.kind === 'retailler' || r.kind === 'recorder') ? { type: 'reparer', from, kind: r.kind } : null;
+      return from && (r.kind === 'religaturer' || r.kind === 'affuter' || r.kind === 'retailler' || r.kind === 'recorder' || r.kind === 'meule') ? { type: 'reparer', from, kind: r.kind } : null;
     }
     case 'ameliorer': {
       const from = readSlot(r.from, true);
@@ -223,6 +233,13 @@ export function readAction(raw: unknown): PlayerAction | null {
       return propId(r.s) && pieceId(r.p) && (r.op === 'reparer' || r.op === 'torchis' || r.op === 'demonter' || r.op === 'porte' || r.op === 'eteindre') ? { type: 'piece', s: r.s, p: r.p, op: r.op } : null;
     case 'fourneau':
       return propId(r.prop) && (r.op === 'minerai' || r.op === 'bois' || r.op === 'souffler' || r.op === 'loupe') ? { type: 'fourneau', prop: r.prop, op: r.op } : null;
+    case 'vehicule': {
+      if (!propId(r.v) || !VEHICLE_OPS.includes(r.op as VehicleOp)) return null;
+      if (r.slot !== undefined && !(typeof r.slot === 'string' && r.slot.length <= 20)) return null;
+      return r.slot !== undefined ? { type: 'vehicule', v: r.v, op: r.op as VehicleOp, slot: r.slot as string } : { type: 'vehicule', v: r.v, op: r.op as VehicleOp };
+    }
+    case 'machine':
+      return propId(r.prop) && MACHINE_OPS.includes(r.op as MachineOp) ? { type: 'machine', prop: r.prop, op: r.op as MachineOp } : null;
     default:
       return { type: r.type } as PlayerAction;
   }

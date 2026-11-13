@@ -6,7 +6,7 @@
 import { WATER_LEVEL } from './constants';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, type PhysicsWorld, RAPIER, VEHICLE_GROUPS, interactionGroups } from './physics';
 import { chunkCoord, type Terrain } from './terrain';
-import { FRAMES, type VehicleState, type WheelInfo, enginePower, massProps, toWorld, uprightness, waterDrive, wheelsOf } from './vehicles';
+import { FRAMES, type VehicleState, type WheelInfo, enginePower, massProps, onChocks, toWorld, uprightness, waterDrive, wheelsOf } from './vehicles';
 
 /** Commande du conducteur : accélérer (−1 à 1), tourner (−1 gauche à 1 droite), freiner. */
 export interface DriveInput {
@@ -38,6 +38,8 @@ interface Live {
   ctl: RAPIER.DynamicRayCastVehicleController | null;
   wheels: WheelInfo[];
   sig: string;
+  /** Corps tout juste créé : le contrôleur des roues attend un premier pas du monde. */
+  fresh: boolean;
 }
 
 export class VehiclePhysics {
@@ -94,7 +96,9 @@ export class VehiclePhysics {
     const f = FRAMES[v.frame];
     const world = this.phys.world;
     const mp = massProps(v, driver);
-    const desc = RAPIER.RigidBodyDesc.dynamic()
+    // Un châssis à roues incomplet reste calé (immobile) ; sinon le corps est mobile.
+    const chocks = onChocks(v);
+    const desc = (chocks ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic())
       .setTranslation(v.x, v.y, v.z)
       .setRotation({ x: v.qx, y: v.qy, z: v.qz, w: v.qw })
       .setAdditionalMassProperties(mp.mass, mp.com, mp.inertia, { x: 0, y: 0, z: 0, w: 1 })
@@ -103,7 +107,7 @@ export class VehiclePhysics {
       .setCcdEnabled(true)
       .setCanSleep(true);
     const body = world.createRigidBody(desc);
-    if (keepVel) {
+    if (keepVel && !chocks) {
       body.setLinvel(keepVel.vel, true);
       body.setAngvel(keepVel.ang, true);
     }
@@ -129,7 +133,7 @@ export class VehiclePhysics {
       this.byHandle.set(ec.handle, v.id);
     }
     let ctl: RAPIER.DynamicRayCastVehicleController | null = null;
-    const wheels = f.medium === 'terre' ? wheelsOf(v) : [];
+    const wheels = f.medium === 'terre' && !chocks ? wheelsOf(v) : [];
     if (f.medium === 'terre' && f.wheel && wheels.length) {
       ctl = world.createVehicleController(body);
       ctl.indexUpAxis = 1;
@@ -149,7 +153,7 @@ export class VehiclePhysics {
         ctl!.setWheelSideFrictionStiffness(i, 1.2);
       });
     }
-    this.live.set(v.id, { body, colliders, ctl, wheels, sig: this.signature(v, driver) });
+    this.live.set(v.id, { body, colliders, ctl, wheels, sig: this.signature(v, driver), fresh: true });
   }
 
   private remove(id: string): void {
@@ -167,9 +171,15 @@ export class VehiclePhysics {
     if (!lv) return;
     const f = FRAMES[v.frame];
     const body = lv.body;
+    // Un véhicule garé dort ; on le réveille dès qu'on le conduit.
+    if (input && body.isSleeping()) body.wakeUp();
     if (f.medium === 'terre') {
       const ctl = lv.ctl;
       if (!ctl) return;
+      if (lv.fresh) {
+        lv.fresh = false;
+        return;
+      }
       const speed = this.speedOf(v.id);
       const power = input ? enginePower(v) : 0;
       const upright = uprightness(v) > 0.5;
@@ -204,6 +214,7 @@ export class VehiclePhysics {
         ctl.setWheelBrake(i, perWheel * k);
       }
       ctl.updateVehicle(dt, undefined, WHEEL_QUERY);
+      this.rollover(lv, v, !!input, dt);
       return;
     }
     // Bateau : flottaison point par point, traînée, courant, propulsion.
@@ -257,6 +268,36 @@ export class VehiclePhysics {
     // Sans pagayer, l'eau freine la rotation.
     const ang = body.angvel();
     body.addTorque({ x: 0, y: turn - ang.y * 400 * wet, z: 0 }, true);
+  }
+
+  /**
+   * Renversement. Le modèle à rayons garde les roues collées au sol : il ne fait pas basculer un
+   * véhicule. On ajoute donc le couple qui manque quand la force latérale (dévers, virage serré)
+   * dépasse ce que la voie peut retenir : centre de gravité haut et voie étroite → il se renverse.
+   */
+  private rollover(lv: Live, v: VehicleState, driver: boolean, dt: number): void {
+    const ctl = lv.ctl!;
+    let contact = 0;
+    for (let i = 0; i < lv.wheels.length; i++) if (ctl.wheelIsInContact(i)) contact++;
+    if (contact < 2) return;
+    const { x: qx, y: qy, z: qz, w: qw } = lv.body.rotation();
+    const right = { x: 1 - 2 * (qy * qy + qz * qz), y: 2 * (qx * qy + qw * qz), z: 2 * (qx * qz - qw * qy) };
+    const up = { x: 2 * (qx * qy - qw * qz), y: 1 - 2 * (qx * qx + qz * qz), z: 2 * (qy * qz + qw * qx) };
+    const fwd = { x: 2 * (qx * qz + qw * qy), y: 2 * (qy * qz - qw * qx), z: 1 - 2 * (qx * qx + qy * qy) };
+    const l = lv.body.linvel();
+    const a = lv.body.angvel();
+    // Gravité apparente : la pesanteur moins l'accélération centripète (ω × v).
+    const gx = -(a.y * l.z - a.z * l.y);
+    const gy = -9.81 - (a.z * l.x - a.x * l.z);
+    const gz = -(a.x * l.y - a.y * l.x);
+    const lateral = gx * right.x + gy * right.y + gz * right.z;
+    const vertical = -(gx * up.x + gy * up.y + gz * up.z);
+    const mp = massProps(v, driver);
+    const track = Math.max(...lv.wheels.map((w) => Math.abs(w.x)));
+    const excess = Math.abs(lateral) * Math.max(0.2, mp.com.y) - Math.max(0, vertical) * track;
+    if (excess <= 0) return;
+    const k = mp.mass * excess * dt * Math.sign(lateral);
+    lv.body.applyTorqueImpulse({ x: -fwd.x * k, y: -fwd.y * k, z: -fwd.z * k }, true);
   }
 
   /** Lit la position après le pas physique ; renvoie le chemin parcouru. */
@@ -326,6 +367,14 @@ export class VehiclePhysics {
       lv.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       lv.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+  }
+
+  /** Freine brutalement (collision) : la vitesse est multipliée par k. */
+  damp(id: string, k: number): void {
+    const lv = this.live.get(id);
+    if (!lv || lv.body.isFixed()) return;
+    const l = lv.body.linvel();
+    lv.body.setLinvel({ x: l.x * k, y: l.y, z: l.z * k }, true);
   }
 
   /** Pousse un véhicule (bateau échoué) dans une direction. */

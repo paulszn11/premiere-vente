@@ -3,7 +3,7 @@
 // blessures, soins), son inventaire, la mort, le corps laissé dans le monde et la réapparition.
 // En phase 8, cette même logique tournera sur le serveur de l'hôte et le client prédira.
 
-import type { ActionResult, BuildRef, FurnaceOp, HandOrSlot, PieceOp, PlayerAction } from './actions';
+import type { ActionResult, BuildRef, FurnaceOp, HandOrSlot, MachineOp, PieceOp, PlayerAction, VehicleOp } from './actions';
 import {
   type BuildTarget,
   BuildState,
@@ -28,7 +28,7 @@ import {
   salvage,
   stepsOf,
 } from './building';
-import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, KILL_Y, PHYS_CHUNK_RADIUS, STAMINA, TICK_DT, WATER_LEVEL } from './constants';
+import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, KILL_Y, PHYS_CHUNK_RADIUS, PLAYER_HALF_HEIGHT, STAMINA, TICK_DT, WATER_LEVEL } from './constants';
 import {
   type ImproveKind,
   type Knowledge,
@@ -90,6 +90,7 @@ import {
   BTN_CROUCH,
   BTN_INTERACT,
   BTN_JUMP,
+  BTN_SPRINT,
   MODE_CLIMB,
   type InputCmd,
   MODE_SWIM,
@@ -101,13 +102,46 @@ import {
   R_NO_SPRINT,
   R_NO_THROW,
   copyState,
+  drainStamina,
   makeState,
   quantizeInput,
+  regenStamina,
   stepMovement,
 } from './movement';
-import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PhysicsWorld, QUERY_TERRAIN, RAPIER, initPhysics, interactionGroups } from './physics';
+import { MACHINES, type PowerNode, RUNS_AT, TRANSMISSION, boilerPower, newMachine, powerNetwork, waterWheelPower } from './machines';
+import { type DriveInput, type DriveResult, VehiclePhysics } from './vehicle-physics';
+import {
+  ENGINE,
+  FRAMES,
+  FRAME_REPAIR,
+  type EngineState,
+  type FrameKind,
+  PARTS,
+  type PartKind,
+  type PartState,
+  type Vec3,
+  type VehicleEvent,
+  type VehicleState,
+  enginePower,
+  makeVehicle,
+  massProps,
+  missingForRolling,
+  partAt,
+  partName,
+  readVehicles,
+  repairPart,
+  slotDef,
+  stepBoiler,
+  stepEngine,
+  toWorld,
+  uprightness,
+  vehicleName,
+  waterDrive,
+  wearParts,
+} from './vehicles';
+import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
-import { type FireState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
+import { type FireState, type FurnaceState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
 import { Terrain, chunkCoord } from './terrain';
@@ -167,11 +201,15 @@ export type SimEvent =
   /** Une créature blesse le joueur (secousse, bord rouge). */
   | { type: 'attaque'; sp: SpeciesId; zone: Zone; tick: number }
   /** Le joueur touche une créature (sang, retour visuel). */
-  | { type: 'touche'; sp: SpeciesId; part: BodyPart; killed: boolean; x: number; y: number; z: number; tick: number };
+  | { type: 'touche'; sp: SpeciesId; part: BodyPart; killed: boolean; x: number; y: number; z: number; tick: number }
+  /** Phase 7 : le joueur veut voir un véhicule (pièces, chaudière, conduite). */
+  | { type: 'vehicule'; v: string; tick: number }
+  /** Une machine visée (machine fixe, meule, soufflet, pompe, roue à eau). */
+  | { type: 'machine'; prop: string; tick: number };
 
 /** Geste en cours (manger, soigner) : il prend du temps et bouger l'interrompt. */
 export interface Gesture {
-  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage' | 'construction' | 'soufflet' | 'depecage' | 'piege';
+  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage' | 'construction' | 'soufflet' | 'depecage' | 'piege' | 'vehicule';
   label: string;
   total: number;
   left: number;
@@ -191,6 +229,10 @@ export interface Gesture {
   carcass?: string;
   trap?: string;
   trapOp?: 'liberer' | 'rearmer';
+  /** Phase 7 : véhicule (ou machine fixe) sur lequel on travaille, ce qu'on y fait, l'emplacement. */
+  vehicle?: string;
+  vop?: 'installer' | 'retirer' | 'reparer' | 'redresser' | 'reparer_machine';
+  slot?: string;
 }
 
 /** Requête de visée pour tracer un plan : le sol et les obstacles (pièces, troncs), pas les objets. */
@@ -272,6 +314,9 @@ export interface SimSave {
   build?: ReturnType<BuildState['serialize']>;
   /** Faune (phase 6) : populations, individus suivis, évolution ; absente des anciennes sauvegardes. */
   fauna?: FaunaSave;
+  /** Véhicules (phase 7) ; absents des anciennes sauvegardes. */
+  vehicles?: VehicleState[];
+  nextVehicle?: number;
 }
 
 export interface SimulationOptions {
@@ -357,6 +402,21 @@ export class LocalSimulation {
   private readonly projectiles = new Map<string, { left: number; age: number; trap: boolean }>();
   /** Piège qui retient le joueur (collet, fosse). */
   trappedIn: string | null = null;
+  /** Véhicules (phase 7) : châssis, pièces, chaudière. Corps physiques seulement près du joueur. */
+  vehicles: VehicleState[] = [];
+  readonly vphys: VehiclePhysics;
+  private nextVehicle = 1;
+  /** Véhicule conduit (assis aux commandes) ou poussé. */
+  driving: { v: string; mode: 'siege' | 'pousse' } | null = null;
+  /** Dernier pas du véhicule conduit (vitesse, effort) et puissance demandée à la machine (0 à 1). */
+  lastDrive: DriveResult | null = null;
+  private engineLoad = 0;
+  /** Chemin parcouru, choc le plus fort et secondes de propulsion depuis le dernier bilan d'usure. */
+  private readonly vehicleUse = new Map<string, { dist: number; force: number; drive: number }>();
+  /** Charge des sources d'énergie (machine fixe) au dernier calcul du réseau. */
+  private readonly machineLoad = new Map<string, number>();
+  /** Effort du joueur qui pousse ou pagaie (W, lissé, pour l'affichage). */
+  effortW = 0;
   private readonly collider: RAPIER.Collider;
   private lastDrownEvent = -1e9;
   private yaw = 0;
@@ -379,6 +439,8 @@ export class LocalSimulation {
     this.build = new BuildState((x, z) => this.terrain.heightAt(x, z));
     this.structPhys = new StructurePhysics(this.phys, this.build);
     this.phys.onContactForce = (h1, h2, force) => this.onImpact(h1, h2, force);
+    this.vphys = new VehiclePhysics(this.phys, this.terrain);
+    this.build.currentAt = (x, z) => this.terrain.currentAt(x, z);
     this.fauna = new Fauna(this.terrain.seed, this.terrain, opts.creatureCap ?? 40);
     this.fauna.enabled = opts.fauna ?? this.terrain.floraEnabled;
     this.faunaEnv = {
@@ -458,7 +520,7 @@ export class LocalSimulation {
 
     if (v.state === 'mort') {
       this.deadTime += TICK_DT;
-      this.phys.step(TICK_DT);
+      this.physicsStep(null);
       if (this.deadTime >= RESPAWN_DELAY) this.respawnAfterDeath();
       this.tick++;
       return;
@@ -478,6 +540,12 @@ export class LocalSimulation {
         if (wasAsleep) this.push({ type: 'vital', event: { type: 'reveille' }, tick: this.tick });
       }
     }
+    // On lâche le véhicule : inconscient, saisi par une créature, véhicule renversé ou disparu.
+    if (this.driving) {
+      const dv = this.vehicle(this.driving.v);
+      if (!dv || v.state !== 'eveille' || held || !this.vphys.has(dv.id)) this.leaveVehicle(null);
+      else if (uprightness(dv) < 0.35) this.leaveVehicle(`${cap(vehicleName(dv))} se renverse !`);
+    }
     let c = q;
     if (v.state !== 'eveille' || v.posture !== 'debout') c = { ...q, wx: 0, wz: 0, buttons: BTN_CROUCH };
     else if (this.fauna.grab) c = { ...q, wx: 0, wz: 0, buttons: 0 };
@@ -485,72 +553,85 @@ export class LocalSimulation {
     else if (this.gesture) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_CROUCH };
 
     const pressed = c.buttons & ~s.prevButtons;
-    let propPressed = pressed;
-    if (v.state !== 'eveille') {
-      if (this.props.held) this.props.drop(s);
-      propPressed = 0;
-    } else if ((pressed & BTN_INTERACT) !== 0 && this.props.held) {
-      // Les mains prises (une bûche à rentrer…), E ouvre ou ferme quand même la porte visée.
-      const bt = this.buildTarget();
-      const door = bt?.kind === 'piece' ? this.build.piece(bt.s, bt.p) : undefined;
-      if (bt?.kind === 'piece' && door && PLANS[door.plan].piece === 'porte' && isDone(door)) {
+    if (this.driving) {
+      // Aux commandes d'un véhicule (ou en train de le pousser) : la commande le conduit.
+      this.stepDriving(c, pressed);
+    } else {
+      let propPressed = pressed;
+      if (v.state !== 'eveille') {
+        if (this.props.held) this.props.drop(s);
+        propPressed = 0;
+      } else if ((pressed & BTN_INTERACT) !== 0 && this.props.held) {
+        // Les mains prises (une bûche à rentrer…), E ouvre ou ferme quand même la porte visée.
+        const bt = this.buildTarget();
+        const door = bt?.kind === 'piece' ? this.build.piece(bt.s, bt.p) : undefined;
+        if (bt?.kind === 'piece' && door && PLANS[door.plan].piece === 'porte' && isDone(door)) {
+          propPressed &= ~BTN_INTERACT;
+          const r = this.toggleDoor(bt.s, bt.p);
+          if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+        }
+      } else if ((pressed & BTN_INTERACT) !== 0 && this.trappedIn) {
+        // Pris dans un piège : E pour se dégager.
         propPressed &= ~BTN_INTERACT;
-        const r = this.toggleDoor(bt.s, bt.p);
-        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+        if (!this.gesture) this.startTrapGesture(this.trappedIn, 'liberer');
+      } else if ((pressed & BTN_INTERACT) !== 0 && !this.props.held) {
+        // Petits objets rangés directement ; sacs et corps s'ouvrent (affichage).
+        const t = this.props.target(s, c.yaw, c.pitch);
+        const bt = this.buildTarget();
+        const vt = this.vehicleTarget();
+        if (vt && (!t || vt.dist < t.distance) && (!bt || vt.dist < bt.dist)) {
+          // Véhicule : son panneau (conduire, pousser, pièces, chaudière).
+          propPressed &= ~BTN_INTERACT;
+          this.push({ type: 'vehicule', v: vt.id, tick: this.tick });
+        } else if (bt && (!t || bt.dist < t.distance)) {
+          // Pièce de construction ou chantier : porte qui s'ouvre, sinon son panneau.
+          propPressed &= ~BTN_INTERACT;
+          this.interactBuild(bt);
+        } else if (t && TRAP_KINDS.has(t.kind)) {
+          propPressed &= ~BTN_INTERACT;
+          const r = this.interactTrap(t.id);
+          if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+        } else if (t && t.kind === 'carcasse') {
+          propPressed &= ~BTN_INTERACT;
+          const def = this.props.defOf(t.id);
+          const k = def?.carcass;
+          if (k) this.msg(k.meat > 0 && this.time - k.at < CARCASS_ROT ? `Carcasse ${SPECIES[k.sp].feminine ? 'd’une' : 'd’un'} ${SPECIES[k.sp].label} : une lame en main (Utiliser) pour la dépecer.` : 'Il n’y a plus rien de bon à prendre.', 'info');
+        } else if (t && t.kind === 'puits') {
+          propPressed &= ~BTN_INTERACT;
+          const pot = this.findPot();
+          const r = pot ? this.fillPot(pot) : fail('Il faut un pot pour puiser l’eau.');
+          if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+        } else if (t && QUICK_PICK.has(t.kind)) {
+          if (this.pickUp(t.id)) propPressed &= ~BTN_INTERACT;
+        } else if (t && MACHINE_KINDS.has(t.kind)) {
+          propPressed &= ~BTN_INTERACT;
+          this.push({ type: 'machine', prop: t.id, tick: this.tick });
+        } else if (t && (t.kind === 'sac' || t.kind === 'corps' || t.kind === 'foyer' || t.kind === 'coffre' || t.kind === 'forge' || t.kind === 'fourneau' || t.kind === 'etabli')) {
+          propPressed &= ~BTN_INTERACT;
+          this.push({ type: 'ouvrir', prop: t.id, tick: this.tick });
+        } else if (t && t.kind === 'touffe_herbe') {
+          // Les herbes sèches s'arrachent à la main.
+          propPressed &= ~BTN_INTERACT;
+          const r = this.harvestNode(t, null);
+          if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+        } else if (t && t.kind === 'gravier_or') {
+          propPressed &= ~BTN_INTERACT;
+          if (hintRecipe(this.knowledge, 'batee')) this.msg('Ce gravier brille… Une batée permettrait de le laver. Nouvelle idée dans le carnet.', 'info');
+          else this.msg('Ce gravier brille… Il faut une batée en main (Utiliser) pour le laver.', 'info');
+        }
       }
-    } else if ((pressed & BTN_INTERACT) !== 0 && this.trappedIn) {
-      // Pris dans un piège : E pour se dégager.
-      propPressed &= ~BTN_INTERACT;
-      if (!this.gesture) this.startTrapGesture(this.trappedIn, 'liberer');
-    } else if ((pressed & BTN_INTERACT) !== 0 && !this.props.held) {
-      // Petits objets rangés directement ; sacs et corps s'ouvrent (affichage).
-      const t = this.props.target(s, c.yaw, c.pitch);
-      const bt = this.buildTarget();
-      if (bt && (!t || bt.dist < t.distance)) {
-        // Pièce de construction ou chantier : porte qui s'ouvre, sinon son panneau.
-        propPressed &= ~BTN_INTERACT;
-        this.interactBuild(bt);
-      } else if (t && TRAP_KINDS.has(t.kind)) {
-        propPressed &= ~BTN_INTERACT;
-        const r = this.interactTrap(t.id);
-        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
-      } else if (t && t.kind === 'carcasse') {
-        propPressed &= ~BTN_INTERACT;
-        const def = this.props.defOf(t.id);
-        const k = def?.carcass;
-        if (k) this.msg(k.meat > 0 && this.time - k.at < CARCASS_ROT ? `Carcasse ${SPECIES[k.sp].feminine ? 'd’une' : 'd’un'} ${SPECIES[k.sp].label} : une lame en main (Utiliser) pour la dépecer.` : 'Il n’y a plus rien de bon à prendre.', 'info');
-      } else if (t && t.kind === 'puits') {
-        propPressed &= ~BTN_INTERACT;
-        const pot = this.findPot();
-        const r = pot ? this.fillPot(pot) : fail('Il faut un pot pour puiser l’eau.');
-        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
-      } else if (t && QUICK_PICK.has(t.kind)) {
-        if (this.pickUp(t.id)) propPressed &= ~BTN_INTERACT;
-      } else if (t && (t.kind === 'sac' || t.kind === 'corps' || t.kind === 'foyer' || t.kind === 'coffre' || t.kind === 'forge' || t.kind === 'fourneau' || t.kind === 'etabli')) {
-        propPressed &= ~BTN_INTERACT;
-        this.push({ type: 'ouvrir', prop: t.id, tick: this.tick });
-      } else if (t && t.kind === 'touffe_herbe') {
-        // Les herbes sèches s'arrachent à la main.
-        propPressed &= ~BTN_INTERACT;
-        const r = this.harvestNode(t, null);
-        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
-      } else if (t && t.kind === 'gravier_or') {
-        propPressed &= ~BTN_INTERACT;
-        if (hintRecipe(this.knowledge, 'batee')) this.msg('Ce gravier brille… Une batée permettrait de le laver. Nouvelle idée dans le carnet.', 'info');
-        else this.msg('Ce gravier brille… Il faut une batée en main (Utiliser) pour le laver.', 'info');
+      this.props.update(s, c, propPressed);
+      if (this.props.thrown) {
+        this.projectiles.set(this.props.thrown, { left: 3, age: 0, trap: false });
+        this.props.thrown = null;
       }
+      if (this.props.refusal) {
+        this.msg(this.props.refusal, 'alerte');
+        this.props.refusal = null;
+      }
+      stepMovement(this.phys, this.collider, s, c, TICK_DT);
+      this.physicsStep(null);
     }
-    this.props.update(s, c, propPressed);
-    if (this.props.thrown) {
-      this.projectiles.set(this.props.thrown, { left: 3, age: 0, trap: false });
-      this.props.thrown = null;
-    }
-    if (this.props.refusal) {
-      this.msg(this.props.refusal, 'alerte');
-      this.props.refusal = null;
-    }
-    stepMovement(this.phys, this.collider, s, c, TICK_DT);
-    this.phys.step(TICK_DT);
     this.applyImpacts();
     this.stepFauna();
     if (this.dead) {
@@ -599,6 +680,8 @@ export class LocalSimulation {
       this.stepFires(30 * TICK_DT);
       this.stepFurnaces(30 * TICK_DT);
       this.stepBuildFire(30 * TICK_DT);
+      this.stepVehicles(30 * TICK_DT);
+      this.stepMachines(30 * TICK_DT);
     }
     if (this.tick % 600 === 0) {
       this.cleanupBodies();
@@ -630,6 +713,7 @@ export class LocalSimulation {
 
   /** Place le joueur à un endroit précis (point d'apparition, outil de test). */
   teleport(x: number, y: number, z: number): void {
+    this.leaveVehicle(null);
     // L'objet tenu suit le joueur.
     this.props.moveHeld(x - this.state.x, y - this.state.y, z - this.state.z);
     const s = makeState(x, y, z);
@@ -652,6 +736,7 @@ export class LocalSimulation {
   // ——— Mort et réapparition ———
 
   private onDeath(): void {
+    this.leaveVehicle(null);
     const s = this.state;
     const v = this.vitals;
     this.gesture = null;
@@ -857,6 +942,7 @@ export class LocalSimulation {
       else this.finishPieceOp(g.build, g.buildOp);
     } else if (g.kind === 'depecage' && g.carcass) this.finishButcher(g.carcass);
     else if (g.kind === 'piege' && g.trap && g.trapOp) this.finishTrapGesture(g.trap, g.trapOp);
+    else if (g.kind === 'vehicule' && g.vehicle) this.finishVehicleGesture(g);
   }
 
   private startEating(from: HandOrSlot): ActionResult {
@@ -1177,6 +1263,10 @@ export class LocalSimulation {
         return this.startDismantle(a.from);
       case 'remplir':
         return this.fillPot(a.from);
+      case 'vehicule':
+        return this.vehicleOp(a.v, a.op, a.slot);
+      case 'machine':
+        return this.machineOp(a.prop, a.op);
       case 'allumer':
         return this.startLighting(a.prop);
       case 'alimenter':
@@ -1338,6 +1428,7 @@ export class LocalSimulation {
     // Phase 6 : tenu par une créature, pris dans un piège, créature visée, carcasse, piège.
     if (this.fauna.grab) return { action: 'frapper pour vous libérer (ou débattez-vous)', ready: this.useCooldown <= 0, interact: false };
     if (this.trappedIn) return { action: this.props.defOf(this.trappedIn)?.kind === 'fosse' ? 'sortir de la fosse' : 'dégager votre pied', ready: true, interact: true };
+    if (this.driving) return { action: this.driving.mode === 'pousse' ? 'lâcher les brancards' : 'descendre', ready: true, interact: true };
     const heldTool = h ? ITEMS[h.item].tool : undefined;
     const prey = this.fauna.enabled ? this.fauna.rayHit(this.eye(), lookDirection(this.yaw, this.pitch), 1.1 + (heldTool?.reach ?? 0.1)) : null;
     if (prey) {
@@ -1345,6 +1436,17 @@ export class LocalSimulation {
       if (c) return { action: `frapper ${speciesName(c.sp, 'le')}${h ? '' : ' (à mains nues)'}`, ready: this.useCooldown <= 0, interact: false };
     }
     const tp = this.props.target(s, this.yaw, this.pitch);
+    // Phase 7 : véhicule visé.
+    const vt = this.vehicleTarget();
+    if (vt && (!tp || vt.dist < tp.distance)) {
+      const veh = this.vehicle(vt.id);
+      if (veh) {
+        const f = FRAMES[veh.frame];
+        const missing = missingForRolling(veh);
+        const what = missing ?? (uprightness(veh) < 0.6 ? 'renversé, à redresser' : f.medium === 'eau' ? 'monter à bord' : f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur') ? 'monter sur le siège' : 'pousser');
+        return { action: `${vehicleName(veh)} : ${what}`, ready: true, interact: true };
+      }
+    }
     if (tp?.kind === 'carcasse') {
       const k = this.props.defOf(tp.id)?.carcass;
       if (k) {
@@ -1728,8 +1830,8 @@ export class LocalSimulation {
     if (!ref) return fail();
     ensureToolMeta(ref.st);
     ref.commit();
-    const opt = repairOptions(ref.st).find((o) => o.kind === kind);
-    if (!opt) return fail('Rien à réparer de cette façon.');
+    const opt = repairOptions(ref.st, this.meuleNearby()).find((o) => o.kind === kind);
+    if (!opt) return fail(kind === 'meule' ? 'Il faut une meule entraînée à portée de main.' : 'Rien à réparer de cette façon.');
     for (const [item, n] of opt.needs) if (this.available(item) < n) return fail(`Il vous faut ${itemName(item, n)}.`);
     if (opt.tool && !this.findTool(opt.tool)) return fail(`Il faut ${TOOL_NEEDS[opt.tool]}.`);
     this.gesture = { kind: 'reparation', label: `${opt.label}…`, total: opt.seconds, left: opt.seconds, from, repair: kind };
@@ -1740,7 +1842,7 @@ export class LocalSimulation {
     const ref = this.stackRef(from);
     if (!ref) return;
     const st = ref.st;
-    const opt = repairOptions(st).find((o) => o.kind === kind);
+    const opt = repairOptions(st, this.meuleNearby()).find((o) => o.kind === kind);
     if (!opt) return;
     for (const [item, n] of opt.needs) if (this.available(item) < n) return this.msg(`Il vous manque ${itemName(item, n)}.`, 'alerte');
     for (const [item, n] of opt.needs) this.use(item, n);
@@ -1941,7 +2043,8 @@ export class LocalSimulation {
   }
 
   private fillPot(from: HandOrSlot): ActionResult {
-    if (!this.inWater() && !this.nearInstall('puits', 2.6)) return fail('Il faut être dans l’eau (fleuve, lac) ou à côté d’un puits pour remplir le pot.');
+    const aboard = this.driving ? FRAMES[this.vehicle(this.driving.v)?.frame ?? 'chariot'].medium === 'eau' : false;
+    if (!this.inWater() && !aboard && !this.nearInstall('puits', 2.6) && !this.pumpNearby()) return fail('Il faut être dans l’eau (fleuve, lac), dans un bateau, ou à côté d’un puits ou d’une pompe qui tourne pour remplir le pot.');
     const ref = this.stackRef(from);
     if (!ref || ref.st.item !== 'pot') return fail('Il faut un pot en terre cuite.');
     ensureToolMeta(ref.st);
@@ -2204,6 +2307,16 @@ export class LocalSimulation {
   /** Un chantier d'installation terminé devient un objet fixe (coffre, établi, puits, fourneau, forge). */
   private completeSite(site: InstallSite): void {
     const def = PLANS[site.plan];
+    if (def.vehicle) {
+      // Phase 7 : le châssis terminé devient un véhicule (calé tant qu'il lui manque des roues).
+      const f = FRAMES[def.vehicle];
+      const y = f.medium === 'eau' ? WATER_LEVEL + 0.12 : site.y + 0.02;
+      this.vehicles.push(makeVehicle(`veh${this.nextVehicle++}`, def.vehicle, site.x, y, site.z, site.yaw));
+      this.build.removeSite(site.id);
+      const wheels = f.slots.some((x) => x.part === 'roue') ? 'les essieux puis les roues' : 'les quatre petites roues';
+      this.msg(`${def.label} : terminé. ${f.medium === 'terre' ? `Il est calé : installez ${wheels} (Prendre sur le châssis).` : 'Il flotte : montez à bord (Prendre).'}`, 'info');
+      return;
+    }
     const kind = def.install!;
     const prop: Omit<PropDef, 'id'> = {
       kind,
@@ -2219,6 +2332,7 @@ export class LocalSimulation {
     if (kind === 'forge') prop.fire = { lit: false, fuel: 0, pot: null, cook: 0 };
     if (kind === 'fourneau') prop.furnace = { ore: 0, fuel: 0, lit: false, heat: 0, work: 0, blooms: 0 };
     if (TRAP_KINDS.has(kind)) prop.trap = { armed: true, caught: null };
+    if (MACHINE_KINDS.has(kind)) prop.machine = newMachine(kind as MachinePropKind);
     this.build.removeSite(site.id);
     this.props.spawnDynamic(prop);
     // Un piège terminé est actif tout de suite (les créatures le connaissent sans attendre).
@@ -2437,6 +2551,11 @@ export class LocalSimulation {
 
   /** Choc violent sur une pièce (pierre lancée, débris qui tombe) : dégâts selon la force. */
   private onImpact(h1: number, h2: number, force: number): void {
+    const veh = this.vphys.vehicleOf(h1) ?? this.vphys.vehicleOf(h2);
+    if (veh) {
+      const u = this.useOf(veh);
+      u.force = Math.max(u.force, force);
+    }
     const a = this.structPhys.pieceOf(h1) ?? this.structPhys.pieceOf(h2);
     if (!a) return;
     const key = `${a.s}:${a.p}`;
@@ -3252,6 +3371,705 @@ export class LocalSimulation {
   }
 
   /** Créatures autour du joueur (affichage). */
+  // ——— Phase 7 : véhicules ———
+
+  vehicle(id: string): VehicleState | undefined {
+    return this.vehicles.find((v) => v.id === id);
+  }
+
+  private useOf(id: string): { dist: number; force: number; drive: number } {
+    let u = this.vehicleUse.get(id);
+    if (!u) this.vehicleUse.set(id, (u = { dist: 0, force: 0, drive: 0 }));
+    return u;
+  }
+
+  /** Un pas de physique : forces et commandes des véhicules, monde, puis position des véhicules. */
+  private physicsStep(input: DriveInput | null): void {
+    const driven = this.driving?.v ?? null;
+    if (this.vehicles.length) {
+      this.vphys.sync(this.vehicles, driven);
+      for (const v of this.vehicles) if (this.vphys.has(v.id)) this.vphys.preStep(v, v.id === driven ? input : null, TICK_DT);
+    }
+    this.phys.step(TICK_DT);
+    for (const v of this.vehicles) {
+      if (!this.vphys.has(v.id)) continue;
+      const x0 = v.x;
+      const y0 = v.y;
+      const z0 = v.z;
+      const r = this.vphys.postStep(v, v.id === driven ? input : null);
+      if (v.id === driven) this.lastDrive = r;
+      if (r.dist < 0.0005) continue;
+      const u = this.useOf(v.id);
+      u.dist += r.dist;
+      if (v.id === driven && input && input.throttle !== 0 && waterDrive(v) && enginePower(v) > 0) u.drive += TICK_DT;
+      if (r.speed > 2.5 && FRAMES[v.frame].medium === 'terre' && this.fauna.enabled) this.vehicleHits(v, { x: x0, y: y0, z: z0 }, r.speed);
+    }
+  }
+
+  /** Un véhicule lancé percute une créature : elle est blessée selon l'énergie du choc. */
+  private readonly vehicleHitAt = new Map<string, number>();
+  private vehicleHits(v: VehicleState, prev: Vec3, speed: number): void {
+    const f = FRAMES[v.frame];
+    const r = Math.max(f.half.x, f.half.z * 0.7);
+    const hit = this.fauna.sweepHit({ x: prev.x, y: prev.y + f.cy, z: prev.z }, { x: v.x, y: v.y + f.cy, z: v.z }, r);
+    if (!hit) return;
+    const key = `${v.id}:${hit.id}`;
+    if ((this.vehicleHitAt.get(key) ?? -1e9) > this.time - 1) return;
+    this.vehicleHitAt.set(key, this.time);
+    const c = this.fauna.creatures.get(hit.id);
+    if (!c) return;
+    const mass = massProps(v, this.driving?.v === v.id).mass;
+    const ke = 0.5 * mass * speed * speed;
+    const res = this.fauna.hurt(hit.id, Math.min(220, ke * 0.03), hit.part, { bleed: false, by: 'joueur', x: v.x, z: v.z });
+    this.vphys.damp(v.id, 0.55);
+    const u = this.useOf(v.id);
+    u.force = Math.max(u.force, mass * 9.81 * 12);
+    this.fauna.noise(v.x, v.z, 30);
+    if (!res) return;
+    this.push({ type: 'touche', sp: c.sp, part: hit.part, killed: res.killed, x: c.x, y: v.y + f.cy, z: c.z, tick: this.tick });
+    this.msg(res.killed ? `${cap(vehicleName(v))} écrase ${speciesName(c.sp, 'le')}.` : `${cap(vehicleName(v))} percute ${speciesName(c.sp, 'le')} !`, 'alerte');
+  }
+
+  /** Véhicule visé (à portée de main) et sa distance. */
+  vehicleTarget(): { id: string; dist: number } | null {
+    if (!this.vehicles.length) return null;
+    const o = this.eye();
+    const d = lookDirection(this.yaw, this.pitch);
+    const hit = this.phys.world.castRay(new RAPIER.Ray(o, d), ACTION_REACH + 0.6, true, undefined, QUERY_VEHICLES);
+    if (!hit) return null;
+    const id = this.vphys.vehicleOf(hit.collider.handle);
+    if (!id || this.driving?.v === id) return null;
+    // Le relief ne doit pas cacher le véhicule.
+    const ground = this.phys.world.castRay(new RAPIER.Ray(o, d), hit.timeOfImpact, true, undefined, QUERY_TERRAIN);
+    if (ground && ground.timeOfImpact < hit.timeOfImpact - 0.05) return null;
+    return { id, dist: hit.timeOfImpact };
+  }
+
+  /** Le joueur est assez près pour travailler sur le véhicule (ou il le conduit). */
+  private nearVehicle(v: VehicleState): boolean {
+    if (this.driving?.v === v.id) return true;
+    const f = FRAMES[v.frame];
+    const s = this.state;
+    return Math.hypot(v.x - s.x, v.z - s.z) <= Math.hypot(f.half.x, f.half.z) + ACTION_REACH && Math.abs(v.y - s.y) < 3;
+  }
+
+  private near(p: { x: number; z: number }, r: number): boolean {
+    return Math.hypot(p.x - this.state.x, p.z - this.state.z) <= r;
+  }
+
+  /** Aux commandes : la commande du joueur devient accélérer, tourner, freiner. */
+  private stepDriving(c: InputCmd, pressed: number): void {
+    const s = this.state;
+    const d = this.driving!;
+    const v = this.vehicle(d.v)!;
+    s.spent = 0;
+    s.prevButtons = c.buttons;
+    s.jumpLatch = (c.buttons & BTN_JUMP) !== 0;
+    if ((pressed & BTN_INTERACT) !== 0) {
+      this.leaveVehicle(null);
+      this.physicsStep(null);
+      return;
+    }
+    const f = FRAMES[v.frame];
+    // Avant/arrière et gauche/droite dans le repère de la vue (la vue suit le véhicule).
+    const sin = Math.sin(c.yaw);
+    const cos = Math.cos(c.yaw);
+    const mx = cos * c.wx - sin * c.wz;
+    const my = sin * c.wx + cos * c.wz;
+    const engine = f.medium === 'terre' ? enginePower(v) > 0 : waterDrive(v) && enginePower(v) > 0;
+    const human = d.mode === 'pousse' || !engine;
+    // Assis sur un chariot sans pression : rien ne le fait avancer.
+    const stuck = d.mode === 'siege' && f.medium === 'terre' && !engine;
+    const input: DriveInput = {
+      throttle: stuck ? 0 : Math.max(-1, Math.min(1, my)),
+      steer: Math.max(-1, Math.min(1, mx)),
+      brake: (c.buttons & BTN_JUMP) !== 0,
+      sprint: human && (c.buttons & BTN_SPRINT) !== 0 && !s.exhausted && (s.restrict & R_NO_SPRINT) === 0,
+      effort: human ? (s.exhausted ? 0.45 : 1) * Math.min(1, Math.max(0.3, s.speedMul)) : 1,
+    };
+    this.engineLoad = engine ? Math.abs(input.throttle) : 0;
+    this.physicsStep(input);
+    if (!this.driving) return;
+    this.placeDriver(v, d.mode);
+    // Effort humain (pousser, pagayer) : au-delà d'environ 120 W, l'endurance baisse.
+    const r = this.lastDrive;
+    const watts = r && human ? r.work / TICK_DT : 0;
+    this.effortW += (watts - this.effortW) * 0.1;
+    if (human && watts > 120) drainStamina(s, ((watts - 120) / 30) * TICK_DT);
+    else regenStamina(s, TICK_DT);
+  }
+
+  /** Le joueur suit son siège, ou les brancards du chariot qu'il pousse. */
+  private placeDriver(v: VehicleState, mode: 'siege' | 'pousse'): void {
+    const s = this.state;
+    const f = FRAMES[v.frame];
+    let p: Vec3;
+    if (mode === 'siege' && f.seat) p = toWorld(v, f.seat);
+    else {
+      const q = toWorld(v, { x: f.push?.x ?? 0, y: 0, z: f.push?.z ?? -f.half.z - 0.6 });
+      const g = this.phys.groundHeight(q.x, q.z, q.y + 1.5, QUERY_BUILD) ?? this.terrain.heightAt(q.x, q.z);
+      // Trop d'eau ou une marche trop haute derrière le chariot : on le lâche.
+      if (WATER_LEVEL - g > 1.1 || Math.abs(g - q.y) > 1.3) {
+        this.leaveVehicle('Vous lâchez les brancards.');
+        return;
+      }
+      p = { x: q.x, y: g, z: q.z };
+    }
+    const m = this.vphys.motion(v.id);
+    s.x = p.x;
+    s.y = p.y;
+    s.z = p.z;
+    s.vx = m?.vx ?? 0;
+    s.vy = mode === 'siege' ? (m?.vy ?? 0) : 0;
+    s.vz = m?.vz ?? 0;
+    s.grounded = true;
+    s.mode = MODE_WALK;
+    s.crouched = mode === 'siege';
+    s.airPeakY = s.y;
+    s.breath = Math.min(100, s.breath + 25 * TICK_DT);
+  }
+
+  /** Où descendre : à côté du siège (gauche, droite, derrière, devant), sur la terre ferme si possible. */
+  private exitPoint(v: VehicleState): Vec3 {
+    const f = FRAMES[v.frame];
+    const seatZ = f.seat?.z ?? 0;
+    const cands: Array<[number, number]> = [
+      [-(f.half.x + 0.55), seatZ],
+      [f.half.x + 0.55, seatZ],
+      [0, -(f.half.z + 0.6)],
+      [0, f.half.z + 0.6],
+    ];
+    let first: Vec3 | null = null;
+    for (const [lx, lz] of cands) {
+      const w = toWorld(v, { x: lx, y: 0, z: lz });
+      const g = this.phys.groundHeight(w.x, w.z, w.y + 2.5, QUERY_BUILD) ?? this.terrain.heightAt(w.x, w.z);
+      if (g > WATER_LEVEL - 0.6) return { x: w.x, y: g + 0.05, z: w.z };
+      if (!first) first = { x: w.x, y: Math.max(g, WATER_LEVEL - 1.45) + 0.05, z: w.z };
+    }
+    return first!;
+  }
+
+  private boardVehicle(v: VehicleState, mode: 'siege' | 'pousse'): ActionResult {
+    const f = FRAMES[v.frame];
+    if (this.driving) return fail('Vous êtes déjà aux commandes.');
+    if (this.props.held) return fail('Posez d’abord ce que vous tenez.');
+    if (!this.vphys.has(v.id)) return fail('Trop loin.');
+    const missing = missingForRolling(v);
+    if (missing) return fail(`${cap(vehicleName(v))} ne peut pas rouler : ${missing}.`);
+    if (uprightness(v) < 0.6) return fail(`${cap(vehicleName(v))} est renversé${f.feminine ? 'e' : ''} : redressez-l${f.feminine ? 'a' : 'e'} d’abord.`);
+    if (mode === 'pousse' && !f.push) return fail('On ne pousse pas un bateau de l’intérieur : montez à bord pour pagayer.');
+    if (mode === 'siege' && !f.seat) return fail(`${cap(vehicleName(v))} se pousse : il n’y a pas de siège.`);
+    if (f.medium === 'terre' && this.state.mode === MODE_SWIM) return fail('Sortez d’abord de l’eau.');
+    this.driving = { v: v.id, mode };
+    this.collider.setCollisionGroups(0);
+    this.placeDriver(v, mode);
+    if (!this.driving) return fail('Impossible de le prendre ici.');
+    copyState(this.prev, this.state);
+    if (mode === 'pousse') return ok(`Vous prenez les brancards : avancez pour pousser, reculez pour tirer, sautez pour freiner. ${this.keyHint('lâcher')}`);
+    if (f.medium === 'eau') {
+      if (waterDrive(v)) return ok(`Vous prenez la barre. ${v.engine.pressure > 0.2 ? 'Avancez pour lancer la roue à aubes.' : 'La machine n’a pas de pression : en attendant, on pagaie.'} ${this.keyHint('descendre')}`);
+      return ok(`Vous montez à bord et prenez la pagaie : avancez pour pagayer, gauche et droite pour tourner. ${this.keyHint('descendre')}`);
+    }
+    return ok(v.engine.pressure > 0.2 ? `Vous montez sur le siège : avancez pour accélérer, sautez pour freiner. ${this.keyHint('descendre')}` : `Vous montez sur le siège, mais la machine n’a pas de pression : du bois, de l’eau, puis allumez le foyer. ${this.keyHint('descendre')}`);
+  }
+
+  private keyHint(verb: string): string {
+    return `(Prendre : ${verb})`;
+  }
+
+  private leaveVehicle(message: string | null): void {
+    const d = this.driving;
+    if (!d) return;
+    this.driving = null;
+    this.lastDrive = null;
+    this.engineLoad = 0;
+    this.effortW = 0;
+    const s = this.state;
+    const v = this.vehicle(d.v);
+    if (v && d.mode === 'siege') {
+      const p = this.exitPoint(v);
+      s.x = p.x;
+      s.y = p.y;
+      s.z = p.z;
+    }
+    s.vx = 0;
+    s.vy = 0;
+    s.vz = 0;
+    s.crouched = false;
+    s.mode = MODE_WALK;
+    s.grounded = false;
+    s.airPeakY = s.y;
+    this.collider.setHalfHeight(PLAYER_HALF_HEIGHT);
+    this.collider.setCollisionGroups(PLAYER_GROUPS);
+    copyState(this.prev, s);
+    if (message) this.msg(message, 'alerte');
+  }
+
+  private vehicleOp(id: string, op: VehicleOp, slot?: string): ActionResult {
+    const v = this.vehicle(id);
+    if (!v) return fail('Ce véhicule n’existe plus.');
+    if (op === 'descendre') {
+      if (this.driving?.v !== id) return fail();
+      this.leaveVehicle(null);
+      return ok();
+    }
+    if (!this.nearVehicle(v)) return fail('Trop loin : approchez-vous.');
+    const f = FRAMES[v.frame];
+    switch (op) {
+      case 'monter':
+        return this.boardVehicle(v, f.medium === 'eau' || (f.seat && v.parts.some((p) => p.kind === 'machine_vapeur')) ? 'siege' : 'pousse');
+      case 'pousser':
+        return f.medium === 'eau' ? this.shoveBoat(v) : this.boardVehicle(v, 'pousse');
+      case 'installer':
+      case 'retirer':
+      case 'reparer':
+        if (this.driving) return fail('Descendez d’abord.');
+        return this.startPartGesture(v, slot, op);
+      case 'redresser':
+        if (this.driving) return fail('Descendez d’abord.');
+        return this.startRightUp(v);
+      case 'bois':
+      case 'eau':
+      case 'allumer':
+      case 'eteindre': {
+        const part = v.parts.find((p) => p.kind === 'machine_vapeur');
+        if (!part) return fail('Il n’y a pas de machine à vapeur.');
+        return this.boilerOp(v.engine, part, op, { x: v.x, y: v.y, z: v.z });
+      }
+      default:
+        return fail();
+    }
+  }
+
+  /** Installer, retirer ou réparer une pièce (ou le châssis, sans emplacement) : un geste. */
+  private startPartGesture(v: VehicleState, slot: string | undefined, vop: 'installer' | 'retirer' | 'reparer'): ActionResult {
+    const c = { x: v.x, y: v.y, z: v.z };
+    if (vop === 'reparer' && !slot) {
+      const f = FRAMES[v.frame];
+      if (v.hp >= f.hp) return fail(`${cap(vehicleName(v))} est en bon état.`);
+      const miss = this.missingNeed(FRAME_REPAIR.needs, c);
+      if (miss) return fail(`Il faut ${needLabel(miss)}.`);
+      if (!this.findTool(FRAME_REPAIR.tool)) return fail(`Il faut ${TOOL_NEEDS[FRAME_REPAIR.tool]}.`);
+      this.gesture = { kind: 'vehicule', label: `Réparer ${vehicleName(v)}…`, total: FRAME_REPAIR.seconds, left: FRAME_REPAIR.seconds, vehicle: v.id, vop: 'reparer' };
+      return ok();
+    }
+    const sd = slot ? slotDef(v, slot) : undefined;
+    if (!sd) return fail();
+    const def = PARTS[sd.part];
+    const cur = partAt(v, sd.id);
+    const axleOf = (s: typeof sd) => (s.part === 'roue' ? (s.front ? 'essieu_av' : 'essieu_ar') : null);
+    if (vop === 'installer') {
+      if (cur) return fail(`Il y a déjà ${partName(cur.kind, 'un')} ici.`);
+      const axle = axleOf(sd);
+      if (axle && slotDef(v, axle) && !partAt(v, axle)) return fail('Installez d’abord l’essieu de ces roues.');
+      if (!this.findPartItem(sd.part, v)) return fail(`Il vous faut ${partName(sd.part, 'un')} (en main, dans le sac ou posé à côté).`);
+      const miss = this.missingNeed(def.install.needs, c);
+      if (miss) return fail(`Il faut aussi ${needLabel(miss)}.`);
+      if (def.install.tool && !this.findTool(def.install.tool)) return fail(`Il faut ${TOOL_NEEDS[def.install.tool]}.`);
+    } else if (vop === 'retirer') {
+      if (!cur) return fail('Rien à retirer ici.');
+      if (sd.part === 'essieu' && FRAMES[v.frame].slots.some((s) => s.part === 'roue' && !!s.front === !!sd.front && partAt(v, s.id))) return fail('Retirez d’abord les roues de cet essieu.');
+      if (def.install.tool && !this.findTool(def.install.tool)) return fail(`Il faut ${TOOL_NEEDS[def.install.tool]}.`);
+    } else {
+      if (!cur) return fail('Rien à réparer ici.');
+      if (!cur.broken && cur.wear < 0.25) return fail(`${cap(partName(cur.kind))} est en bon état.`);
+      const miss = this.missingNeed(def.repair, c);
+      if (miss) return fail(`Il faut ${needLabel(miss)}.`);
+      if (def.repairTool && !this.findTool(def.repairTool)) return fail(`Il faut ${TOOL_NEEDS[def.repairTool]}.`);
+    }
+    const seconds = vop === 'reparer' ? def.install.seconds + 4 : vop === 'retirer' ? Math.ceil(def.install.seconds * 0.6) : def.install.seconds;
+    const label = vop === 'installer' ? `Installer ${partName(sd.part)}…` : vop === 'retirer' ? `Retirer ${partName(sd.part)}…` : `Réparer ${partName(sd.part)}…`;
+    this.gesture = { kind: 'vehicule', label, total: seconds, left: seconds, vehicle: v.id, vop, slot: sd.id };
+    return ok();
+  }
+
+  /** Pièce disponible : en main, dans l'inventaire, ou posée près du véhicule. */
+  private findPartItem(kind: PartKind, v: VehicleState): { take: () => { q: number; wear: number; broken: boolean } } | null {
+    const item = PARTS[kind].item;
+    const metaOf = (m?: { q?: number; d?: number; dm?: number }) => ({ q: m?.q ?? 60, wear: m?.d !== undefined && m.dm ? 1 - m.d / m.dm : 0, broken: m?.d === 0 && !!m.dm });
+    const h = this.heldItem();
+    if (h?.item === item)
+      return {
+        take: () => {
+          const m = metaOf(h.def.meta);
+          this.props.remove(h.id);
+          return m;
+        },
+      };
+    const inv = this.inventory;
+    for (const zone of ['poche', 'sac'] as const) {
+      const list: Array<ItemStack | null> = zone === 'sac' ? (inv.bag ?? []) : inv.pockets;
+      const index = list.findIndex((st) => st?.item === item);
+      if (index >= 0) return { take: () => metaOf(takeAt(inv, { zone, index }, 1) ?? undefined) };
+    }
+    const f = FRAMES[v.frame];
+    const reach = Math.hypot(f.half.x, f.half.z) + 2.5;
+    for (const id of this.props.liveIds()) {
+      const def = this.props.defOf(id);
+      if (!def || def.kind !== item) continue;
+      const pos = this.props.position(id);
+      if (!pos || Math.hypot(pos.x - v.x, pos.z - v.z) > reach) continue;
+      return {
+        take: () => {
+          const m = metaOf(def.meta);
+          this.props.remove(id);
+          return m;
+        },
+      };
+    }
+    return null;
+  }
+
+  private finishVehicleGesture(g: Gesture): void {
+    if (g.vop === 'reparer_machine') {
+      this.finishMachineRepair(g.vehicle!);
+      return;
+    }
+    const v = this.vehicle(g.vehicle!);
+    if (!v || !this.nearVehicle(v)) {
+      this.msg('Le véhicule est trop loin.', 'alerte');
+      return;
+    }
+    const c = { x: v.x, y: v.y, z: v.z };
+    const f = FRAMES[v.frame];
+    if (g.vop === 'redresser') {
+      this.vphys.rightUp(v);
+      this.exert(25);
+      this.msg(`Vous remettez ${vehicleName(v)} d’aplomb.`, 'info');
+      return;
+    }
+    if (g.vop === 'reparer' && !g.slot) {
+      const miss = this.missingNeed(FRAME_REPAIR.needs, c);
+      if (miss) {
+        this.msg(`Il vous manque ${needLabel(miss)}.`, 'alerte');
+        return;
+      }
+      this.consumeNeeds(FRAME_REPAIR.needs, c);
+      this.wearTool(FRAME_REPAIR.tool, 1);
+      v.hp = Math.min(f.hp, v.hp + f.hp * 0.4);
+      this.knowledge.xp += 4;
+      this.msg(`${cap(vehicleName(v))} : réparé${f.feminine ? 'e' : ''} (${Math.round((v.hp / f.hp) * 100)} %).`, 'info');
+      return;
+    }
+    const sd = g.slot ? slotDef(v, g.slot) : undefined;
+    if (!sd) return;
+    const def = PARTS[sd.part];
+    const e = def.feminine ? 'e' : '';
+    if (g.vop === 'installer') {
+      if (partAt(v, sd.id)) return;
+      const src = this.findPartItem(sd.part, v);
+      if (!src) {
+        this.msg(`Il vous manque ${partName(sd.part, 'un')}.`, 'alerte');
+        return;
+      }
+      const miss = this.missingNeed(def.install.needs, c);
+      if (miss) {
+        this.msg(`Il vous manque ${needLabel(miss)}.`, 'alerte');
+        return;
+      }
+      this.consumeNeeds(def.install.needs, c);
+      const m = src.take();
+      v.parts.push({ slot: sd.id, kind: sd.part, wear: m.wear, broken: m.broken, q: m.q });
+      if (def.install.tool) this.wearTool(def.install.tool, 1);
+      this.knowledge.xp += 3;
+      const left = missingForRolling(v);
+      const ready = f.medium === 'terre' && !left && (sd.part === 'roue' || sd.part === 'petite_roue' || sd.part === 'essieu');
+      this.msg(`${cap(partName(sd.part))} : installé${e}.${left ? ` Encore : ${left.replace(/^il manque /, '')}.` : ready ? ` ${cap(vehicleName(v))} repose sur ses roues : il peut rouler.` : ''}`, 'info');
+    } else if (g.vop === 'retirer') {
+      const i = v.parts.findIndex((p) => p.slot === sd.id);
+      if (i < 0) return;
+      const p = v.parts.splice(i, 1)[0]!;
+      const st: ItemStack = { item: def.item, count: 1, q: Math.round(p.q), d: p.broken ? 0 : Math.max(1, Math.round((1 - p.wear) * 100)), dm: 100 };
+      if (store(this.inventory, st) > 0) this.dropNear(st, v.x + 1.2, v.z, 1);
+      this.msg(`${cap(partName(sd.part))} : retiré${e}.`, 'info');
+    } else {
+      const p = partAt(v, sd.id);
+      if (!p) return;
+      const miss = this.missingNeed(def.repair, c);
+      if (miss) {
+        this.msg(`Il vous manque ${needLabel(miss)}.`, 'alerte');
+        return;
+      }
+      this.consumeNeeds(def.repair, c);
+      if (def.repairTool) this.wearTool(def.repairTool, 1);
+      repairPart(p);
+      this.knowledge.xp += 5;
+      this.msg(`${cap(partName(p.kind))} : réparé${e} (usure ${Math.round(p.wear * 100)} %).`, 'info');
+    }
+  }
+
+  private startRightUp(v: VehicleState): ActionResult {
+    if (uprightness(v) > 0.8) return fail(`${cap(vehicleName(v))} est d’aplomb.`);
+    const mass = massProps(v, false).mass;
+    if (mass > 450) return fail(`Trop lourd pour le redresser seul (${Math.round(mass)} kg) : retirez d’abord la machine ou des roues.`);
+    if (this.state.stamina < 25) return fail('Vous êtes trop épuisé.');
+    this.gesture = { kind: 'vehicule', label: `Redresser ${vehicleName(v)}…`, total: 3, left: 3, vehicle: v.id, vop: 'redresser' };
+    return ok();
+  }
+
+  private shoveBoat(v: VehicleState): ActionResult {
+    const mass = massProps(v, false).mass;
+    if (mass > 600) return fail('Trop lourd à pousser.');
+    const s = this.state;
+    const dx = v.x - s.x;
+    const dz = v.z - s.z;
+    const l = Math.hypot(dx, dz) || 1;
+    this.vphys.shove(v.id, dx / l, dz / l, Math.min(450, mass * 1.2));
+    this.exert(8);
+    return ok(`Vous poussez ${vehicleName(v)}.`);
+  }
+
+  /** Bois pour un foyer : en main, dans l'inventaire, ou posé à côté. */
+  private takeFuel(c: Vec3): 'buche' | 'baton' | null {
+    const h = this.heldItem();
+    if (h && (h.item === 'buche' || h.item === 'baton')) {
+      this.props.remove(h.id);
+      return h.item;
+    }
+    for (const item of ['buche', 'baton'] as const) {
+      if (countOf(this.inventory, item) > 0) {
+        this.use(item, 1);
+        return item;
+      }
+    }
+    for (const item of ['buche', 'baton'] as const) {
+      const l = this.looseNear(c, item)[0];
+      if (l) {
+        this.props.remove(l.id);
+        return item;
+      }
+    }
+    return null;
+  }
+
+  /** Foyer et chaudière d'une machine à vapeur (véhicule ou machine fixe). */
+  private boilerOp(e: EngineState, part: PartState, op: 'bois' | 'eau' | 'allumer' | 'eteindre', c: Vec3): ActionResult {
+    if (op === 'bois') {
+      if (e.fuel > ENGINE.maxFuel - ENGINE.fuelStick) return fail('Le foyer est plein.');
+      const log = this.takeFuel(c);
+      if (!log) return fail('Il faut du bois (bûches ou bâtons), en main, dans le sac ou posé à côté.');
+      e.fuel = Math.min(ENGINE.maxFuel, e.fuel + (log === 'buche' ? ENGINE.fuelLog : ENGINE.fuelStick));
+      return ok(`Vous chargez le foyer (${Math.max(1, Math.round(e.fuel / 60))} min de feu vif).`);
+    }
+    if (op === 'eau') {
+      if (e.water > ENGINE.water - 0.5) return fail('La chaudière est pleine.');
+      const pot = this.findWaterPot();
+      if (!pot) return fail('Il faut un pot plein d’eau (fleuve, puits ou pompe).');
+      pot.st.w = 0;
+      pot.commit();
+      e.water = Math.min(ENGINE.water, e.water + ENGINE.potWater);
+      return ok(`Vous versez l’eau dans la chaudière (${Math.round(e.water)} L sur ${ENGINE.water}).`);
+    }
+    if (op === 'eteindre') {
+      if (!e.lit) return fail('Le foyer est éteint.');
+      e.lit = false;
+      return ok('Vous étouffez le feu du foyer.');
+    }
+    if (e.lit) return fail('Le feu brûle déjà.');
+    if (part.broken) return fail('La machine est cassée : réparez-la d’abord.');
+    if (e.fuel <= 0) return fail('Il n’y a pas de bois dans le foyer.');
+    const flame = this.litTorchInHand() || this.litFireNear(4);
+    if (!flame && !this.findTool('feu')) return fail('Il faut de quoi allumer : un archet à feu, une torche allumée ou un feu tout près.');
+    if (!flame) this.wearTool('feu', 1);
+    e.lit = true;
+    return ok(e.water > 0 ? 'Le feu prend dans le foyer : la pression va monter.' : 'Le feu prend… mais la chaudière est vide : versez vite de l’eau, ou elle va se fendre !');
+  }
+
+  /** Toutes les 0,5 s : chaudières, usure et pannes (distance, chocs, heures de marche). */
+  private stepVehicles(dt: number): void {
+    if (!this.vehicles.length) return;
+    const out: VehicleEvent[] = [];
+    for (const v of [...this.vehicles]) {
+      const driven = this.driving?.v === v.id;
+      if (v.parts.some((p) => p.kind === 'machine_vapeur') || v.engine.heat > 0) stepEngine(v, dt, driven ? this.engineLoad : 0, out);
+      const u = this.vehicleUse.get(v.id);
+      if (!u) continue;
+      this.vehicleUse.delete(v.id);
+      const mass = massProps(v, driven).mass;
+      const shock = Math.max(0, u.force / (mass * 9.81) - 8) / 4;
+      v.odo += u.dist;
+      wearParts(v, u.dist, mass, shock, u.drive, () => rand(this.vitals), out);
+      if (shock > 0) {
+        const f = FRAMES[v.frame];
+        v.hp -= shock * 10;
+        if (v.hp <= 0) {
+          this.wreckVehicle(v);
+          continue;
+        }
+        if (shock > 0.5 && this.near(v, 30)) this.msg(`${cap(vehicleName(v))} encaisse un choc violent (${Math.round((v.hp / f.hp) * 100)} %).`, 'alerte');
+      }
+    }
+    for (const e of out) this.onVehicleEvent(e);
+  }
+
+  private onVehicleEvent(e: VehicleEvent): void {
+    const v = this.vehicle(e.v);
+    const m = v ? null : this.props.defOf(e.v);
+    const where = v ?? m;
+    if (!where || !this.near(where, 40)) return;
+    const owner = v ? vehicleName(v) : 'la machine fixe';
+    if (e.type === 'panne') {
+      if (e.reason === 'surchauffe') this.msg(`Surchauffe : la chaudière se fend (${owner}) ! Il faudra la réparer.`, 'danger');
+      else this.msg(`Panne (${owner}) : ${partName(e.kind)} ${PARTS[e.kind].feminine ? 'a lâché' : 'a lâché'}${e.reason === 'choc' ? ' sous le choc' : ', usé' + (PARTS[e.kind].feminine ? 'e' : '') + ' jusqu’au bout'}.`, 'alerte');
+    } else if (e.type === 'feu_eteint') this.msg(`Le foyer s’éteint (${owner}) : plus de bois.`, 'info');
+    else this.msg(`La chaudière est vide (${owner}) : la pression retombe. Versez de l’eau !`, 'alerte');
+  }
+
+  /** Véhicule détruit : les pièces tombent au sol, avec quelques débris. */
+  private wreckVehicle(v: VehicleState): void {
+    if (this.driving?.v === v.id) this.leaveVehicle(null);
+    const f = FRAMES[v.frame];
+    v.parts.forEach((p, i) => {
+      const st: ItemStack = { item: PARTS[p.kind].item, count: 1, q: Math.round(p.q), d: p.broken ? 0 : Math.max(1, Math.round((1 - p.wear) * 100)), dm: 100 };
+      this.dropNear(st, v.x, v.z, i + 1);
+    });
+    this.dropNear({ item: 'buche', count: 1 }, v.x, v.z, v.parts.length + 2);
+    this.vehicles = this.vehicles.filter((x) => x !== v);
+    this.vehicleUse.delete(v.id);
+    this.msg(`${cap(vehicleName(v))} est détruit${f.feminine ? 'e' : ''} !`, 'danger');
+  }
+
+  /** Outil de test : un véhicule posé, avec ses pièces et une chaudière en pression si demandé. */
+  spawnVehicle(frame: FrameKind, x: number, z: number, yaw = 0, opts: { parts?: PartKind[] | 'toutes'; steam?: boolean } = {}): string {
+    const f = FRAMES[frame];
+    const y = f.medium === 'eau' ? WATER_LEVEL + 0.12 : this.terrain.heightAt(x, z) + 0.05;
+    const v = makeVehicle(`veh${this.nextVehicle++}`, frame, x, y, z, yaw);
+    for (const sd of f.slots) if (opts.parts === 'toutes' || opts.parts?.includes(sd.part)) v.parts.push({ slot: sd.id, kind: sd.part, wear: 0, broken: false, q: 70 });
+    if (opts.steam && v.parts.some((p) => p.kind === 'machine_vapeur')) v.engine = { fuel: ENGINE.maxFuel, lit: true, heat: 1, pressure: 1, water: ENGINE.water };
+    this.vehicles.push(v);
+    return v.id;
+  }
+
+  // ——— Phase 7 : machines ———
+
+  /** Vitesse du courant la plus forte à moins de r mètres (roue à eau). */
+  private currentNear(x: number, z: number, r: number): number {
+    let best = 0;
+    for (let k = 0; k <= 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const d = k === 16 ? 0 : r;
+      const px = x + Math.cos(a) * d;
+      const pz = z + Math.sin(a) * d;
+      if (this.terrain.heightAt(px, pz) > WATER_LEVEL - 0.3) continue;
+      const c = this.terrain.currentAt(px, pz);
+      best = Math.max(best, Math.hypot(c.x, c.z));
+    }
+    return best;
+  }
+
+  /** Toutes les 0,5 s : sources d'énergie, réseau de transmission, machines entraînées. */
+  private stepMachines(dt: number): void {
+    const machines: Array<{ def: PropDef; kind: MachinePropKind }> = [];
+    this.props.forEachDynamic((def) => {
+      if (!MACHINE_KINDS.has(def.kind)) return;
+      if (!def.machine) def.machine = newMachine(def.kind as MachinePropKind);
+      machines.push({ def, kind: def.kind as MachinePropKind });
+    });
+    if (!machines.length) return;
+    const out: VehicleEvent[] = [];
+    const nodes: PowerNode[] = machines.map(({ def, kind }) => {
+      const m = def.machine!;
+      let output = 0;
+      if (kind === 'roue_eau') output = waterWheelPower(this.currentNear(def.x, def.z, 3));
+      else if (kind === 'machine_fixe' && m.engine && m.part) {
+        stepBoiler(m.engine, m.part, dt, this.machineLoad.get(def.id) ?? 0, def.id, out);
+        output = boilerPower(m);
+      }
+      if (MACHINES[kind].source) m.power = output;
+      return { id: def.id, kind, x: def.x, z: def.z, output };
+    });
+    const ratio = powerNetwork(nodes);
+    for (const { def, kind } of machines) {
+      const r = ratio.get(def.id) ?? 0;
+      if (MACHINES[kind].source) {
+        this.machineLoad.set(def.id, r);
+        continue;
+      }
+      def.machine!.power = r;
+      if (r < RUNS_AT) continue;
+      if (kind === 'soufflet_meca') this.autoBellows(def, r, dt);
+      else if (kind === 'pompe') this.pumpWater(def, r, dt);
+    }
+    for (const e of out) this.onVehicleEvent(e);
+  }
+
+  /** Soufflet mécanique : un coup de soufflet toutes les 4 s (à pleine puissance) dans le fourneau voisin. */
+  private autoBellows(def: PropDef, r: number, dt: number): void {
+    let best: FurnaceState | null = null;
+    for (const fu of this.props.furnaces()) if (fu.furnace.lit && Math.hypot(fu.def.x - def.x, fu.def.z - def.z) <= 3) best = fu.furnace;
+    if (!best) return;
+    const f = best;
+    const k = (dt / 4) * r;
+    f.heat = Math.min(100, f.heat + 30 * k);
+    if (f.heat < 60 || f.ore < 2) return;
+    f.work += 4 * k;
+    if (f.work >= 24) {
+      f.work -= 24;
+      f.ore -= 2;
+      f.blooms++;
+      if (this.near(def, 25)) this.msg('Le soufflet mécanique a fait son œuvre : une loupe de fer attend au fond du fourneau.', 'info');
+    }
+  }
+
+  /** Pompe : remplit les chaudières des véhicules et des machines fixes à portée de transmission. */
+  private pumpWater(def: PropDef, r: number, dt: number): void {
+    const flow = 2 * r * dt;
+    for (const v of this.vehicles) {
+      if (!v.parts.some((p) => p.kind === 'machine_vapeur') || Math.hypot(v.x - def.x, v.z - def.z) > TRANSMISSION) continue;
+      v.engine.water = Math.min(ENGINE.water, v.engine.water + flow);
+    }
+    this.props.forEachDynamic((d) => {
+      const e = d.machine?.engine;
+      if (d.kind === 'machine_fixe' && e && Math.hypot(d.x - def.x, d.z - def.z) <= TRANSMISSION) e.water = Math.min(ENGINE.water, e.water + flow);
+    });
+  }
+
+  /** Une meule entraînée tourne à portée de main (affûtage sans perte). */
+  meuleNearby(): boolean {
+    const d = this.nearInstall('meule', 2.6);
+    return !!d && (d.machine?.power ?? 0) >= RUNS_AT;
+  }
+
+  /** Une pompe entraînée à portée (on y remplit un pot). */
+  pumpNearby(): boolean {
+    const d = this.nearInstall('pompe', 2.6);
+    return !!d && (d.machine?.power ?? 0) >= RUNS_AT;
+  }
+
+  private machineOp(prop: string, op: MachineOp): ActionResult {
+    const def = this.reachable(prop);
+    if (!def || !MACHINE_KINDS.has(def.kind)) return fail('Trop loin.');
+    const m = def.machine ?? (def.machine = newMachine(def.kind as MachinePropKind));
+    if (def.kind !== 'machine_fixe' || !m.engine || !m.part) return fail('Cette machine n’a pas de chaudière.');
+    if (op === 'reparer') {
+      const p = m.part;
+      if (!p.broken && p.wear < 0.25) return fail('La machine est en bon état.');
+      const c = { x: def.x, y: def.y, z: def.z };
+      const miss = this.missingNeed(PARTS.machine_vapeur.repair, c);
+      if (miss) return fail(`Il faut ${needLabel(miss)}.`);
+      if (!this.findTool('percuteur')) return fail(`Il faut ${TOOL_NEEDS.percuteur}.`);
+      this.gesture = { kind: 'vehicule', label: 'Réparer la machine à vapeur…', total: 12, left: 12, vehicle: def.id, vop: 'reparer_machine' };
+      return ok();
+    }
+    return this.boilerOp(m.engine, m.part, op, { x: def.x, y: def.y, z: def.z });
+  }
+
+  private finishMachineRepair(prop: string): void {
+    const def = this.reachable(prop);
+    const p = def?.machine?.part;
+    if (!def || !p) return;
+    const c = { x: def.x, y: def.y, z: def.z };
+    const miss = this.missingNeed(PARTS.machine_vapeur.repair, c);
+    if (miss) {
+      this.msg(`Il vous manque ${needLabel(miss)}.`, 'alerte');
+      return;
+    }
+    this.consumeNeeds(PARTS.machine_vapeur.repair, c);
+    this.wearTool('percuteur', 1);
+    repairPart(p);
+    this.msg('La machine à vapeur est réparée.', 'info');
+  }
+
   creatureViews(): ReturnType<Fauna['views']> {
     return this.fauna.views();
   }
@@ -3274,6 +4092,9 @@ export class LocalSimulation {
       vitals.energy = VITALS.respawn.energy;
       vitals.fatigue = VITALS.respawn.fatigue;
     }
+    // Aux commandes d'un véhicule : on reprendra la partie à côté de lui.
+    const dv = this.driving ? this.vehicle(this.driving.v) : undefined;
+    if (dv && this.driving?.mode === 'siege' && !this.dead) pos = this.exitPoint(dv);
     return {
       version: 1,
       time: this.time,
@@ -3282,6 +4103,8 @@ export class LocalSimulation {
       world: this.world.serialize(),
       build: this.build.serialize(),
       fauna: this.fauna.serialize(),
+      vehicles: this.vehicles,
+      nextVehicle: this.nextVehicle,
     };
   }
 
@@ -3294,6 +4117,9 @@ export class LocalSimulation {
     this.world.restore(r.world);
     this.build.restore(r.build);
     this.fauna.restore(r.fauna);
+    this.vehicles = readVehicles(r.vehicles);
+    const maxId = this.vehicles.reduce((m, v) => Math.max(m, Number(v.id.replace(/^veh/, '')) || 0), 0);
+    this.nextVehicle = Math.max(maxId + 1, typeof r.nextVehicle === 'number' && Number.isInteger(r.nextVehicle) ? Math.min(1e9, r.nextVehicle) : 1);
     const p = r.player as Record<string, unknown> | undefined;
     if (!p || typeof p !== 'object') return null;
     this.vitals = readVitals(p.vitals, this.vitals.rng);
@@ -3312,6 +4138,7 @@ export class LocalSimulation {
   }
 
   dispose(): void {
+    this.vphys.dispose();
     this.phys.dispose();
   }
 }

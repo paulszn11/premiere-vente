@@ -632,7 +632,10 @@ export function wear(st: ItemStack, amount = 1): boolean {
   return st.d <= 0;
 }
 
-export type RepairKind = 'religaturer' | 'affuter' | 'retailler' | 'recorder';
+/** Lames qu'une meule sait affûter (phase 7). */
+const SHARP_EDGES = new Set<ItemId>(['couteau', 'hache', 'couteau_fer', 'hache_fer', 'lance']);
+
+export type RepairKind = 'religaturer' | 'affuter' | 'retailler' | 'recorder' | 'meule';
 
 export interface RepairOption {
   kind: RepairKind;
@@ -642,9 +645,11 @@ export interface RepairOption {
   seconds: number;
 }
 
-export function repairOptions(st: ItemStack): RepairOption[] {
+/** Options de réparation ; meule : une meule entraînée tourne à portée (phase 7). */
+export function repairOptions(st: ItemStack, meule = false): RepairOption[] {
   if (st.d === undefined || !st.dm || st.d >= st.dm) return [];
   const out: RepairOption[] = [];
+  if (meule && SHARP_EDGES.has(st.item)) out.push({ kind: 'meule', label: 'Affûter à la meule', needs: [], tool: null, seconds: 4 });
   if (BOUND.has(st.item)) out.push({ kind: 'religaturer', label: 'Refaire la ligature', needs: [['corde', 1]], tool: null, seconds: 4 });
   if (st.item === 'couteau' || st.item === 'hache' || st.item === 'couteau_fer' || st.item === 'hache_fer') out.push({ kind: 'affuter', label: 'Affûter sur une pierre', needs: [], tool: 'percuteur', seconds: 5 });
   if (st.item === 'baton_fouir' || st.item === 'lance') out.push({ kind: 'retailler', label: 'Retailler la pointe', needs: [], tool: 'tranchant', seconds: 3 });
@@ -655,6 +660,11 @@ export function repairOptions(st: ItemStack): RepairOption[] {
 /** Répare : rend de la durabilité, mais chaque réparation réduit le maximum. */
 export function applyRepair(st: ItemStack, kind: RepairKind): void {
   if (st.d === undefined || !st.dm) return;
+  if (kind === 'meule') {
+    // La meule rend tout le tranchant sans entamer la lame : la durabilité maximale ne baisse pas.
+    st.d = st.dm;
+    return;
+  }
   const gain = kind === 'religaturer' ? 0.5 : kind === 'affuter' ? 0.3 : kind === 'retailler' ? 0.4 : 0.9;
   const loss = kind === 'affuter' ? 0.92 : 0.9;
   st.dm = Math.max(1, Math.round(st.dm * loss));

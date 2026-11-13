@@ -68,6 +68,8 @@ export interface PartDef {
   perHour: number;
   repair: Need[];
   repairTool: ToolTag | null;
+  /** Installer (ou retirer) la pièce : durée, outil, fixations consommées. */
+  install: { seconds: number; tool: ToolTag | null; needs: Need[] };
 }
 
 const WHEELS4 = (part: PartKind, x: number, y: number, z: number): SlotDef[] => [
@@ -203,9 +205,9 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
 export const FRAME_KINDS = Object.keys(FRAMES) as FrameKind[];
 
 export const PARTS: Record<PartKind, PartDef> = {
-  petite_roue: { id: 'petite_roue', item: 'petite_roue', label: 'petite roue', feminine: true, mass: 4, perKm: 0.05, perHour: 0, repair: [['baton', 1], ['corde', 1]], repairTool: 'tranchant' },
-  roue: { id: 'roue', item: 'roue', label: 'roue cerclée de fer', feminine: true, mass: 25, perKm: 0.025, perHour: 0, repair: [['buche', 1], ['clous', 4]], repairTool: 'percuteur' },
-  essieu: { id: 'essieu', item: 'essieu', label: 'essieu', feminine: false, mass: 12, perKm: 0.015, perHour: 0, repair: [['barre_fer', 1]], repairTool: 'percuteur' },
+  petite_roue: { id: 'petite_roue', item: 'petite_roue', label: 'petite roue', feminine: true, mass: 4, perKm: 0.05, perHour: 0, repair: [['baton', 1], ['corde', 1]], repairTool: 'tranchant', install: { seconds: 4, tool: null, needs: [] } },
+  roue: { id: 'roue', item: 'roue', label: 'roue cerclée de fer', feminine: true, mass: 25, perKm: 0.025, perHour: 0, repair: [['buche', 1], ['clous', 4]], repairTool: 'percuteur', install: { seconds: 8, tool: 'percuteur', needs: [] } },
+  essieu: { id: 'essieu', item: 'essieu', label: 'essieu', feminine: false, mass: 12, perKm: 0.015, perHour: 0, repair: [['barre_fer', 1]], repairTool: 'percuteur', install: { seconds: 8, tool: 'percuteur', needs: [] } },
   machine_vapeur: {
     id: 'machine_vapeur',
     item: 'machine_vapeur',
@@ -220,12 +222,21 @@ export const PARTS: Record<PartKind, PartDef> = {
       ['argile', 1],
     ],
     repairTool: 'percuteur',
+    install: { seconds: 15, tool: 'percuteur', needs: [['boulons', 4]] },
   },
-  roue_aubes: { id: 'roue_aubes', item: 'roue_aubes', label: 'roue à aubes', feminine: true, mass: 40, perKm: 0, perHour: 0.25, repair: [['buche', 1], ['clous', 4]], repairTool: 'percuteur' },
-  gouvernail: { id: 'gouvernail', item: 'gouvernail', label: 'gouvernail', feminine: false, mass: 10, perKm: 0.01, perHour: 0, repair: [['perche', 1], ['corde', 1]], repairTool: 'tranchant' },
+  roue_aubes: { id: 'roue_aubes', item: 'roue_aubes', label: 'roue à aubes', feminine: true, mass: 40, perKm: 0, perHour: 0.25, repair: [['buche', 1], ['clous', 4]], repairTool: 'percuteur', install: { seconds: 10, tool: 'percuteur', needs: [['boulons', 2]] } },
+  gouvernail: { id: 'gouvernail', item: 'gouvernail', label: 'gouvernail', feminine: false, mass: 10, perKm: 0.01, perHour: 0, repair: [['perche', 1], ['corde', 1]], repairTool: 'tranchant', install: { seconds: 5, tool: null, needs: [['corde', 1]] } },
 };
 
 export const PART_KINDS = Object.keys(PARTS) as PartKind[];
+
+/** Réparer le châssis ou la coque (+40 % de ses points de vie). */
+export const FRAME_REPAIR: { needs: Need[]; tool: ToolTag; seconds: number } = { needs: [['buche', 1], ['clous', 4]], tool: 'percuteur', seconds: 8 };
+
+/** Un châssis à roues sans toutes ses roues (et essieux) reste calé : il ne bouge pas. */
+export function onChocks(v: VehicleState): boolean {
+  return FRAMES[v.frame].medium === 'terre' && missingForRolling(v) !== null;
+}
 export const PART_OF_ITEM: Partial<Record<ItemId, PartKind>> = Object.fromEntries(PART_KINDS.map((k) => [PARTS[k].item, k]));
 
 // ——— Machine à vapeur ———

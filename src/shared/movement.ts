@@ -215,6 +215,16 @@ function centerY(s: MoveState): number {
 
 // ——— Endurance ———
 
+/** Dépense d'endurance hors déplacement (pousser un chariot, pagayer). */
+export function drainStamina(s: MoveState, amount: number): void {
+  drain(s, amount);
+}
+
+/** Récupération d'endurance quand le déplacement n'est pas calculé (conduite). */
+export function regenStamina(s: MoveState, dt: number): void {
+  regen(s, dt);
+}
+
 function drain(s: MoveState, amount: number): void {
   const a = Math.min(s.stamina, amount * s.drainMul);
   s.stamina -= a;

@@ -21,7 +21,7 @@ export class FnTerrain extends Terrain {
   override sampleInto(x: number, z: number): GeoSample {
     return { ...plainSample(this.fn(x, z)), ...this.biomeSample };
   }
-  override currentAt(): { x: number; z: number } {
+  override currentAt(_x: number, _z: number): { x: number; z: number } {
     return { x: 0, z: 0 };
   }
 }
