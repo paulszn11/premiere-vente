@@ -597,6 +597,8 @@ async function phase2Scenario(browser) {
 }
 
 const QA_SETTINGS = { worldSeed: 20261112, spawnSeed: 1, quality: 'low', adaptiveResolution: false };
+/** Phase 6 : mêmes réglages, créatures actives. */
+const QA6_SETTINGS = { ...QA_SETTINGS, fauna: true };
 const DEST_BIOMES = {
   plateau: 'plateau',
   miombo: 'miombo',
@@ -2109,7 +2111,350 @@ async function phase5Scenario(browser) {
   await padCtx.close();
 }
 
-// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,performance,captures,webgpu pour ne lancer que certains scénarios.
+async function phase6Scenario(browser) {
+  console.log('\n— Phase 6 : créatures et horreur (ordinateur)');
+  const ctx = await browser.newContext({ viewport: { width: 1000, height: 560 }, fauna: true });
+  await ctx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA6_SETTINGS);
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'phase 6');
+  await page.goto(BASE);
+  await startGame(page);
+  await settle(page);
+  const fauna = () => page.evaluate(() => window.__game.creatures());
+  const message = () => page.textContent('#message');
+  const clear = () =>
+    page.evaluate(() => {
+      for (const c of window.__game.sim().fauna.creatures.values()) c.dead = true;
+    });
+  // 1. Un vrai monde : des animaux apparaissent selon la région (vallée du Zambèze).
+  await page.evaluate(() => window.__game.teleport('vallee'));
+  await settle(page);
+  await waitFor(page, () => window.__game.creatures().count > 0, null, 30000).catch(() => undefined);
+  let f = await fauna();
+  const species = [...new Set(f.list.map((c) => c.sp))];
+  check('Faune : des animaux apparaissent autour du joueur selon la région (vallée)', f.enabled && f.count > 0, `${f.count} créatures : ${species.join(', ')}`);
+  writeFileSync(`${OUT}phase6-vallee.png`, await page.screenshot());
+  // La suite se joue sans apparitions spontanées, pour des vérifications précises.
+  await page.evaluate(() => (window.__game.sim().fauna.wild = false));
+  await clear();
+  await sleep(2500);
+  // 2. Le premier clic démarre le son (règle des navigateurs).
+  await page.click('#game');
+  await sleep(400);
+  f = await fauna();
+  check('Sons : le premier clic démarre le son (fabriqué par le navigateur)', f.soundRunning === true);
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000).catch(() => undefined);
+  await page.click('#btn-resume');
+  await sleep(300);
+  // 3. Des impalas fuient le joueur qui court vers eux.
+  await page.evaluate(() => window.__game.spawnCreatures('impala', 32, 4));
+  await sleep(600);
+  await page.keyboard.down('ShiftLeft');
+  await page.keyboard.down('KeyW');
+  let fled = false;
+  for (let k = 0; k < 30 && !fled; k++) {
+    await sleep(200);
+    fled = (await fauna()).list.some((c) => c.sp === 'impala' && c.mode === 'fuite');
+  }
+  await page.keyboard.up('KeyW');
+  await page.keyboard.up('ShiftLeft');
+  check('Impalas : ils fuient le joueur qui court vers eux', fled);
+  await clear();
+  await sleep(1500);
+  // 4. Combat : la lance en main, F frappe l'animal visé (dégâts localisés), jusqu'à la carcasse.
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.bag.unshift({ item: 'lance', count: 1 });
+    window.__game.act({ type: 'sortir', from: { zone: 'sac', index: 0 } });
+  });
+  await sleep(300);
+  const preyId = await page.evaluate(() => {
+    const sim = window.__game.sim();
+    const s = sim.state;
+    const yaw = window.__game.session().yaw;
+    const [id] = sim.spawnCreatures('phacochere', s.x + Math.sin(yaw) * 2.3, s.z + Math.cos(yaw) * 2.3, 1);
+    const c = sim.fauna.creatures.get(id);
+    c.yaw = yaw + Math.PI / 2;
+    sim.fauna.setCaught(id, 'test');
+    return id;
+  });
+  const aimPrey = () =>
+    page.evaluate((id) => {
+      const c = window.__game.sim().fauna.creatures.get(id);
+      if (c) window.__game.lookAt(c.x, c.y + 0.45, c.z);
+    }, preyId);
+  await aimPrey();
+  await sleep(400);
+  const hitPrompt = await page.textContent('#prompt');
+  const hp0 = await page.evaluate((id) => window.__game.sim().fauna.creatures.get(id).hp, preyId);
+  await page.keyboard.press('KeyF');
+  await sleep(500);
+  const hp1 = await page.evaluate((id) => window.__game.sim().fauna.creatures.get(id)?.hp ?? 0, preyId);
+  check('Combat : « F : frapper le phacochère » ; le coup de lance le blesse', /frapper le phacochère/.test(hitPrompt ?? '') && hp1 < hp0, `${hitPrompt} · ${hp0} → ${Math.round(hp1)}`);
+  for (let k = 0; k < 15; k++) {
+    const dead = await page.evaluate((id) => !window.__game.sim().fauna.creatures.get(id) || window.__game.sim().fauna.creatures.get(id).dead, preyId);
+    if (dead) break;
+    await aimPrey();
+    await page.keyboard.press('KeyF');
+    await sleep(900);
+  }
+  await sleep(500);
+  f = await fauna();
+  const carcass = f.carcasses.find((c) => c.sp === 'phacochere');
+  check('Le phacochère abattu laisse une carcasse', !!carcass, JSON.stringify(f.carcasses));
+  // 5. Dépeçage au couteau, puis cuisson au foyer et repas.
+  await page.evaluate(() => window.__game.act({ type: 'ranger' }));
+  await sleep(300);
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.bag.unshift({ item: 'couteau', count: 1 });
+    window.__game.act({ type: 'sortir', from: { zone: 'sac', index: 0 } });
+  });
+  await sleep(400);
+  if (carcass) await page.evaluate((k) => window.__game.lookAt(k.x, k.y, k.z), carcass);
+  await sleep(400);
+  const butcherPrompt = await page.textContent('#prompt');
+  await page.keyboard.press('KeyF');
+  await waitFor(page, () => window.__game.body().inventory.bag.some((b) => b.item === 'viande_crue') || window.__game.body().inventory.pockets.some((p) => p?.item === 'viande_crue'), null, 30000).catch(() => undefined);
+  let body = await page.evaluate(() => window.__game.body());
+  const meat = countItem(body, 'viande_crue');
+  check('Dépeçage : « F : dépecer la carcasse » donne de la viande crue', /dépecer la carcasse/.test(butcherPrompt ?? '') && meat >= 2, `${butcherPrompt} · ${meat} morceaux`);
+  const fire = await page.evaluate(() => {
+    const sim = window.__game.sim();
+    const s = sim.state;
+    return sim.props.spawnDynamic({ kind: 'foyer', x: s.x + 1.2, y: s.y + 0.1, z: s.z, rot: 0, radius: 0.45, length: 0, fixed: true, fire: { lit: true, fuel: 3000, pot: null, cook: 0 } });
+  });
+  const cooked = await page.evaluate((fire) => {
+    const sim = window.__game.sim();
+    const i = sim.inventory.bag.findIndex((b) => b.item === 'viande_crue');
+    const p = sim.inventory.pockets.findIndex((x) => x?.item === 'viande_crue');
+    const from = i >= 0 ? { zone: 'sac', index: i } : { zone: 'poche', index: p };
+    return window.__game.act({ type: 'poser_feu', prop: fire, from });
+  }, fire);
+  await waitFor(page, (fire) => window.__game.sim().props.defOf(fire)?.fire?.pot?.item === 'viande_cuite', fire, 70000).catch(() => undefined);
+  await page.evaluate((fire) => window.__game.act({ type: 'reprendre_feu', prop: fire }), fire);
+  body = await page.evaluate(() => window.__game.body());
+  check('Cuisson : la viande posée sur le foyer allumé cuit (« Reprendre la viande »)', cooked?.ok && countItem(body, 'viande_cuite') >= 2, `${cooked?.message ?? ''} · ${countItem(body, 'viande_cuite')} cuits`);
+  await page.evaluate(() => window.__game.act({ type: 'ranger' }));
+  // Le foyer est éteint et retiré : près d'un feu, les hyènes n'approchent pas (vérifié par les tests unitaires).
+  await page.evaluate((fire) => window.__game.sim().props.remove(fire), fire);
+  await clear();
+  await sleep(1500);
+  // 6. Les hyènes encerclent un joueur blessé et mordent.
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.vitals.health = 45;
+    sim.vitals.injuries.push({ id: 900, zone: 'jambe_d', kind: 'coupure', grave: false, age: 0, heal: 0, bandaged: false, splinted: false, disinfected: false, clotted: false, infection: 0, infectAt: -1 });
+    window.__game.spawnCreatures('hyene', 30, 3);
+  });
+  let bitten = false;
+  let hyenaMsg = '';
+  for (let k = 0; k < 120 && !bitten; k++) {
+    await sleep(500);
+    const m = (await message()) ?? '';
+    if (/hyène vous mord/.test(m)) {
+      bitten = true;
+      hyenaMsg = m;
+    }
+  }
+  const strike = await page.evaluate(() => Number(getComputedStyle(document.querySelector('#vignette')).opacity));
+  check('Hyènes : elles encerclent le joueur blessé et mordent (blessure localisée, bord rouge)', bitten && strike > 0.2, `${hyenaMsg} · bord rouge ${strike.toFixed(2)}`);
+  writeFileSync(`${OUT}phase6-hyenes.png`, await page.screenshot());
+  await clear();
+  await page.evaluate(() => {
+    const v = window.__game.sim().vitals;
+    v.injuries = [];
+    v.health = 100;
+  });
+  await sleep(1500);
+  // 7. Onglet « Construire » : les pièges.
+  await page.keyboard.press('Tab');
+  await waitFor(page, () => window.__game.bag().open, null, 5000).catch(() => undefined);
+  await page.click('[data-tab="construire"]');
+  await sleep(300);
+  const planButtons = await page.evaluate(() => [...document.querySelectorAll('.plans button')].map((x) => x.textContent));
+  check('Onglet « Construire » : collet, assommoir et fosse à pieux, avec leurs matériaux', planButtons.some((t) => /collet \(2 bâtons, une corde\)/.test(t)) && planButtons.some((t) => /assommoir/.test(t)) && planButtons.some((t) => /fosse à pieux/.test(t)), planButtons.filter((t) => /collet|assommoir|fosse/.test(t)).join(' | '));
+  await page.keyboard.press('Escape');
+  await sleep(400);
+  // 8. Un collet retient l'impala qui y passe.
+  const trapped = await page.evaluate(async () => {
+    const sim = window.__game.sim();
+    const s = sim.state;
+    const yaw = window.__game.session().yaw;
+    const x = s.x + Math.sin(yaw) * 6;
+    const z = s.z + Math.cos(yaw) * 6;
+    const trap = sim.props.spawnDynamic({ kind: 'collet', x, y: sim.terrain.heightAt(x, z) + 0.05, z, rot: 0, radius: 0.35, length: 0.1, fixed: true, trap: { armed: true, caught: null } });
+    sim.spawnCreatures('impala', x, z + 0.2, 1);
+    return trap;
+  });
+  await waitFor(page, (t) => window.__game.sim().props.defOf(t)?.trap?.caught?.startsWith('c'), trapped, 8000).catch(() => undefined);
+  const caught = await page.evaluate((t) => {
+    const sim = window.__game.sim();
+    const id = sim.props.defOf(t)?.trap?.caught;
+    const c = id ? sim.fauna.creatures.get(id) : null;
+    return c ? { sp: c.sp, mode: c.mode } : null;
+  }, trapped);
+  const trapMsg = (await message()) ?? '';
+  check('Piège : le collet retient l’impala, qui se débat', caught?.sp === 'impala' && caught.mode === 'pris', `${JSON.stringify(caught)} · ${trapMsg}`);
+  await clear();
+  await sleep(1500);
+  // 9. La créature du lac : elle saisit le nageur ; il se dégage en se débattant (E).
+  await page.evaluate(() => window.__game.lakeTest());
+  await settle(page);
+  await page.evaluate(() => {
+    const g = [...window.__game.sim().fauna.groups.values()].find((x) => x.sp === 'ombre');
+    g.attention = 0.95;
+  });
+  await page.keyboard.down('KeyW');
+  await page.keyboard.down('ShiftLeft');
+  await waitFor(page, () => window.__game.creatures().grab !== null, null, 120000).catch(() => undefined);
+  await page.keyboard.up('ShiftLeft');
+  await page.keyboard.up('KeyW');
+  f = await fauna();
+  const dread = await page.evaluate(() => Number(getComputedStyle(document.querySelector('#dread')).opacity));
+  writeFileSync(`${OUT}phase6-lac.png`, await page.screenshot());
+  const grabbed = f.grab !== null;
+  for (let k = 0; k < 14 && (await fauna()).grab; k++) {
+    await page.keyboard.press('KeyE');
+    await sleep(250);
+  }
+  const freed = (await fauna()).grab === null;
+  check('Lac : la créature saisit le nageur (la vue s’assombrit) ; il se dégage en se débattant (E)', grabbed && freed && dread > 0.15, `saisi ${grabbed} · libéré ${freed} · assombri ${dread.toFixed(2)}`);
+  // 10. Sauvegarde : la faune (populations, individus suivis) est conservée.
+  const saved = await page.evaluate(() => window.__game.save());
+  check('Sauvegarde : populations et individus suivis enregistrés', typeof saved === 'string' && saved.includes('"fauna"') && saved.includes('"traits"'));
+  // 11. Outils de test : faire apparaître des créatures depuis les réglages.
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000).catch(() => undefined);
+  await page.click('#btn-pause-settings');
+  await sleep(300);
+  const hasVolume = await page.isVisible('#set-volume');
+  await page.selectOption('#set-species', 'elephant');
+  await page.click('#set-spawn');
+  await sleep(500);
+  f = await fauna();
+  check('Réglages : volume des sons ; l’outil de test fait apparaître des éléphants', hasVolume && f.list.some((c) => c.sp === 'elephant'), `${f.list.filter((c) => c.sp === 'elephant').length} éléphants`);
+  check('Aucune erreur dans la console (phase 6)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+
+  // Téléphone : « Utiliser » frappe l'animal visé.
+  console.log('\n— Phase 6 : téléphone');
+  const touchCtx = await browser.newContext({ ...devices['Pixel 7 landscape'], fauna: true });
+  await touchCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA6_SETTINGS);
+  const tPage = await touchCtx.newPage();
+  const tErrors = watchErrors(tPage, 'phase 6 (téléphone)');
+  await tPage.goto(BASE);
+  await startGame(tPage);
+  await settle(tPage);
+  const cdp = await touchCtx.newCDPSession(tPage);
+  const tap = async (sel, ms = 140) => {
+    const rect = await tPage.locator(sel).first().boundingBox();
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2), id: 3 }] });
+    await sleep(ms);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(300);
+  };
+  const tPrey = await tPage.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.fauna.wild = false;
+    for (const c of sim.fauna.creatures.values()) c.dead = true;
+    sim.inventory.bag.unshift({ item: 'hache', count: 1 });
+    window.__game.act({ type: 'sortir', from: { zone: 'sac', index: 0 } });
+    const s = sim.state;
+    const yaw = window.__game.session().yaw;
+    const [id] = sim.spawnCreatures('phacochere', s.x + Math.sin(yaw) * 1.6, s.z + Math.cos(yaw) * 1.6, 1);
+    sim.fauna.creatures.get(id).yaw = yaw + Math.PI / 2;
+    sim.fauna.setCaught(id, 'test');
+    return id;
+  });
+  await sleep(400);
+  await tPage.evaluate((id) => {
+    const c = window.__game.sim().fauna.creatures.get(id);
+    window.__game.lookAt(c.x, c.y + 0.45, c.z);
+  }, tPrey);
+  await sleep(400);
+  const tPrompt = await tPage.textContent('#prompt');
+  const thp0 = await tPage.evaluate((id) => window.__game.sim().fauna.creatures.get(id).hp, tPrey);
+  await tap('[data-touch="use"]');
+  await sleep(400);
+  const thp1 = await tPage.evaluate((id) => window.__game.sim().fauna.creatures.get(id)?.hp ?? 0, tPrey);
+  check('Téléphone : « Utiliser » frappe l’animal visé', /« Utiliser » : frapper le phacochère/.test(tPrompt ?? '') && thp1 < thp0, `${tPrompt} · ${thp0} → ${Math.round(thp1)}`);
+  check('Aucune erreur dans la console (phase 6, téléphone)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  await touchCtx.close();
+
+  // Manette : LT frappe l'animal visé.
+  console.log('\n— Phase 6 : manette');
+  const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 }, fauna: true });
+  await padCtx.addInitScript(installTestPad, QA6_SETTINGS);
+  const pPage = await padCtx.newPage();
+  const pErrors = watchErrors(pPage, 'phase 6 (manette)');
+  await pPage.goto(BASE);
+  await startGame(pPage);
+  await settle(pPage);
+  const { press } = padControls(pPage);
+  const pPrey = await pPage.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.fauna.wild = false;
+    for (const c of sim.fauna.creatures.values()) c.dead = true;
+    sim.inventory.bag.unshift({ item: 'lance', count: 1 });
+    window.__game.act({ type: 'sortir', from: { zone: 'sac', index: 0 } });
+    const s = sim.state;
+    const yaw = window.__game.session().yaw;
+    const [id] = sim.spawnCreatures('phacochere', s.x + Math.sin(yaw) * 2.3, s.z + Math.cos(yaw) * 2.3, 1);
+    sim.fauna.creatures.get(id).yaw = yaw + Math.PI / 2;
+    sim.fauna.setCaught(id, 'test');
+    return id;
+  });
+  await sleep(400);
+  await pPage.evaluate((id) => {
+    const c = window.__game.sim().fauna.creatures.get(id);
+    window.__game.lookAt(c.x, c.y + 0.45, c.z);
+  }, pPrey);
+  await sleep(300);
+  const php0 = await pPage.evaluate((id) => window.__game.sim().fauna.creatures.get(id).hp, pPrey);
+  await press(6);
+  await sleep(300);
+  const php1 = await pPage.evaluate((id) => window.__game.sim().fauna.creatures.get(id)?.hp ?? 0, pPrey);
+  check('Manette : LT frappe l’animal visé', php1 < php0, `${php0} → ${Math.round(php1)}`);
+  check('Aucune erreur dans la console (phase 6, manette)', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
+  await padCtx.close();
+}
+
+/**
+ * Les scénarios des phases 1 à 5 se jouent sans créatures : un animal ne doit pas fausser un test
+ * qui n'a rien à voir avec lui. Les contextes ouverts avec { fauna: true } (phase 6) les gardent.
+ */
+function noFaunaByDefault(browser) {
+  const open = browser.newContext.bind(browser);
+  browser.newContext = async (options = {}) => {
+    const { fauna, ...rest } = options;
+    const ctx = await open(rest);
+    if (fauna) return ctx;
+    const patch = () => {
+      try {
+        const raw = localStorage.getItem('baz.settings.v1');
+        const s = raw ? JSON.parse(raw) : {};
+        if (s.fauna === undefined) {
+          s.fauna = false;
+          localStorage.setItem('baz.settings.v1', JSON.stringify(s));
+        }
+      } catch {
+        // Stockage indisponible : la faune reste active.
+      }
+    };
+    const add = ctx.addInitScript.bind(ctx);
+    // Toujours après les scripts du scénario (qui écrivent les réglages).
+    ctx.addInitScript = async (...args) => {
+      await add(...args);
+      await add(patch);
+    };
+    await add(patch);
+    return ctx;
+  };
+}
+
+// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -2117,6 +2462,7 @@ const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.arg
 const server = await startServer();
 try {
   const browser = await chromium.launch();
+  noFaunaByDefault(browser);
   if (want('ordinateur')) await desktopScenario(browser);
   if (want('telephone')) await touchScenario(browser);
   if (want('manette')) await gamepadScenario(browser);
@@ -2126,6 +2472,7 @@ try {
   if (want('phase3')) await phase3Scenario(browser);
   if (want('phase4')) await phase4Scenario(browser);
   if (want('phase5')) await phase5Scenario(browser);
+  if (want('phase6')) await phase6Scenario(browser);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();
