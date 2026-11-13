@@ -8,7 +8,7 @@ Le cahier des charges (§ 14.1) demande de séparer cinq blocs. Voici ce qui exi
 
 | Bloc | Rôle | État |
 | --- | --- | --- |
-| Client web 3D | Affichage, commandes, interface, prédiction | Phase 1 : en place (jeu solo) |
+| Client web 3D | Affichage, commandes, interface, prédiction | En place (jeu solo, phases 1 à 3) |
 | Serveur autoritaire chez l'hôte | Référence pour les déplacements, inventaires, combats, constructions, ressources | Phase 8. La simulation est déjà séparée de l'affichage (`src/shared/simulation.ts`) |
 | Sauvegarde locale | Monde sauvegardé chez l'hôte, 3 sauvegardes de sécurité | Phase 8. Module préparé et testé (`src/server/save.ts`) |
 | Synchronisation multijoueur | Échanges client ↔ serveur | Phase 8. Protocole, prédiction et limitation des tentatives préparés |
@@ -40,6 +40,27 @@ Le monde mesure 16 km × 16 km, est inspiré du Zimbabwe et fermé par des monta
 **Principe du jeu :** chaque joueur apparaît au hasard, à au moins 4 km des autres quand c'est possible. Aucune carte ne montre les autres joueurs : se retrouver est très difficile (`src/shared/spawn.ts`).
 
 À 8 km de l'origine, la précision des nombres à virgule utilisés par la carte graphique et la physique reste de l'ordre du millimètre. Il n'y a donc pas de tremblement visible, et pas besoin de recentrer le monde autour du joueur.
+
+### Survie et inventaire (phase 3)
+
+Tout se trouve dans le code commun (`src/shared/`), pour que le serveur de l'hôte fasse foi en phase 8 :
+
+| Module | Rôle |
+| --- | --- |
+| `items.ts` | Catalogue des objets transportables (masse, volume, poche, nourriture) |
+| `inventory.ts` | Poches, sac de 30 litres, vêtements déchirables, poids porté ; données simples, sérialisables, relues avec contrôle |
+| `vitals.ts` | Corps du joueur : santé, énergie, fatigue, blessures localisées, soins, conscience, mort. Déterministe (générateur pseudo-aléatoire dans l'état) |
+| `actions.ts` | Actions ponctuelles du joueur (sac, soins, repos…) et leur validation, prête pour le réseau |
+| `simulation.ts` | Relie le corps, l'inventaire, les objets et les déplacements ; mort, corps laissé dans le monde, réapparition, sauvegarde |
+
+Le corps agit sur les déplacements par des limites simples transmises à `movement.ts` : endurance maximale, vitesse maximale, actions impossibles, charge portée.
+
+Côté client :
+- `src/client/ui/bag-view.ts` : vue du sac et examen du corps ;
+- `src/client/render/bag-scene.ts` : toile en 3D, vue de dessus ;
+- `src/client/render/item-meshes.ts` : formes des objets, communes au monde et au sac.
+
+La partie solo est sauvegardée dans le navigateur : position, corps, sac, objets ramassés, déplacés ou posés, corps laissés.
 
 ## 2. Technologies retenues
 
@@ -104,6 +125,8 @@ Le moteur physique est servi comme fichier `.wasm` séparé (et non intégré en
 
 ## 6. Décisions encore ouvertes
 
-Décisions prises depuis (12/11/2026) : biomes inspirés du Zimbabwe, monde de 16 km × 16 km, apparition au hasard loin des autres joueurs, 10 joueurs au maximum.
+Décisions prises depuis :
+- **12/11/2026 :** biomes inspirés du Zimbabwe, monde de 16 km × 16 km, apparition au hasard loin des autres joueurs, 10 joueurs au maximum.
+- **13/11/2026 :** décisions confiées par le propriétaire du projet, inspirées de jeux du même style et détaillées dans `docs/PHASE-3.md`. Elles portent sur la réapparition (dernier sommeil, sinon point d'arrivée), la conservation des corps (jusqu'à ce qu'ils soient vidés) et les conditions de secours (perte de connaissance, puis 90 s d'état critique en cas de saignement).
 
-Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux, le commerce, les véhicules, la réapparition, la durée de conservation des corps, le secours médical, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.
+Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux, le commerce, les véhicules, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.

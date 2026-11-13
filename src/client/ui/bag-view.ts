@@ -69,10 +69,13 @@ export class BagView {
   private zone: Zone | null = null;
   private tab: 'sac' | 'corps' = 'sac';
   private navCooldown = 0;
-  private lastSig = '';
+  private navHeld = false;
   private buttons: ActionButton[] = [];
-  /** Tous les boutons affichés (objets, corps, soins), pour les tests. */
-  private allButtons: ActionButton[] = [];
+  /** Listes de boutons à jour ; les boutons affichés ne sont recréés que si les libellés changent. */
+  private readonly lists: Record<'item' | 'body' | 'zone', ActionButton[]> = { item: [], body: [], zone: [] };
+  private readonly listSig: Record<'item' | 'body' | 'zone', string> = { item: '', body: '', zone: '' };
+  private zoneLines!: HTMLElement;
+  private zoneButtons_!: HTMLElement;
   private readonly el: Record<string, HTMLElement>;
   private readonly badges: HTMLElement;
   private readonly zones: Map<Zone, SVGElement>;
@@ -92,6 +95,11 @@ export class BagView {
       itemActions: q('.item-actions'),
     };
     this.badges = q('.bag-badges');
+    this.zoneLines = document.createElement('div');
+    this.zoneLines.className = 'zone-lines';
+    this.zoneButtons_ = document.createElement('div');
+    this.zoneButtons_.className = 'zone-buttons';
+    this.el.zoneDetail!.append(this.zoneLines, this.zoneButtons_);
     this.zones = new Map();
     deps.root.querySelectorAll<SVGElement>('[data-zone]').forEach((z) => {
       const zone = z.dataset.zone as Zone;
@@ -99,7 +107,6 @@ export class BagView {
       z.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         this.zone = zone;
-        this.lastSig = '';
       });
     });
     this.el.pick!.addEventListener('pointerdown', (e) => {
@@ -124,7 +131,6 @@ export class BagView {
     this.selected = otherProp ? { zone: 'autre-poche', index: 0 } : { zone: 'poche', index: 0 };
     if (otherProp && !sim.props.container(otherProp)?.pockets.length) this.selected = { zone: 'autre-sac', index: 0 };
     this.bag.setSelected(this.selected);
-    this.lastSig = '';
     this.setTab('sac');
   }
 
@@ -140,13 +146,11 @@ export class BagView {
     this.tab = tab;
     this.deps.root.classList.toggle('tab-corps', tab === 'corps');
     this.deps.root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-    this.lastSig = '';
   }
 
   private select(slot: BagSlot): void {
     this.selected = slot;
     this.bag.setSelected(slot);
-    this.lastSig = '';
   }
 
   private act(a: PlayerAction): void {
@@ -154,7 +158,6 @@ export class BagView {
     if (!sim) return;
     const r = sim.act(a);
     if (r.message) this.deps.onMessage(r.message, r.ok ? 'info' : 'alerte');
-    this.lastSig = '';
   }
 
   private otherContainer() {
@@ -181,6 +184,8 @@ export class BagView {
       if (this.selected?.zone.startsWith('autre')) this.select({ zone: 'poche', index: 0 });
     }
     this.navigate(dt);
+    // Une action ou la manette a pu fermer la vue pendant cette image.
+    if (!this.open_ || !this.sim) return;
     const other = this.otherContainer();
     const held = sim.props.held ? sim.props.defOf(sim.props.held.id) : null;
     this.bag.update({
@@ -189,7 +194,9 @@ export class BagView {
       hand: held ? { kind: held.kind, radius: held.radius, length: held.length } : null,
       other: other?.c ?? null,
     });
-    if (this.tab === 'sac' || window.innerWidth > 760) {
+    // Même règle que la feuille de style : petit écran = onglets Sac / Corps.
+    const tabbed = window.matchMedia('(max-width: 760px), (max-height: 420px)').matches;
+    if (this.tab === 'sac' || !tabbed) {
       const r = this.el.pick!.getBoundingClientRect();
       this.bag.setRect({ left: r.left, top: r.top, width: r.width, height: r.height });
       this.bag.render();
@@ -203,15 +210,22 @@ export class BagView {
     this.navCooldown = Math.max(0, this.navCooldown - dt);
     const mx = input.move.x;
     const my = input.move.y;
-    if (Math.hypot(mx, my) < 0.55) this.navCooldown = Math.min(this.navCooldown, 0.02);
-    else if (this.navCooldown <= 0 && this.tab === 'sac') {
+    if (Math.hypot(mx, my) < 0.55) {
+      this.navCooldown = 0;
+      this.navHeld = false;
+    } else if (this.navCooldown <= 0 && this.tab === 'sac') {
       const horizontal = Math.abs(mx) > Math.abs(my);
       const next = this.bag.neighbor(this.selected, horizontal ? Math.sign(mx) : 0, horizontal ? 0 : Math.sign(my));
       if (next) this.select(next);
-      this.navCooldown = 0.2;
+      // Première répétition plus lente, comme une touche maintenue.
+      this.navCooldown = this.navHeld ? 0.16 : 0.4;
+      this.navHeld = true;
     }
-    if (input.codePressed('Pad:0') || input.codePressed('Enter') || input.pressed('interact')) this.buttons[0]?.disabled || this.buttons[0]?.run();
-    if (input.codePressed('Pad:2')) this.buttons[1]?.disabled || this.buttons[1]?.run();
+    const first = input.codePressed('Pad:0') || input.codePressed('Enter') || (input.pressed('interact') && !input.codePressed('Pad:2'));
+    if (first && this.buttons[0] && !this.buttons[0].disabled) this.buttons[0].run();
+    if (!this.open_) return;
+    if (input.codePressed('Pad:2') && this.buttons[1] && !this.buttons[1].disabled) this.buttons[1].run();
+    if (!this.open_) return;
     if (input.pressed('use')) this.buttons.find((b) => b.label === 'Manger' || b.label === 'Utiliser')?.run();
     if (input.codePressed('Pad:4') || input.codePressed('Pad:5')) this.setTab(this.tab === 'sac' ? 'corps' : 'sac');
     if (input.codePressed('Pad:1')) this.deps.onClose();
@@ -338,17 +352,33 @@ export class BagView {
     return { lines, buttons };
   }
 
-  private renderButtons(host: HTMLElement, list: ActionButton[]): void {
-    this.allButtons.push(...list);
+  /** Met à jour une liste de boutons ; le DOM n'est recréé que si les libellés ou états changent. */
+  private renderButtons(host: HTMLElement, key: 'item' | 'body' | 'zone', list: ActionButton[]): void {
+    this.lists[key] = list;
+    const sig = JSON.stringify(list.map((b) => [b.label, !!b.disabled]));
+    if (sig === this.listSig[key]) return;
+    this.listSig[key] = sig;
     host.textContent = '';
-    for (const b of list) {
+    list.forEach((b, i) => {
       const el = document.createElement('button');
       el.type = 'button';
       el.textContent = b.label;
       el.disabled = !!b.disabled;
-      el.addEventListener('click', () => b.run());
+      // Le bouton exécute toujours l'action la plus récente à sa place (état à jour).
+      el.addEventListener('click', () => {
+        const cur = this.lists[key][i];
+        if (cur && !cur.disabled) cur.run();
+      });
       host.appendChild(el);
-    }
+    });
+  }
+
+  private setText(el: HTMLElement, text: string): void {
+    if (el.textContent !== text) el.textContent = text;
+  }
+
+  private setHtml(el: HTMLElement, html: string): void {
+    if (el.innerHTML !== html) el.innerHTML = html;
   }
 
   private refreshPanels(): void {
@@ -358,41 +388,25 @@ export class BagView {
     const lim = limits(v);
     const other = this.otherContainer();
     const sel = this.selectedItem();
-    const sig = JSON.stringify([
-      inv,
-      sim.props.held?.id ?? null,
-      this.selected,
-      this.zone,
-      this.tab,
-      other?.c ?? null,
-      Math.round(v.health),
-      Math.round(v.energy),
-      Math.round(v.fatigue),
-      v.posture,
-      v.injuries,
-      sim.gesture?.label ?? null,
-    ]);
-    if (sig === this.lastSig) return;
-    this.lastSig = sig;
 
     const vol = inv.bag ? bagVolume(inv.bag) : 0;
     const load = carriedMass(inv);
-    this.el.title!.textContent = inv.bag
+    let title = inv.bag
       ? `Sac : ${vol.toFixed(1).replace('.', ',')} / ${BAG_CAPACITY_L} L · charge portée ${fmtKg(load)}${load > 25 ? ' (trop lourd pour courir)' : ''}`
       : `Pas de sac · ${POCKET_COUNT} poches · charge ${fmtKg(load)}`;
-    if (other) this.el.title!.textContent += other.def.kind === 'corps' ? ' · vous fouillez un corps' : ` · sac posé (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
+    if (other) title += other.def.kind === 'corps' ? ' · vous fouillez un corps' : ` · sac posé (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
+    this.setText(this.el.title!, title);
 
     // Objet choisi.
     if (sel) {
-      this.el.itemName!.textContent = `${cap(sel.item ? itemName(sel.item, sel.count) : `${sel.kindLabel}`)} · ${fmtKg(sel.mass)}`;
-      this.el.itemDesc!.textContent = sel.item ? ITEMS[sel.item].description : 'Trop grand pour le sac : on le porte ou on le traîne.';
+      this.setText(this.el.itemName!, `${cap(sel.item ? itemName(sel.item, sel.count) : `${sel.kindLabel}`)} · ${fmtKg(sel.mass)}`);
+      this.setText(this.el.itemDesc!, sel.item ? ITEMS[sel.item].description : 'Trop grand pour le sac : on le porte ou on le traîne.');
     } else {
-      this.el.itemName!.textContent = other ? 'Choisissez un objet à prendre.' : 'Case vide.';
-      this.el.itemDesc!.textContent = sim.gesture ? sim.gesture.label : 'Touchez un objet, puis une action.';
+      this.setText(this.el.itemName!, other ? 'Choisissez un objet à prendre.' : 'Case vide.');
+      this.setText(this.el.itemDesc!, sim.gesture ? sim.gesture.label : 'Touchez un objet, puis une action.');
     }
-    this.allButtons = [];
     this.buttons = this.itemButtons();
-    this.renderButtons(this.el.itemActions!, this.buttons);
+    this.renderButtons(this.el.itemActions!, 'item', this.buttons);
 
     // Corps.
     const meter = (label: string, value: number, color: string, text: string) =>
@@ -401,12 +415,15 @@ export class BagView {
     if (lim.bleeding > 0) notes.push('vous saignez');
     if (lim.fever > 0) notes.push('fièvre');
     if (v.posture === 'assis') notes.push('assis');
-    this.el.vitals!.innerHTML = [
-      meter('Santé', v.health, '#c0503c', `${Math.round(v.health)} / 100`),
-      meter('Énergie', v.energy, '#d9b54a', `${Math.round(v.energy)} / 100`),
-      meter('Fatigue', v.fatigue, '#5a7fd0', `${Math.round(v.fatigue)} / 100`),
-      `<span>Douleur</span><span>${painLabel(lim.pain)}${notes.length ? ` · ${notes.join(', ')}` : ''}</span>`,
-    ].join('');
+    this.setHtml(
+      this.el.vitals!,
+      [
+        meter('Santé', v.health, '#c0503c', `${Math.round(v.health)} / 100`),
+        meter('Énergie', v.energy, '#d9b54a', `${Math.round(v.energy)} / 100`),
+        meter('Fatigue', v.fatigue, '#5a7fd0', `${Math.round(v.fatigue)} / 100`),
+        `<span>Douleur</span><span>${painLabel(lim.pain)}${notes.length ? ` · ${notes.join(', ')}` : ''}</span>`,
+      ].join(''),
+    );
     for (const [zone, el] of this.zones) {
       const list = v.injuries.filter((i) => i.zone === zone);
       let cls = '';
@@ -416,20 +433,19 @@ export class BagView {
       else if (list.some((i) => i.kind === 'entorse' && !i.bandaged)) cls = 'entorse';
       else if (list.some((i) => i.kind === 'contusion' || i.kind === 'commotion')) cls = 'contusion';
       else if (list.length) cls = 'soigne';
-      el.setAttribute('class', `${cls}${this.zone === zone ? ' sel' : ''}`);
+      const full = `${cls}${this.zone === zone ? ' sel' : ''}`;
+      if (el.getAttribute('class') !== full) el.setAttribute('class', full);
     }
     const zone = this.zone ?? v.injuries[0]?.zone ?? null;
     if (zone) {
       const { lines, buttons } = this.zoneButtons(zone);
-      this.el.zoneDetail!.innerHTML = `<p><strong>${cap(ZONE_LABELS[zone])}</strong></p>${lines.map((l) => `<p>${l}</p>`).join('')}`;
-      const host = document.createElement('div');
-      host.className = 'zone-buttons';
-      this.renderButtons(host, buttons);
-      this.el.zoneDetail!.appendChild(host);
+      this.setHtml(this.zoneLines, `<p><strong>${cap(ZONE_LABELS[zone])}</strong></p>${lines.map((l) => `<p>${l}</p>`).join('')}`);
+      this.renderButtons(this.zoneButtons_, 'zone', buttons);
     } else {
-      this.el.zoneDetail!.innerHTML = '<p>Aucune blessure. Touchez une partie du corps pour l’examiner.</p>';
+      this.setHtml(this.zoneLines, '<p>Aucune blessure. Touchez une partie du corps pour l’examiner.</p>');
+      this.renderButtons(this.zoneButtons_, 'zone', []);
     }
-    this.renderButtons(this.el.bodyActions!, this.bodyButtons());
+    this.renderButtons(this.el.bodyActions!, 'body', this.bodyButtons());
   }
 
   /** État pour les tests automatiques. */
@@ -441,7 +457,7 @@ export class BagView {
       other: this.otherProp,
       cells: this.bag.cells.map((c) => ({ slot: c.slot, kind: c.kind, count: c.count, ...this.bag.toScreen(c.x, c.z) })),
       actions: this.buttons.map((b) => b.label),
-      all: this.allButtons.map((b) => (b.disabled ? `(${b.label})` : b.label)),
+      all: [...this.lists.item, ...this.lists.zone, ...this.lists.body].map((b) => (b.disabled ? `(${b.label})` : b.label)),
     };
   }
 
@@ -452,7 +468,7 @@ export class BagView {
 
   /** Clique une action par son libellé (tests). */
   run(label: string): boolean {
-    const b = this.allButtons.find((x) => x.label === label);
+    const b = [...this.lists.item, ...this.lists.zone, ...this.lists.body].find((x) => x.label === label);
     if (!b || b.disabled) return false;
     b.run();
     return true;

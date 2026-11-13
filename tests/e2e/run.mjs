@@ -25,7 +25,15 @@ function check(name, ok, detail = '') {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function startServer() {
-  const proc = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  // Groupe de processus à part : on arrête npx et le serveur vite qu'il lance (sinon il resterait ouvert).
+  const proc = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  proc.stop = () => {
+    try {
+      process.kill(-proc.pid, 'SIGKILL');
+    } catch {
+      proc.kill();
+    }
+  };
   for (let i = 0; i < 100; i++) {
     try {
       const res = await fetch(BASE);
@@ -35,7 +43,7 @@ async function startServer() {
     }
     await sleep(200);
   }
-  proc.kill();
+  proc.stop();
   throw new Error('Le serveur de prévisualisation ne démarre pas (avez-vous lancé npm run build ?)');
 }
 
@@ -907,7 +915,370 @@ async function webgpuScenario() {
   await browser.close();
 }
 
-// --only=ordinateur,telephone,manette,phase2,verification,performance,captures,webgpu pour ne lancer que certains scénarios.
+
+// ——— Phase 3 : survie et inventaire ———
+
+const SHAPES = { figue: [0.022, 0], baton: [0.022, 0.75], fruit_baobab: [0.07, 0.2], aloes: [0.12, 0.3], chiffon: [0.1, 0] };
+
+/** Pose un objet devant le joueur, attend qu'il se stabilise et oriente le regard dessus. */
+async function placeAndAim(page, kind, dist = 1.3) {
+  const id = await page.evaluate(
+    ([kind, dist, shape]) => {
+      const sim = window.__game.sim();
+      const s = sim.state;
+      const yaw = window.__game.session().yaw;
+      const x = s.x + Math.sin(yaw) * dist;
+      const z = s.z + Math.cos(yaw) * dist;
+      return sim.props.spawnDynamic({ kind, x, y: Math.max(sim.terrain.heightAt(x, z), s.y) + 0.3, z, rot: 0, radius: shape[0], length: shape[1] });
+    },
+    [kind, dist, SHAPES[kind]],
+  );
+  await sleep(1200);
+  await page.evaluate((id) => {
+    const p = window.__game.sim().props.position(id);
+    if (p) window.__game.lookAt(p.x, p.y, p.z);
+  }, id);
+  await sleep(300);
+  return id;
+}
+
+const injure = (page, zone, kind, grave = false) =>
+  page.evaluate(
+    ([zone, kind, grave]) => {
+      const v = window.__game.sim().vitals;
+      const inj = { id: v.nextId++, zone, kind, grave, age: 0, heal: 0, bandaged: false, splinted: false, disinfected: false, clotted: false, infection: 0, infectAt: -1 };
+      v.injuries.push(inj);
+      return inj.id;
+    },
+    [zone, kind, grave],
+  );
+
+const countItem = (b, item) => [...b.inventory.pockets, ...(b.inventory.bag ?? [])].filter((s) => s && s.item === item).reduce((n, s) => n + s.count, 0);
+
+async function phase3Scenario(browser) {
+  console.log('\n— Phase 3 : survie et inventaire (ordinateur)');
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  await ctx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'phase 3');
+  await page.goto(BASE);
+  await startGame(page);
+  await settle(page);
+  const body = () => page.evaluate(() => window.__game.body());
+  let b = await body();
+  check('Départ : sac vide, 4 poches vides, vêtements intacts, pleine santé', b.inventory.bag?.length === 0 && b.inventory.pockets.length === 4 && b.inventory.pockets.every((p) => p === null) && b.inventory.clothes.haut && b.vitals.health === 100);
+
+  // Ramasser : petits objets rangés directement.
+  await placeAndAim(page, 'figue');
+  const promptFig = await page.textContent('#prompt');
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  await placeAndAim(page, 'baton');
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  await placeAndAim(page, 'fruit_baobab');
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  b = await body();
+  check('E ramasse une figue (poche), un bâton (sac), un fruit du baobab (poche)', countItem(b, 'figue') === 1 && b.inventory.bag?.some((s) => s.item === 'baton') && countItem(b, 'fruit_baobab') === 1, `indication : « ${promptFig} »`);
+
+  // Sac : ouverture, choix d'un objet, manger.
+  await page.keyboard.press('Tab');
+  await waitFor(page, () => !document.querySelector('#bag-view').hidden, null, 5000);
+  await sleep(500);
+  let bag = await page.evaluate(() => window.__game.bag());
+  check('Tab ouvre le sac : objets visibles en 3D dans les poches et le sac', bag.open && bag.cells.filter((c) => c.kind).length === 3, `${bag.cells.length} cases, ${bag.cells.filter((c) => c.kind).map((c) => c.kind).join(', ')}`);
+  check('Sac ouvert : le curseur est libre (pas de pointeur verrouillé)', !(await page.evaluate(() => window.__game.input().locked)));
+  writeFileSync(`${OUT}phase3-sac.png`, await page.screenshot());
+  const fruitCell = bag.cells.find((c) => c.kind === 'fruit_baobab');
+  await page.mouse.click(fruitCell.x, fruitCell.y);
+  await sleep(300);
+  bag = await page.evaluate(() => window.__game.bag());
+  check('Un clic choisit un objet et propose ses actions', bag.actions.includes('Manger') && bag.actions.includes('Prendre en main'), bag.actions.join(', '));
+  await page.evaluate(() => (window.__game.sim().vitals.health = 60));
+  await page.click('.item-actions button:has-text("Manger")');
+  await sleep(3800);
+  b = await body();
+  const fruitLeft = countItem(b, 'fruit_baobab');
+  await sleep(8000);
+  b = await body();
+  check('Manger le fruit du baobab (geste de 3 s) fait remonter la santé', fruitLeft === 0 && b.vitals.health > 63, `santé ${b.vitals.health.toFixed(1)} (partie de 60)`);
+
+  // Déchirer sa chemise, puis bander une coupure depuis l'examen du corps.
+  await page.click('.body-actions button:has-text("Déchirer la chemise")');
+  await sleep(300);
+  b = await body();
+  check('Déchirer la chemise donne 4 chiffons', countItem(b, 'chiffon') === 4 && !b.inventory.clothes.haut);
+  const cutId = await injure(page, 'bras_g', 'coupure', true);
+  await sleep(600);
+  const zoneClass = await page.getAttribute('.silhouette [data-zone="bras_g"]', 'class');
+  check('Examen du corps : le bras qui saigne est signalé', (zoneClass ?? '').includes('saigne'), zoneClass ?? '');
+  await page.click('.silhouette [data-zone="bras_g"]');
+  await sleep(300);
+  const aloeDisabled = await page.evaluate(() => [...document.querySelectorAll('.zone-detail button')].find((x) => x.textContent.startsWith("Appliquer de l'aloès"))?.disabled);
+  await page.click('.zone-detail button:has-text("Bander")');
+  await sleep(6800);
+  b = await body();
+  const cut = b.vitals.injuries.find((i) => i.id === cutId);
+  check('Bander depuis l’examen du corps arrête le saignement (geste de 6 s, 1 chiffon)', cut?.bandaged && countItem(b, 'chiffon') === 3, `aloès grisé faute de feuille : ${aloeDisabled}`);
+  await page.keyboard.press('Tab');
+  await sleep(500);
+  check('Tab referme le sac', await page.evaluate(() => document.querySelector('#bag-view').hidden));
+  await page.mouse.click(480, 270);
+  await sleep(300);
+
+  // Jambe cassée : on boite ; attelle avec « Utiliser » (F) en tenant un bâton.
+  await injure(page, 'jambe_d', 'fracture');
+  await sleep(300);
+  let a = await sess(page);
+  await page.keyboard.down('KeyW');
+  await sleep(1500);
+  await page.keyboard.up('KeyW');
+  await sleep(300);
+  let s2 = await sess(page);
+  const limp = Math.hypot(s2.state.x - a.state.x, s2.state.z - a.state.z);
+  check('Jambe cassée : on avance très lentement', limp < 1.6, `${limp.toFixed(2)} m en 1,5 s`);
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.bag.push({ item: 'baton', count: 1 });
+    sim.act({ type: 'sortir', from: { zone: 'sac', index: 0 } });
+  });
+  await sleep(400);
+  const beforeUse = await body();
+  await page.keyboard.press('KeyF');
+  await sleep(500);
+  const afterUse = await body();
+  const useMsg = await page.textContent('#message');
+  await sleep(8500);
+  b = await body();
+  check(
+    '« Utiliser » (F) avec un bâton en main pose l’attelle (2 bâtons + 2 chiffons, 8 s)',
+    b.vitals.injuries.some((i) => i.kind === 'fracture' && i.splinted) && countItem(b, 'chiffon') === 1 && countItem(b, 'baton') === 0,
+    `endurance max ${Math.round(b.state.staminaMax)}, vitesse max ${b.state.speedCap} m/s · en main avant : ${JSON.stringify(beforeUse.held)} · geste : ${afterUse.gesture?.label ?? 'aucun'} · message : « ${useMsg} » · pause : ${await page.evaluate(() => window.__game.screen())} · état : ${afterUse.vitals.state}`,
+  );
+
+  // Repos et sommeil.
+  await page.keyboard.press('KeyR');
+  await sleep(600);
+  const sitting = (await body()).vitals.posture;
+  await page.keyboard.down('KeyW');
+  await sleep(300);
+  await page.keyboard.up('KeyW');
+  await sleep(300);
+  check('R : s’asseoir ; bouger : se relever', sitting === 'assis' && (await body()).vitals.posture === 'debout', sitting);
+  await page.evaluate(() => (window.__game.sim().vitals.fatigue = 70));
+  await page.keyboard.down('KeyR');
+  await sleep(1300);
+  await page.keyboard.up('KeyR');
+  await sleep(500);
+  const sleeping = (await body()).vitals.posture === 'endormi';
+  const sleepText = await page.textContent('#down-screen .title');
+  await page.evaluate(() => (window.__game.sim().vitals.sleepTime = 59));
+  await sleep(2000);
+  b = await body();
+  check('Maintenir R : dormir ; après une minute, l’endroit devient le point de réapparition', sleeping && sleepText === 'Vous dormez' && b.respawnPoint !== null, `écran : « ${sleepText} »`);
+  await page.keyboard.down('KeyW');
+  await sleep(300);
+  await page.keyboard.up('KeyW');
+  await sleep(300);
+  check('Bouger réveille', (await body()).vitals.posture === 'debout');
+
+  // Chute grave : blessures localisées.
+  const injBefore = (await body()).vitals.injuries.length;
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.vitals.injuries = [];
+    sim.vitals.health = 100;
+    const s = sim.state;
+    sim.teleport(s.x, s.y + 16, s.z);
+  });
+  await sleep(3500);
+  b = await body();
+  check('Chute de 16 m : blessures localisées et santé en baisse', b.vitals.injuries.length > 0 && b.vitals.health < 80, `${b.vitals.injuries.map((i) => `${i.kind} (${i.zone})`).join(', ')} · santé ${Math.round(b.vitals.health)} · avant : ${injBefore} blessure(s)`);
+
+  // Mort, corps, réapparition, retour au corps.
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.vitals.state = 'eveille';
+    sim.vitals.injuries = [];
+    sim.vitals.health = 100;
+    sim.inventory.pockets[3] = { item: 'aloes', count: 2 };
+  });
+  await sleep(500);
+  const carried = (await body()).inventory;
+  await injure(page, 'torse', 'coupure', true);
+  await page.evaluate(() => (window.__game.sim().vitals.health = 0.4));
+  await waitFor(page, () => window.__game.body().vitals.state === 'critique', null, 5000);
+  await sleep(400);
+  const giveUpVisible = await page.isVisible('#btn-give-up');
+  const lockedDown = await page.evaluate(() => window.__game.input().locked);
+  writeFileSync(`${OUT}phase3-critique.png`, await page.screenshot());
+  check('État critique : écran, compte à rebours, bouton « Abandonner », curseur libre', giveUpVisible && !lockedDown, await page.textContent('#down-screen .detail'));
+  await page.click('#btn-give-up');
+  await sleep(600);
+  const deadTitle = await page.textContent('#down-screen .title');
+  writeFileSync(`${OUT}phase3-mort.png`, await page.screenshot());
+  await waitFor(page, () => window.__game.body().vitals.state === 'eveille' && !window.__game.body().dead, null, 12000);
+  await sleep(300);
+  b = await body();
+  const respawnMsg = await page.textContent('#message');
+  check('Mort puis réapparition au point du dernier sommeil, sans sac, santé 70', deadTitle === 'Vous êtes mort' && b.inventory.bag === null && b.vitals.health === 70 && Math.hypot(b.respawnPoint.x - (await sess(page)).state.x, b.respawnPoint.z - (await sess(page)).state.z) < 1.5, respawnMsg);
+  check('On se souvient de la direction et de la distance du corps', /Votre corps/.test(respawnMsg ?? ''), respawnMsg);
+  const bodyInfo = b.lastBody;
+  const bodyContent = await page.evaluate((id) => window.__game.sim().props.container(id), bodyInfo.id);
+  check('Le corps reste dans le monde avec tout l’équipement', JSON.stringify(bodyContent.pockets) === JSON.stringify(carried.pockets) && JSON.stringify(bodyContent.bag) === JSON.stringify(carried.bag));
+  await page.evaluate((lb) => {
+    const sim = window.__game.sim();
+    const p = sim.props.position(lb.id);
+    sim.teleport(p.x - 1.4, sim.terrain.heightAt(p.x - 1.4, p.z) + 0.3, p.z);
+  }, bodyInfo);
+  await sleep(1500);
+  await page.evaluate((id) => {
+    const p = window.__game.sim().props.position(id);
+    window.__game.lookAt(p.x, p.y, p.z);
+  }, bodyInfo.id);
+  await sleep(400);
+  const promptBody = await page.textContent('#prompt');
+  await page.keyboard.press('KeyE');
+  await sleep(800);
+  bag = await page.evaluate(() => window.__game.bag());
+  writeFileSync(`${OUT}phase3-fouille.png`, await page.screenshot());
+  check('E sur son corps : on le fouille (son sac et ses poches s’affichent)', bag.open && bag.other === bodyInfo.id && bag.cells.some((c) => c.slot.zone.startsWith('autre') && c.kind), `indication : « ${promptBody} »`);
+  await page.click('.item-actions button:has-text("Tout prendre")');
+  await sleep(400);
+  b = await body();
+  check('« Tout prendre » : on récupère son sac et ses affaires', b.inventory.bag !== null && countItem(b, 'aloes') === 2 && countItem(b, 'figue') === 1);
+  await page.keyboard.press('Tab');
+  await sleep(300);
+
+  // Sauvegarde : quitter, recharger, reprendre.
+  const invBefore = JSON.stringify((await body()).inventory);
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000);
+  await page.click('#btn-quit');
+  await waitFor(page, () => window.__game.screen() === 'home', null, 10000);
+  await page.reload();
+  await startGame(page);
+  await settle(page);
+  const invAfter = JSON.stringify((await body()).inventory);
+  check('Quitter, recharger, « Jouer » : sac, poches et vêtements sont repris', invAfter === invBefore, invAfter.slice(0, 160));
+  check('Aucune erreur dans la console (phase 3)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+
+  // Téléphone : bouton « Sac », onglets Sac / Corps, « Utiliser ».
+  console.log('\n— Phase 3 : téléphone');
+  const touchCtx = await browser.newContext({ ...devices['Pixel 7 landscape'] });
+  await touchCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const tPage = await touchCtx.newPage();
+  const tErrors = watchErrors(tPage, 'phase 3 (téléphone)');
+  await tPage.goto(BASE);
+  await startGame(tPage);
+  await settle(tPage);
+  const cdp = await touchCtx.newCDPSession(tPage);
+  const tapAt = async (x, y, ms = 120) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(x), y: Math.round(y), id: 7 }] });
+    await sleep(ms);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+  };
+  const tap = async (sel) => {
+    const r = await tPage.locator(sel).boundingBox();
+    await tapAt(r.x + r.width / 2, r.y + r.height / 2);
+  };
+  await tPage.evaluate(() => (window.__game.sim().inventory.pockets[1] = { item: 'figue', count: 3 }));
+  await tap('[data-touch="bag"]');
+  await sleep(600);
+  let tb = await tPage.evaluate(() => window.__game.bag());
+  const tabsVisible = await tPage.isVisible('.bag-tabs');
+  check('Téléphone : le bouton « Sac » ouvre le sac (onglets Sac et Corps sur petit écran)', tb.open && tabsVisible);
+  const figCell = tb.cells.find((c) => c.kind === 'figue');
+  await tapAt(figCell.x, figCell.y);
+  tb = await tPage.evaluate(() => window.__game.bag());
+  writeFileSync(`${OUT}phase3-telephone-sac.png`, await tPage.screenshot());
+  check('Téléphone : toucher un objet le choisit et propose ses actions', tb.selected?.zone === 'poche' && tb.selected.index === 1 && tb.actions.includes('Manger'), tb.actions.join(', '));
+  await tap('[data-tab="corps"]');
+  await sleep(300);
+  const bodyVisible = await tPage.isVisible('.bag-body');
+  writeFileSync(`${OUT}phase3-telephone-corps.png`, await tPage.screenshot());
+  await tap('.bag-close');
+  await sleep(300);
+  check('Téléphone : onglet « Corps » puis « Fermer »', bodyVisible && !(await tPage.evaluate(() => window.__game.bag().open)));
+  await tPage.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.vitals.health = 50;
+    sim.act({ type: 'sortir', from: { zone: 'poche', index: 1 } });
+  });
+  await sleep(400);
+  await tap('[data-touch="use"]');
+  await sleep(2400);
+  const tBody = await tPage.evaluate(() => window.__game.body());
+  check('Téléphone : « Utiliser » mange la figue tenue en main', tBody.held === null && countItem(tBody, 'figue') === 2 && tBody.vitals.digest.length === 1);
+  await tPage.evaluate(() => {
+    window.__game.sim().vitals.fatigue = 70;
+    window.__game.act({ type: 'dormir' });
+  });
+  await sleep(600);
+  const wakeVisible = await tPage.isVisible('#btn-wake');
+  await tap('#btn-wake');
+  await sleep(300);
+  check('Téléphone : endormi, le bouton « Se réveiller » réveille (l’écran couvre le joystick)', wakeVisible && (await tPage.evaluate(() => window.__game.body().vitals.posture)) === 'debout');
+  check('Aucune erreur dans la console (phase 3, téléphone)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  await touchCtx.close();
+
+  // Manette : Y ouvre le sac, le stick choisit, A agit, B ferme.
+  console.log('\n— Phase 3 : manette');
+  const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
+  await padCtx.addInitScript((settings) => {
+    localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 }));
+    window.__pad = { id: 'Manette de test (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons, timestamp: 0 };
+    navigator.getGamepads = () => [window.__pad, null, null, null];
+  }, QA_SETTINGS);
+  const pPage = await padCtx.newPage();
+  const pErrors = watchErrors(pPage, 'phase 3 (manette)');
+  await pPage.goto(BASE);
+  await startGame(pPage);
+  await settle(pPage);
+  const press = async (i, ms = 150) => {
+    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: true, touched: true, value: 1 }), i);
+    await sleep(ms);
+    await pPage.evaluate((btn) => (window.__pad.buttons[btn] = { pressed: false, touched: false, value: 0 }), i);
+    await sleep(250);
+  };
+  await pPage.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.pockets[0] = { item: 'chiffon', count: 2 };
+    sim.inventory.pockets[1] = { item: 'muhacha', count: 2 };
+    sim.vitals.health = 50;
+  });
+  await press(3);
+  await sleep(300);
+  let pb = await pPage.evaluate(() => window.__game.bag());
+  const opened = pb.open && pb.selected?.zone === 'poche' && pb.selected.index === 0;
+  await pPage.evaluate(() => (window.__pad.axes = [1, 0, 0, 0]));
+  await sleep(230);
+  await pPage.evaluate(() => (window.__pad.axes = [0, 0, 0, 0]));
+  await sleep(300);
+  pb = await pPage.evaluate(() => window.__game.bag());
+  check('Manette : Y ouvre le sac, le stick passe à la poche voisine', opened && pb.selected?.zone === 'poche' && pb.selected.index === 1, JSON.stringify(pb.selected));
+  await press(0);
+  await sleep(2200);
+  const pBody = await pPage.evaluate(() => window.__game.body());
+  check('Manette : A lance la première action (manger le muhacha)', countItem(pBody, 'muhacha') === 1 && pBody.vitals.digest.length === 1, pb.actions.join(', '));
+  await press(1);
+  await sleep(300);
+  check('Manette : B referme le sac', !(await pPage.evaluate(() => window.__game.bag().open)));
+  await injure(pPage, 'torse', 'coupure', true);
+  await pPage.evaluate(() => (window.__game.sim().vitals.health = 0.3));
+  await waitFor(pPage, () => window.__game.body().vitals.state === 'critique', null, 5000);
+  await press(2, 2600);
+  await sleep(300);
+  check('Manette : à terre, maintenir X 2 s permet d’abandonner', await pPage.evaluate(() => window.__game.body().dead));
+  check('Aucune erreur dans la console (phase 3, manette)', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
+  await padCtx.close();
+}
+
+// --only=ordinateur,telephone,manette,phase2,verification,phase3,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -921,13 +1292,14 @@ try {
   if (want('performance')) await benchScenario(browser);
   if (want('phase2')) await phase2Scenario(browser);
   if (want('verification')) await qaScenario(browser);
+  if (want('phase3')) await phase3Scenario(browser);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();
 } catch (err) {
   check('Exécution des scénarios', false, err instanceof Error ? err.stack : String(err));
 } finally {
-  server.kill();
+  server.stop();
 }
 writeFileSync(`${OUT}resultats.json`, JSON.stringify(results, null, 2));
 console.log(`\n${results.length - failures}/${results.length} vérifications réussies.`);

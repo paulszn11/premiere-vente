@@ -1,6 +1,6 @@
 # Phase 3 — Survie et inventaire
 
-**Statut : en cours (commencée le 13/11/2026).**
+**Statut : terminée le 13/11/2026 et vérifiée par les tests automatiques ({UNIT} tests unitaires, {E2E} vérifications dans le navigateur). Elle reste à essayer sur vos appareils.**
 
 ## Ce que demande le cahier des charges
 
@@ -92,6 +92,105 @@ Il y aura des joueurs sur ordinateur, sur téléphone et sur tablette. Tout ce q
 ### Pour plus tard (inspirations notées, rien n'est encore décidé)
 
 - **Se retrouver** (principe du jeu, à préparer pour la phase 8) : voix de proximité et voix qui porte quand on crie, sifflet, feux et fumée visibles de loin, cartes que l'on dessine et que l'on peut donner à quelqu'un. La section 15 laisse ouvert le partage des cartes et des marqueurs. Inspiration : Big Walk, sorti en août 2026, où perdre le contact avec les autres fait partie des énigmes.
+
+## Ce qui a été fait
+
+| Domaine | Contenu |
+| --- | --- |
+| Objets du monde | Bâtons (bois mort au pied des arbres), fruits du baobab, figues sauvages près de l'eau, muhachas dans le miombo, aloès sur les kopjes et les sols rocheux. Leur emplacement est déterministe ; un objet ramassé ne réapparaît pas |
+| Ramasser | « Prendre » sur un petit objet le range directement : en poche, sinon dans le sac, sinon en main. Les pierres se prennent toujours en main, pour être lancées |
+| Sac et poches | 4 poches pour les petits objets (1 litre chacune), sac de 30 litres. Chaque objet a un poids et un volume. On peut sortir un objet en main, le ranger, le déplacer entre poches et sac, le poser au sol, poser son sac ou en mettre un autre sur son dos |
+| Vue du sac | Le personnage s'agenouille et le contenu apparaît en 3D sur une toile : poches, sac, main, et le corps ou le sac posé que l'on fouille. On touche un objet, puis une action. Le monde continue pendant ce temps |
+| Charge | Au-delà de 10 kg portés, on va moins vite et l'effort coûte plus d'endurance. Au-delà de 25 kg, on ne court plus ; au-delà de 35 kg, on ne saute plus. Un sac lourd fait couler à la nage |
+| Santé | Elle baisse avec les chutes, les saignements, la noyade et la fièvre, et ne remonte qu'en mangeant (et un peu en dormant) |
+| Nourriture | Fruit du baobab : +20 en 40 s. Figue : +5 en 12 s. Muhacha : +7 en 15 s. Au plus 3 aliments en digestion à la fois. Manger est un geste de 1,5 à 3 s |
+| Énergie | L'effort la consomme. Elle fixe l'endurance maximale : la partie hachurée de la barre montre ce qui n'est plus disponible. On la retrouve en s'asseyant (R) ou en dormant |
+| Fatigue | Elle monte en environ 3 h de jeu. Au-delà de 50, l'énergie maximale baisse ; au-delà de 85, la vision se trouble ; au-delà de 90, viennent des micro-sommeils. À 100, on s'endort sur place |
+| Sommeil | Maintenir R. Cela dure environ 3 minutes réelles, sans accélérer le temps. Bouger réveille. Après une minute de sommeil, l'endroit devient le point de réapparition |
+| Blessures | Six zones du corps. Contusions, entorses, fractures, coupures légères ou profondes, commotions. Les chutes graves en provoquent selon la hauteur, le sol, la posture et les blessures déjà présentes |
+| Effets | Jambe cassée : on boite, sans courir, sauter ni grimper, et marcher sans attelle provoque un choc puis une perte de connaissance. Bras cassé : pas d'escalade, pas d'objet à deux mains, pas de lancer. Entorse : on boite un peu. La douleur et la fièvre réduisent l'endurance |
+| Soins | Chiffons, en déchirant sa chemise ou son pantalon : un chiffon arrête un saignement ou maintient une entorse. Attelle : 2 bâtons et 2 chiffons. Aloès : désinfecte et calme la douleur. Chaque soin est un geste de 3 à 8 s, que bouger interrompt |
+| Infections | Une plaie bandée sans être désinfectée peut s'infecter quelques minutes plus tard : fièvre, perte de santé et d'énergie. L'aloès la guérit |
+| Examen du corps | Silhouette colorée (saigne, fracture, entorse, contusion, infectée, soignée), jauges de santé, d'énergie et de fatigue, niveau de douleur, détail de chaque zone et soins possibles avec le matériel disponible |
+| Perte de connaissance | À 0 de santé sans saignement : réveil seul au bout de 30 s, avec 10 de santé. Avec un saignement : état critique, 90 s avant la mort, avec un bouton « Abandonner ». Inconscient dans l'eau : noyade |
+| Secours (pour la phase 8) | Un autre joueur pourra bander la plaie et relever le blessé, ou traîner son corps. La règle est écrite et testée ; elle sera branchée avec le multijoueur |
+| Mort | Chute mortelle, noyade, hémorragie, infection ou abandon. On voit son corps de l'extérieur, puis on se réveille 5 s plus tard |
+| Corps | Il reste avec le sac et les poches jusqu'à ce qu'il soit vidé. Il est sauvegardé ; on peut le fouiller, tout reprendre, remettre son sac sur son dos, ou le traîner |
+| Réapparition | Au dernier endroit où l'on a dormi au moins une minute, sinon au point d'arrivée. On repart sans sac, avec 70 de santé, et on se souvient de la direction et de la distance du corps |
+| Sauvegarde | La partie solo est enregistrée dans le navigateur : position, corps, sac, objets ramassés, déplacés ou posés, et corps laissés. L'ancienne sauvegarde de position de la phase 2 est reprise |
+
+## Commandes ajoutées
+
+| Action | Clavier / souris | Manette | Tactile |
+| --- | --- | --- | --- |
+| Ramasser · fouiller un corps · ouvrir un sac posé | E | X / Carré | « Prendre » |
+| Utiliser l'objet en main (manger, bander, attelle, aloès) | Clic droit ou F | LT / L2 | « Utiliser » |
+| Sac et examen du corps | Tab ou I | Y / Triangle | « Sac » |
+| S'asseoir · se lever (appui court) · dormir (maintenir) | R | LB / L1 | Dans le sac, onglet « Corps » |
+| Poches 1 à 4 : prendre en main ou y ranger l'objet tenu | 1 à 4 | RB / R1 (poche suivante) | Dans le sac |
+| Dans le sac : choisir, agir, fermer | Souris, flèches, E, Tab ou Échap | Stick, A, X, B | Toucher, « Fermer » |
+
+Sur petit écran, le sac a deux onglets, « Sac » et « Corps ».
+
+## Tests automatiques
+
+| Suite | Résultat |
+| --- | --- |
+| `npm test` (Vitest) : inventaire (poches, sac, volume, pierres, vêtements, lecture des sauvegardes), objets du monde, énergie, fatigue, sommeil, nourriture, saignements, caillots, fractures, attelles, choc, bras cassé, infections, chutes, perte de connaissance, état critique, secours, noyade ; simulation complète : ramasser, ranger, poches, déchirer, charge, manger, bander, attelle, repos, sommeil, mort, corps, réapparition, fouille, corps vidé qui disparaît, chute et noyade mortelles, sauvegarde | **{UNIT} / {UNIT}** (dont 50 pour la phase 3) |
+| `npm run test:e2e -- --webgpu` (Chromium) : phases 1 et 2, et la phase 3 sur ordinateur, téléphone et manette (33 vérifications) | **{E2E} / {E2E}** |
+
+Le scénario « phase 3 » joue dans le navigateur :
+- ramasser une figue, un bâton et un fruit ;
+- ouvrir le sac, choisir un objet au clic, manger ;
+- déchirer la chemise, bander une coupure depuis l'examen du corps ;
+- boiter avec une jambe cassée, puis poser l'attelle avec « Utiliser » ;
+- s'asseoir, dormir et se réveiller ;
+- subir une chute de 16 m ;
+- atteindre l'état critique, abandonner, mourir, réapparaître, retrouver son corps et tout reprendre ;
+- quitter puis recharger la partie ;
+- au doigt : « Sac », onglets, « Utiliser » ;
+- à la manette : Y, stick, A, B.
+
+### Problèmes trouvés par les tests et corrigés
+
+- **Les appuis très brefs étaient perdus.** Une touche ou un bouton tactile pressé puis relâché entre deux images n'était pas vu. Sur un appareil lent, cela pouvait arriver à un vrai joueur. Ils sont maintenant toujours pris en compte.
+- **Les boutons de soins se recréaient à chaque image** pendant qu'une plaie saignait, ce qui pouvait faire rater un clic ou un toucher. Ils ne changent plus que lorsque leur liste change.
+- **Le curseur restait capturé quand on était à terre :** impossible de cliquer « Abandonner ». Il est libéré dès qu'on perd connaissance.
+- **À la manette, le stick sautait parfois deux cases** et X déclenchait deux actions. La répétition est plus lente au départ, et chaque bouton a un seul rôle.
+- **Fermer le sac à la manette pendant une image provoquait une erreur.** C'est corrigé.
+- **Vue à la mort :** la caméra se trouvait dans le corps. Elle se place maintenant au-dessus.
+- **Sur téléphone, des étiquettes du sac restaient affichées dans l'onglet « Corps ».** C'est corrigé.
+- **Les tests navigateur laissaient un serveur ouvert** après chaque exécution. Il est maintenant bien arrêté.
+
+## Limites et compromis (signalés)
+
+- **Vue du sac :** objets en 3D sur une toile vue de dessus, avec des boutons d'action. On ne manipule pas encore les objets à la main dans la scène, comme dans Sons of the Forest : ce sera repris avec les graphismes soignés.
+- **Examen du corps :** silhouette dessinée, et non vue de ses propres bras et jambes comme dans Green Hell.
+- **Secours, porter un blessé :** la règle existe (`rescue` dans `vitals.ts`) et on peut traîner un corps. Mais secourir quelqu'un demande un autre joueur : ce sera branché et testé en phase 8.
+- **Matériel médical :** chiffons de vêtements, bâtons et aloès seulement. Pansements propres, désinfectant, remèdes et outils viendront avec la fabrication (phase 4). Les vêtements déchirés ne se remplacent pas encore, sauf à la réapparition.
+- **Sommeil :** sans cycle jour et nuit (phase 9) ni abri (phase 5), on peut dormir partout. Les dangers de la nuit viendront avec les créatures (phase 6).
+- **Corps :** pas encore de décomposition visible (phase 9). Tout le monde peut le fouiller (permissions en phase 8).
+- **Interface temporaire :** la barre d'endurance, les bords rouges et les messages seront remplacés par une interface intégrée à l'univers (respiration, battements de cœur, gestes visibles).
+- **Graphismes simples :** les objets sont des formes de couleur unie, comme le reste du prototype.
+
+## À vérifier sur vos appareils
+
+1. **Une partie :**
+   - ramasser des fruits au pied d'un baobab (lowveld, vallée) ou d'un figuier (près du fleuve) ;
+   - ramasser des bâtons sous les arbres et de l'aloès sur les kopjes.
+2. **Le sac :**
+   - Tab sur ordinateur, Y à la manette, « Sac » au doigt ;
+   - manger un fruit ;
+   - déchirer sa chemise ;
+   - poser son sac.
+3. **Les blessures :**
+   - sauter d'un kopje (Réglages → Outils de test → paroi de granit) et regarder l'examen du corps ;
+   - bander, poser une attelle.
+4. **La mort :**
+   - se laisser mourir (par exemple en restant sous l'eau au lac) ;
+   - vérifier la réapparition et le message qui indique où est le corps ;
+   - retourner fouiller le corps.
+5. **Le sommeil :** maintenir R (ou « Sac » → « Corps » → « Dormir ») pendant une minute, puis vérifier qu'on réapparaît là en cas de mort.
 
 ## Sources consultées
 

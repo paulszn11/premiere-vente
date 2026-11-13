@@ -209,6 +209,7 @@ async function boot(): Promise<void> {
   const gestureEl = $('#gesture');
   const downEl = $('#down-screen');
   const giveUpBtn = $<HTMLButtonElement>('#btn-give-up');
+  const wakeBtn = $<HTMLButtonElement>('#btn-wake');
   let messageTimer = 0;
   let lastBlur = '';
   const showStatus = (hud: HudState) => {
@@ -245,9 +246,12 @@ async function boot(): Promise<void> {
       (downEl.querySelector('.title') as HTMLElement).textContent = hud.down.title;
       (downEl.querySelector('.detail') as HTMLElement).textContent = hud.down.detail;
       giveUpBtn.hidden = !hud.down.canGiveUp;
+      wakeBtn.hidden = hud.down.kind !== 'endormi';
     }
   };
   giveUpBtn.addEventListener('click', () => session?.giveUp());
+  // Au doigt, l'écran de sommeil couvre le joystick : un bouton permet de se réveiller.
+  wakeBtn.addEventListener('click', () => session?.act({ type: 'lever' }));
   const showMessage = (text: string, tone: 'info' | 'alerte' | 'danger') => {
     if (!text) return;
     const el = $('#message');

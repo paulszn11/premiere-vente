@@ -128,6 +128,7 @@ export class GameSession {
   private biomeCheck = 0;
   private roll = 0;
   private deadBack = 0;
+  private giveUpHeld = 0;
   private restHeld = 0;
   private restDone = false;
   private nextPocket = 0;
@@ -311,6 +312,15 @@ export class GameSession {
       this.yaw = wrapAngle(this.yaw + input.look.dx);
       this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch + input.look.dy));
       this.handleActions(dt);
+      // À terre : maintenir « Prendre » 2 s pour abandonner (clavier et manette).
+      const vs = this.sim?.vitals.state;
+      if ((vs === 'critique' || vs === 'inconscient') && input.isDown('interact')) {
+        this.giveUpHeld += dt;
+        if (this.giveUpHeld >= 2) {
+          this.giveUpHeld = 0;
+          this.giveUp();
+        }
+      } else this.giveUpHeld = 0;
     }
 
     const sim = this.sim!;
@@ -602,7 +612,12 @@ export class GameSession {
         canGiveUp: false,
       };
     if (v.state === 'critique')
-      return { kind: 'critique', title: 'État critique', detail: `Vous perdez votre sang. Sans aide, vous mourrez dans ${minSec(v.timer)}. Un autre joueur peut bander votre plaie et vous relever.`, canGiveUp: true };
+      return {
+        kind: 'critique',
+        title: 'État critique',
+        detail: `Vous perdez votre sang. Sans aide, vous mourrez dans ${minSec(v.timer)}. Un autre joueur peut bander votre plaie et vous relever.${this.opts.device.touch ? '' : ` Maintenir ${this.key('interact')} pour abandonner.`}`,
+        canGiveUp: true,
+      };
     if (v.state === 'inconscient')
       return {
         kind: 'inconscient',
@@ -614,7 +629,7 @@ export class GameSession {
       return {
         kind: 'endormi',
         title: 'Vous dormez',
-        detail: `Fatigue : ${Math.round(v.fatigue)} %. ${v.sleepTime >= VITALS.sleepRespawnSeconds ? 'Vous réapparaîtrez ici en cas de mort. ' : ''}Bougez pour vous réveiller.`,
+        detail: `Fatigue : ${Math.round(v.fatigue)} %. ${v.sleepTime >= VITALS.sleepRespawnSeconds ? 'Vous réapparaîtrez ici en cas de mort. ' : 'Au bout d’une minute, vous réapparaîtrez ici en cas de mort. '}Bougez pour vous réveiller.`,
         canGiveUp: false,
       };
     return null;

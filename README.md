@@ -2,10 +2,17 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 2 terminée et vérifiée (69 tests unitaires, 87 vérifications dans le navigateur).** Le prototype contient :
+**État : phase 3 terminée ({UNIT} tests unitaires, {E2E} vérifications dans le navigateur).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
+- la survie (phase 3) :
+  - santé, énergie, fatigue et sommeil ;
+  - blessures localisées et soins (chiffons, attelles, aloès) ;
+  - fruits du pays ;
+  - sac à dos de 30 litres et 4 poches, avec une vue du sac en 3D ;
+  - perte de connaissance et mort ;
+  - corps laissé dans le monde et réapparition ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
 
@@ -26,8 +33,12 @@ Tant que la protection Vercel est activée, il faut être connecté à son compt
 | Sauter · grimper face à une paroi · monter (nage) | Espace | A / Croix | Bouton « Sauter » |
 | Courir · nager vite | Maj gauche (maintenir) | Clic du stick gauche | Bouton « Courir » |
 | S'accroupir · plonger · lâcher la paroi | C | B / Rond | Bouton « Accroupir » |
-| Prendre · poser · traîner un objet | E | X / Carré | Bouton « Prendre » |
+| Prendre · ramasser · poser · traîner · fouiller | E | X / Carré | Bouton « Prendre » |
 | Lancer l'objet porté | Clic gauche | RT / R2 | Bouton « Lancer » |
+| Utiliser l'objet en main (manger, soigner) | Clic droit ou F | LT / L2 | Bouton « Utiliser » |
+| Sac et examen du corps | Tab ou I | Y / Triangle | Bouton « Sac » |
+| S'asseoir · dormir (maintenir) | R | LB / L1 | Sac → onglet « Corps » |
+| Poches 1 à 4 | 1 à 4 | RB / R1 (poche suivante) | Dans le sac |
 | Menu / pause | Échap | Start | Bouton ☰ |
 | Infos de performance | F3 | Select | — |
 
@@ -63,7 +74,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,verification,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2).
+- `--only=ordinateur,telephone,manette,phase2,verification,phase3,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire sur ordinateur, téléphone et manette).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
@@ -71,7 +82,8 @@ Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
 ```
 src/shared/     code commun au client et au futur serveur : géographie, relief, flore,
-                objets, physique, déplacements, simulation à pas fixe, apparitions,
+                objets, inventaire, corps du joueur (santé, blessures), actions,
+                physique, déplacements, simulation à pas fixe, apparitions,
                 protocole, codes de monde
 src/client/     jeu dans le navigateur : rendu (Babylon.js), commandes, réglages,
                 mesures de performance, écrans
@@ -93,3 +105,4 @@ Le projet Vercel `bienvenue-au-zimbabwe` construit le site avec `npm run build` 
 - [`docs/ETAT.md`](docs/ETAT.md) : fonctionnalités terminées, préparées et restantes
 - [`docs/PHASE-1.md`](docs/PHASE-1.md) : architecture et prototype, procédure de test sur appareils réels
 - [`docs/PHASE-2.md`](docs/PHASE-2.md) : monde et déplacements (carte, décisions, tests, limites)
+- [`docs/PHASE-3.md`](docs/PHASE-3.md) : survie et inventaire (décisions inspirées d'autres jeux, tests, limites)
