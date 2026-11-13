@@ -1,11 +1,12 @@
 # État des fonctionnalités
 
-Mis à jour le 13/11/2026, version 0.5.0.
+Mis à jour le 13/11/2026, version 0.6.0.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
 - **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
 - **Phase 4 :** terminée le 13/11/2026 (146 tests unitaires, 151 vérifications navigateur, dont 31 propres à la phase 4). Les éléments de la section 15 qui la concernent (liste des matériaux et leurs propriétés, amélioration de l'équipement) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-4.md`. Validée par le propriétaire du projet le 13/11/2026.
 - **Phase 5 :** terminée le 13/11/2026 (181 tests unitaires, 168 vérifications navigateur, dont 16 propres à la phase 5). Les éléments de la section 15 qui la concernent (matériaux de construction, leurs propriétés, les améliorations) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-5.md`. Reste à l'essayer sur vos appareils.
+- **Phase 6 :** terminée le 13/11/2026 (202 tests unitaires, 186 vérifications navigateur, dont 18 propres à la phase 6). Le catalogue des créatures (section 15) est une proposition signalée et modifiable, détaillée dans `docs/PHASE-6.md`. Reste à l'essayer sur vos appareils.
 - **Correction (manette), présente depuis la phase 3 :** maintenir Y ouvrait puis refermait le sac à chaque image (de même pour Start et la pause, et pour une touche du clavier maintenue plus d'une demi-seconde). Un bouton encore enfoncé à l'ouverture du sac ou à la pause est maintenant ignoré jusqu'à ce qu'on le relâche.
 
 Légende des tests :
@@ -96,6 +97,24 @@ Légende des tests :
 | Métallurgie du fer : minerai → loupe → barre → clous, boulons, hache et couteau en fer | 10.3, 9.3 | Auto |
 | Sauvegarde des constructions, chantiers et installations | 3.3 | Auto |
 
+## Terminé — phase 6 (à valider sur vos appareils)
+
+| Fonctionnalité | Section du cahier | Tests |
+| --- | --- | --- |
+| Faune du Zimbabwe : impala, phacochère, babouin, éléphant, hyène, léopard, crocodile, vautour ; créature mystérieuse dans les eaux profondes du lac | 5.1, 4 | Auto |
+| Sens propres à chaque espèce : vue avec ligne de vue, ouïe des bruits du joueur, pistes et sang, crainte du feu, remous dans l'eau ; posture et regard du joueur | 5.2 | Auto |
+| Comportements : fuite et alarme, défense, territoire, intimidation, vol de nourriture, charges, chasse en groupe, traque et embuscade, prise sous l'eau | 5.2 | Auto |
+| Coopération : alarmes entendues par les autres espèces, vautours qui attirent les hyènes | 5.2 | Auto |
+| Mémoire des habitudes : le léopard retourne là où il a vu le joueur, les babouins là où ils ont trouvé à manger | 5.2 | Auto |
+| Destruction des constructions : l'éléphant renverse clôtures et murs, la hyène ronge les portes en bois | 5.2, 10.4 | Auto |
+| Écosystème : populations par zone, naissances, prédation, migrations, territoires, apparitions fixes et dynamiques, mort définitive ou réapparition selon l'espèce, évolution du comportement et de la taille | 5.3, 14.5 | Auto |
+| Réactions aux blessures selon la partie touchée : fuite, boiterie, saignement, contre-attaque, repli de la meute | 5.4 | Auto |
+| Combats : coups localisés avec l'objet tenu (masse, équilibre, portée, usure), objets lancés ; blessures localisées du joueur, prises dont on se libère | 8.1, 8.3, 8.4 | Auto |
+| Carcasses, vautours, dépeçage, viande crue ou cuite au foyer | 8, 9 | Auto |
+| Pièges construits : collet, assommoir (pierre physique), fosse à pieux | 8.8 | Auto |
+| Horreur : sons spatialisés fabriqués par le navigateur, cœur qui bat, sons étouffés sous l'eau, vue qui s'assombrit | 13.5, 16 | Auto (son démarré ; l'écoute reste à faire sur vos appareils) |
+| Créatures animées, carcasses, traces de sang ; niveaux de simulation ; 24 créatures au plus sur téléphone | 14.5 | Auto |
+
 ## Préparé mais pas encore branché (phase 8)
 
 | Élément | Fichier | Tests |
@@ -111,7 +130,7 @@ Légende des tests :
 
 ## En cours
 
-La validation des phases 2, 3 et 5 sur vos appareils.
+La validation des phases 2, 3, 5 et 6 sur vos appareils.
 
 ## Restant
 
@@ -121,12 +140,12 @@ La validation des phases 2, 3 et 5 sur vos appareils.
 | 3 (suivi) | Objets manipulés à la main dans la vue du sac, examen du corps en vue réelle, vêtements de rechange ; secours entre joueurs (avec la phase 8) |
 | 4 (suivi) | Manipulation libre des pièces en 3D, animations des gestes (coups d'outil, chute des arbres) ; matériel de plongée (avec les phases 6 et 9) ; usage de l'or (commerce, section 15) |
 | 5 (suivi) | Électricité, machines, automatisation (avec les phases 7 et 9) ; cases rondes et pièces de forme libre ; radeaux (phase 7) ; constructions dans les grottes (phase 9) ; attaques des bases (phases 6 et 8) |
-| 6 | Intelligence artificielle, écosystème, créatures, détection, combats, horreur sous-marine |
+| 6 (suivi) | Armes à feu (avec les bâtiments abandonnés, phase 9) ; créatures souterraines (grottes, phase 9) ; chasses nocturnes (cycle jour/nuit, phase 9) ; peaux et os (équipement) ; animations des coups et des créatures |
 | 7 | Véhicules et machines |
 | 8 | Serveur chez l'hôte (navigateur et programme compagnon), code privé, connexion WebRTC, synchronisation, permissions, sauvegardes du monde et des joueurs, 10 joueurs |
 | 9 | Monde complet : grottes, bâtiments abandonnés, histoire, documents, événements, catastrophes, météo, cycle jour/nuit, carte révélée progressivement |
 | 10 | Optimisation, tests sur appareils, installation, documentation, programme compagnon |
-| Plus tard | Graphismes soignés (textures, ombres, ciel, effets), son et musique adaptative, interface intégrée à l'univers, menus pilotables à la manette |
+| Plus tard | Graphismes soignés (textures, ombres, ciel, effets), musique adaptative et sons du monde (vent, eau, pas du joueur), interface intégrée à l'univers, menus pilotables à la manette |
 
 ## Limites connues
 
@@ -136,5 +155,6 @@ La validation des phases 2, 3 et 5 sur vos appareils.
 - Les temps de reconstitution (gisements, arbres, fruits) comptent en temps de jeu. Sans cycle jour/nuit (phase 9), ce temps avance comme le temps réel, et seulement pendant qu'on joue.
 - Pas d'animation des gestes : l'outil ne bouge pas à chaque coup et l'arbre abattu disparaît d'un coup en laissant sa souche.
 - Constructions : stabilité par coefficients (pas de calcul de forces ni de déformation), grille de 2 m et pièces droites, au plus deux lumières (aucune en qualité Basse).
+- Créatures : formes simples et animation procédurale, déplacements sans calcul d'itinéraire (évitement par rayons), pas encore de nuit ; sons seulement pour les créatures et les combats.
 - Les menus se pilotent au clavier, à la souris ou au doigt, pas encore à la manette (sauf Start pour la pause).
 - La résolution adaptative peut baisser inutilement sur un écran limité à 30 images par seconde : désactivable dans les réglages.

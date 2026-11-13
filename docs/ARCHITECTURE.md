@@ -97,6 +97,19 @@ Côté client :
 - `session.ts` gère le mode construction et quelques lumières de feu ;
 - `bag-view.ts` ajoute l'onglet « Construire » et les panneaux des pièces et du fourneau.
 
+### Créatures et horreur (phase 6)
+
+| Module | Rôle |
+| --- | --- |
+| `creatures.ts` | Catalogue des espèces (proposition, section 15) : caractéristiques, sens, attaques, habitat ; capsule du corps et localisation des coups |
+| `fauna.ts` | Écosystème à trois niveaux (populations par zone de 1 km, individus suivis, créatures proches) ; sens, décisions par grande famille de comportement, déplacements sur le relief, attaques, prises, pièges, évolution ; générateur rangé dans l'état ; sauvegarde contrôlée. Aucune dépendance au moteur physique ni à l'affichage : la simulation lui fournit l'environnement (rayons, feux, carcasses, pièces, pièges) et applique ses événements |
+| `simulation.ts` | Ce que les créatures savent du joueur, coups portés, objets lancés, blessures du joueur, prises, carcasses et vautours, dépeçage, cuisson, pièges, dégâts aux constructions |
+
+Côté client :
+- `creature-view.ts` dessine les animaux (formes simples instanciées par partie, animées selon la vitesse et l'état), les carcasses, les traces de sang et la créature du lac ;
+- `audio/sound.ts` fabrique les sons (Web Audio), les place dans l'espace et gère le cœur, l'ambiance sous l'eau et le grondement ;
+- `session.ts` calcule le danger et la peur (bord rouge, vue qui s'assombrit).
+
 ## 2. Technologies retenues
 
 | Domaine | Choix | Raisons | Alternatives écartées |

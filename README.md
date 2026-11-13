@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 5 terminée (181 tests unitaires et 168 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
+**État : phase 6 terminée (202 tests unitaires et 186 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -24,6 +24,12 @@ Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le n
   - planchers (sur pilotis au-dessus des pentes et de l'eau), murs de clayonnage et de torchis, murs en pierre sèche, portes, toits de chaume, échelles, clôtures d'épines ;
   - stabilité : sans appui, les pièces s'effondrent en débris ; on peut aussi détruire à l'outil, par les chocs ou par le feu ;
   - installations : coffre, établi, puits, bas fourneau et forge (le fer : clous, boulons, outils), torches ;
+- les créatures et l'horreur (phase 6) :
+  - une faune du Zimbabwe vivante : impalas, phacochères, babouins, éléphants, hyènes, léopards, crocodiles, vautours, avec des populations qui naissent, migrent et réagissent à la chasse ;
+  - chaque espèce a ses sens (vue, ouïe, odorat et pistes de sang, crainte du feu) et ses comportements : fuite et alarme, charges, hyènes qui encerclent, léopard qui traque par derrière ;
+  - combats avec ce qu'on tient (coups localisés, objets lancés), carcasses à dépecer, viande à cuire, pièges (collet, assommoir, fosse à pieux) ;
+  - une créature mystérieuse dans les eaux profondes du lac ;
+  - des sons placés dans l'espace, fabriqués par le navigateur ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
 
@@ -72,6 +78,18 @@ En mode construction :
 
 Ensuite, « Utiliser » sur le chantier fait l'étape suivante (les matériaux peuvent être sur vous ou posés à côté). E sur une pièce ouvre une porte ou montre la pièce : réparer, enduire de torchis, démonter, éteindre un feu.
 
+Face aux créatures :
+
+| Action | Clavier / souris | Manette | Tactile |
+| --- | --- | --- | --- |
+| Frapper l'animal visé, avec ce que vous tenez | Clic droit ou F | LT | « Utiliser » |
+| Lancer une pierre ou une lance | Clic gauche | RT | « Lancer » |
+| Se débattre quand une créature vous tient | E à répétition | X à répétition | « Prendre » à répétition |
+| Dépecer une carcasse (une lame en main) | Clic droit ou F | LT | « Utiliser » |
+| Se dégager d'un piège, réarmer un piège | E | X | « Prendre » |
+
+Écoutez : les cris, les frôlements et les battements de cœur préviennent du danger. Un feu ou une torche tient la plupart des animaux à distance. Un casque aide à situer les sons ; le volume se règle dans « Réglages » → « Son ».
+
 Pour bien démarrer :
 1. Prenez un galet (E) et frappez un bloc de quartz blanc (clic droit maintenu) : des éclats tranchants tombent.
 2. Avec un éclat en main, écorcez un arbre.
@@ -81,7 +99,8 @@ Pour essayer rapidement chaque région, ouvrez le menu pause, puis « Réglages 
 - la téléportation vers le lac (nage), une paroi de granit (escalade) et chaque biome ;
 - la téléportation à côté du gisement de quartz, d'argile, de fer ou d'or le plus proche ;
 - un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet) ;
-- des matériaux de construction posés à côté de vous (bûches, perches, bâtons, pierres, argile, cordes, herbes, clous).
+- des matériaux de construction posés à côté de vous (bûches, perches, bâtons, pierres, argile, cordes, herbes, clous) ;
+- des créatures à faire apparaître devant vous, et une baignade au-dessus des eaux profondes du lac, là où rôde la créature.
 
 Ces outils seront retirés ou réservés à l'hôte en multijoueur.
 
@@ -113,7 +132,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; chacun sur ordinateur, téléphone et manette).
+- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; « phase6 » : créatures et horreur ; chacun sur ordinateur, téléphone et manette).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
@@ -149,3 +168,4 @@ Le projet Vercel `bienvenue-au-zimbabwe` construit le site avec `npm run build` 
 - [`docs/PHASE-3.md`](docs/PHASE-3.md) : survie et inventaire (décisions inspirées d'autres jeux, tests, limites)
 - [`docs/PHASE-4.md`](docs/PHASE-4.md) : ressources et fabrication (matériaux, recettes, outils, feu, tests, limites)
 - [`docs/PHASE-5.md`](docs/PHASE-5.md) : construction (décisions, difficultés techniques, stabilité, destruction, installations, fer, tests, limites)
+- [`docs/PHASE-6.md`](docs/PHASE-6.md) : créatures et horreur (catalogue proposé, sens, comportements, écosystème, combats, pièges, sons, tests, limites)
