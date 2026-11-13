@@ -17,9 +17,11 @@ import '@babylonjs/core/Meshes/thinInstanceMesh';
 import { Scene } from '@babylonjs/core/scene';
 import { CHUNK_SIZE, WATER_LEVEL } from '../../shared/constants';
 import type { PropView } from '../../shared/interaction';
+import type { PropKind } from '../../shared/props';
 import { type Terrain, chunkCoord, chunkKey } from '../../shared/terrain';
 import { type ChunkFlora, SPECIES_LIST, type Species } from '../../shared/vegetation';
 import type { QualityParams } from '../settings';
+import { buildItemMesh } from './item-meshes';
 import type { ChunkJobResult, TerrainJobs } from './terrain-jobs';
 
 const SKY = new Color3(0.62, 0.74, 0.86);
@@ -150,6 +152,8 @@ export class WorldView {
   private readonly flora = new Map<string, Mesh>();
   private readonly stoneMesh: Mesh;
   private readonly logMesh: Mesh;
+  /** Petits objets, sacs posés et corps (une forme par type, à l'échelle réelle). */
+  private readonly itemMeshes = new Map<PropKind, Mesh>();
   private readonly chunks = new Map<string, ChunkRecord>();
   private readonly floraCache = new Map<string, ChunkFlora>();
   private desired = new Map<string, Desired>();
@@ -205,6 +209,12 @@ export class WorldView {
     const log = cyl(1, 2, 2, 8, 0);
     log.transform(Matrix.RotationZ(Math.PI / 2));
     this.logMesh = buildMesh('bûches', scene, this.material, [[log, 0.45, 0.33, 0.22]]);
+    for (const kind of ['chiffon', 'aloes', 'fruit_baobab', 'figue', 'muhacha', 'sac', 'corps'] as const) {
+      const mesh = buildItemMesh(`objets ${kind}`, kind, scene, this.material);
+      mesh.alwaysSelectAsActiveMesh = true;
+      mesh.isVisible = false;
+      this.itemMeshes.set(kind, mesh);
+    }
     this.applyFog();
   }
 
@@ -353,7 +363,7 @@ export class WorldView {
   /** Met à jour l'affichage des objets déplaçables (positions issues de la simulation). */
   updateProps(views: PropView[]): void {
     const stones = views.filter((v) => v.kind === 'pierre');
-    const logs = views.filter((v) => v.kind !== 'pierre');
+    const logs = views.filter((v) => v.kind === 'buche' || v.kind === 'tronc' || v.kind === 'baton');
     const fill = (mesh: Mesh, list: PropView[], scale: (v: PropView) => [number, number, number]) => {
       if (list.length === 0) {
         mesh.isVisible = false;
@@ -373,6 +383,7 @@ export class WorldView {
     };
     fill(this.stoneMesh, stones, (v) => [v.radius, v.radius, v.radius]);
     fill(this.logMesh, logs, (v) => [v.length, v.radius, v.radius]);
+    for (const [kind, mesh] of this.itemMeshes) fill(mesh, views.filter((v) => v.kind === kind), () => [1, 1, 1]);
   }
 
   /** À appeler à chaque image : demande, reçoit et affiche les chunks, dans la limite de temps donnée. */
@@ -438,6 +449,7 @@ export class WorldView {
     for (const mesh of this.flora.values()) mesh.dispose();
     this.stoneMesh.dispose();
     this.logMesh.dispose();
+    for (const mesh of this.itemMeshes.values()) mesh.dispose();
     this.water.dispose();
     this.material.dispose();
     this.waterMaterial.dispose();

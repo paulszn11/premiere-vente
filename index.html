@@ -16,13 +16,21 @@
     <canvas id="game" tabindex="0" aria-label="Vue du jeu"></canvas>
 
     <div id="hud" hidden>
+      <div id="vignette" aria-hidden="true"></div>
+      <div id="eyelids" aria-hidden="true"></div>
       <div id="crosshair" aria-hidden="true"></div>
       <div id="click-hint" hidden>Cliquez dans le jeu pour jouer</div>
       <div id="prompt" hidden></div>
       <div id="message" role="status" hidden></div>
+      <div id="gesture" hidden><span class="label"></span><div class="bar"><span></span></div></div>
       <div id="status">
-        <div class="bar stamina" hidden><span></span></div>
+        <div class="bar stamina" hidden><span></span><i class="cap"></i></div>
         <div class="bar breath" hidden><span></span></div>
+      </div>
+      <div id="down-screen" hidden>
+        <p class="title"></p>
+        <p class="detail"></p>
+        <button type="button" id="btn-give-up" hidden>Abandonner</button>
       </div>
       <pre id="perf" hidden></pre>
     </div>
@@ -32,12 +40,45 @@
     <div id="touch" hidden>
       <div class="joy-base" hidden><div class="joy-knob"></div></div>
       <button type="button" class="tbtn" data-touch="menu" aria-label="Menu">☰</button>
+      <button type="button" class="tbtn" data-touch="bag">Sac</button>
+      <button type="button" class="tbtn" data-touch="use">Utiliser</button>
       <button type="button" class="tbtn" data-touch="interact">Prendre</button>
       <button type="button" class="tbtn" data-touch="throw">Lancer</button>
       <button type="button" class="tbtn" data-touch="crouch">Accroupir</button>
       <button type="button" class="tbtn" data-touch="sprint">Courir</button>
       <button type="button" class="tbtn big" data-touch="jump">Sauter</button>
     </div>
+
+    <section id="bag-view" hidden>
+      <div class="bag-pick" aria-hidden="true"></div>
+      <header class="bag-head">
+        <div class="bag-tabs">
+          <button type="button" data-tab="sac" class="on">Sac</button>
+          <button type="button" data-tab="corps">Corps</button>
+        </div>
+        <p class="bag-title"></p>
+        <button type="button" class="bag-close">Fermer</button>
+      </header>
+      <aside class="bag-body">
+        <svg class="silhouette" viewBox="0 0 120 220" aria-label="Votre corps">
+          <circle data-zone="tete" cx="60" cy="24" r="18" />
+          <rect data-zone="torse" x="38" y="46" width="44" height="70" rx="10" />
+          <rect data-zone="bras_g" x="14" y="48" width="20" height="72" rx="9" />
+          <rect data-zone="bras_d" x="86" y="48" width="20" height="72" rx="9" />
+          <rect data-zone="jambe_g" x="38" y="120" width="20" height="92" rx="9" />
+          <rect data-zone="jambe_d" x="62" y="120" width="20" height="92" rx="9" />
+        </svg>
+        <div class="vitals"></div>
+        <div class="zone-detail"></div>
+        <div class="body-actions"></div>
+      </aside>
+      <div class="bag-info">
+        <p class="item-name"></p>
+        <p class="item-desc"></p>
+        <div class="item-actions"></div>
+      </div>
+      <div class="bag-badges" aria-hidden="true"></div>
+    </section>
 
     <section id="screen-loading" class="screen">
       <div class="panel">
@@ -49,7 +90,7 @@
     <section id="screen-home" class="screen" hidden>
       <div class="panel">
         <h1>Bienvenue au Zimbabwe</h1>
-        <p class="sub">Prototype — phase 2 : monde inspiré du Zimbabwe et déplacements</p>
+        <p class="sub">Prototype — phase 3 : survie et inventaire</p>
         <div class="menu">
           <button type="button" id="btn-play" class="primary">Jouer</button>
           <button type="button" id="btn-new-world">Nouveau monde</button>
@@ -71,7 +112,7 @@
           <button type="button" id="btn-pause-settings">Réglages</button>
           <button type="button" id="btn-quit">Quitter la partie</button>
         </div>
-        <p class="note">Votre position est gardée dans ce navigateur. Le reste du monde (objets déplacés…) sera sauvegardé à partir de la phase 8.</p>
+        <p class="note">Votre partie (position, état du corps, sac, objets ramassés ou déplacés) est enregistrée dans ce navigateur. Les sauvegardes du monde partagé arrivent avec le multijoueur (phase 8).</p>
       </div>
     </section>
 

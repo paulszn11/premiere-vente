@@ -1,5 +1,5 @@
 // Commandes tactiles : joystick virtuel à gauche, regard en glissant à droite,
-// boutons Sauter / Courir / Menu.
+// boutons Sauter, Courir, Accroupir, Prendre, Lancer, Utiliser, Sac et Menu.
 
 const JOY_RADIUS = 56;
 
@@ -13,6 +13,10 @@ export class TouchControls {
   crouchOn = false;
   interactHeld = false;
   throwHeld = false;
+  useHeld = false;
+  bagHeld = false;
+  /** Boutons touchés depuis la dernière lecture (appui bref). */
+  private readonly taps = new Set<string>();
   private joyId: number | null = null;
   private joyOrigin = { x: 0, y: 0 };
   private lookId: number | null = null;
@@ -56,6 +60,12 @@ export class TouchControls {
     this.bindButton('throw', (down) => {
       this.throwHeld = down;
     });
+    this.bindButton('use', (down) => {
+      this.useHeld = down;
+    });
+    this.bindButton('bag', (down) => {
+      this.bagHeld = down;
+    });
     this.bindButton('menu', (down) => {
       if (down) this.onMenu();
     });
@@ -68,6 +78,7 @@ export class TouchControls {
       e.stopPropagation();
       el.setPointerCapture(e.pointerId);
       el.classList.add('pressed');
+      this.taps.add(name);
       cb(true);
     });
     const release = (e: PointerEvent) => {
@@ -98,7 +109,16 @@ export class TouchControls {
     this.jumpHeld = false;
     this.interactHeld = false;
     this.throwHeld = false;
+    this.useHeld = false;
+    this.bagHeld = false;
     this.base.hidden = true;
+  }
+
+  /** Boutons touchés depuis le dernier appel (même déjà relâchés). */
+  takeTaps(): Set<string> {
+    const out = new Set(this.taps);
+    this.taps.clear();
+    return out;
   }
 
   /** Récupère le mouvement du regard accumulé depuis le dernier appel. */

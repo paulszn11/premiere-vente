@@ -2,7 +2,7 @@
 // Les codes clavier utilisent la position physique de la touche (event.code) :
 // « KeyW » correspond à la touche Z d'un clavier AZERTY.
 
-export const ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'crouch', 'interact', 'throw', 'pause', 'perf'] as const;
+export const ACTIONS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'crouch', 'interact', 'throw', 'use', 'bag', 'rest', 'pocket1', 'pocket2', 'pocket3', 'pocket4', 'pocketNext', 'pause', 'perf'] as const;
 export type Action = (typeof ACTIONS)[number];
 export type Bindings = Record<Action, string[]>;
 
@@ -14,8 +14,16 @@ export const ACTION_LABELS: Record<Action, string> = {
   jump: 'Sauter · grimper (face à une paroi) · monter (nage)',
   sprint: 'Courir · nager vite (maintenir)',
   crouch: "S'accroupir · plonger (nage) · lâcher (escalade)",
-  interact: 'Prendre · poser · traîner un objet',
+  interact: 'Prendre · ramasser · poser · traîner · fouiller',
   throw: "Lancer l'objet porté",
+  use: "Utiliser l'objet en main (manger, bander, attelle)",
+  bag: 'Sac à dos et état du corps',
+  rest: "S'asseoir · dormir (maintenir)",
+  pocket1: 'Poche 1',
+  pocket2: 'Poche 2',
+  pocket3: 'Poche 3',
+  pocket4: 'Poche 4',
+  pocketNext: 'Poche suivante',
   pause: 'Menu / pause',
   perf: 'Infos de performance',
 };
@@ -33,6 +41,14 @@ export function defaultBindings(): Bindings {
     crouch: ['KeyC', 'Pad:1'],
     interact: ['KeyE', 'Pad:2'],
     throw: ['Mouse0', 'Pad:7'],
+    use: ['Mouse2', 'KeyF', 'Pad:6'],
+    bag: ['Tab', 'KeyI', 'Pad:3'],
+    rest: ['KeyR', 'Pad:4'],
+    pocket1: ['Digit1'],
+    pocket2: ['Digit2'],
+    pocket3: ['Digit3'],
+    pocket4: ['Digit4'],
+    pocketNext: ['Pad:5'],
     pause: ['Escape', 'Pad:9'],
     perf: ['F3', 'Pad:8'],
   };

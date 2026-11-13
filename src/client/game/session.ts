@@ -9,8 +9,12 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Scene } from '@babylonjs/core/scene';
 import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, TICK_DT, WATER_LEVEL } from '../../shared/constants';
 import { BIOME_LABELS, type BiomeId, SURFACE_LABELS } from '../../shared/geography';
+import type { PlayerAction } from '../../shared/actions';
+import { ITEMS } from '../../shared/items';
 import { BTN_CROUCH, BTN_INTERACT, BTN_JUMP, BTN_SPRINT, BTN_THROW, type InputCmd, MAX_PITCH, MODE_CLIMB, MODE_SWIM, wrapAngle } from '../../shared/movement';
-import { LocalSimulation, findSpawn } from '../../shared/simulation';
+import { ITEM_OF_PROP, QUICK_PICK, propWithArticle } from '../../shared/props';
+import { LocalSimulation, RESPAWN_DELAY, type SimEvent, type Tone, findSpawn } from '../../shared/simulation';
+import { DEATH_LABELS, INJURY_LABELS, VITALS, ZONE_LABELS, limits } from '../../shared/vitals';
 import { type SpawnPoint, TEST_DESTINATIONS, resolveDestination } from '../../shared/spawn';
 import { Terrain } from '../../shared/terrain';
 import type { DeviceInfo } from '../device';
@@ -21,14 +25,32 @@ import { AdaptiveResolution, PerfMonitor, computeStats } from '../perf/perf-moni
 import { BACKEND_LABELS, type ActiveBackend } from '../render/engine';
 import { TerrainJobs } from '../render/terrain-jobs';
 import { WorldView } from '../render/world-view';
+import type { BagView } from '../ui/bag-view';
 import { PRESETS, PRESET_LABELS, type QualityParams, type QualityPreset, type Settings, effectiveQuality } from '../settings';
+
+export interface DownState {
+  kind: 'inconscient' | 'critique' | 'mort' | 'endormi';
+  title: string;
+  detail: string;
+  canGiveUp: boolean;
+}
 
 export interface HudState {
   stamina: number;
+  /** Endurance maximale (réduite par l'énergie, la douleur, la fièvre). */
+  staminaMax: number;
   breath: number;
   exhausted: boolean;
   underwater: boolean;
   prompt: string | null;
+  health: number;
+  bleeding: boolean;
+  /** Vision trouble de 0 à 1. */
+  blur: number;
+  /** Paupières fermées de 0 à 1 (micro-sommeil). */
+  eyelids: number;
+  gesture: { label: string; progress: number } | null;
+  down: DownState | null;
 }
 
 export interface SessionOptions {
@@ -42,7 +64,11 @@ export interface SessionOptions {
   onTogglePerf?: () => void;
   onHud?: (text: string | null) => void;
   onStatus?: (hud: HudState) => void;
-  onMessage?: (text: string, tone: 'info' | 'alerte' | 'danger') => void;
+  onMessage?: (text: string, tone: Tone) => void;
+  /** Vue du sac (créée par l'interface). */
+  bag?: BagView;
+  /** Le sac s'ouvre ou se ferme (curseur, commandes tactiles). */
+  onBagChange?: (open: boolean) => void;
 }
 
 export interface Pose {
@@ -56,13 +82,18 @@ export interface Pose {
 type BenchRunner = (ms: number, now: number) => void;
 
 const MODE_LABELS = ['marche', 'nage', 'escalade'];
-const FALL_MESSAGES: Array<[string, 'info' | 'alerte' | 'danger']> = [
+const FALL_MESSAGES: Array<[string, Tone]> = [
   ['', 'info'],
   ['Vous trébuchez à la réception.', 'info'],
-  ['Mauvaise chute : blessure légère (effets en phase 3).', 'alerte'],
-  ['Chute violente : blessure grave (effets en phase 3).', 'danger'],
-  ['Chute mortelle (la mort arrivera en phase 3).', 'danger'],
+  ['Mauvaise chute.', 'alerte'],
+  ['Chute violente.', 'danger'],
+  ['Chute mortelle.', 'danger'],
 ];
+
+function minSec(t: number): string {
+  const s = Math.max(0, Math.ceil(t));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
 
 export class GameSession {
   readonly scene: Scene;
@@ -95,14 +126,20 @@ export class GameSession {
   private fovBoost = 0;
   private biome: BiomeId | null = null;
   private biomeCheck = 0;
+  private roll = 0;
+  private deadBack = 0;
+  private restHeld = 0;
+  private restDone = false;
+  private nextPocket = 0;
 
-  static async createPlay(opts: SessionOptions, seed: number, spawnSeed: number, start: Pose | null, onProgress?: (text: string) => void): Promise<GameSession> {
+  static async createPlay(opts: SessionOptions, seed: number, spawnSeed: number, start: Pose | null, onProgress?: (text: string) => void, save?: unknown): Promise<GameSession> {
     const jobs = new TerrainJobs(seed, opts.device.cores >= 4 ? 2 : 1);
     onProgress?.('Préparation de la physique…');
     const sim = await LocalSimulation.create(seed, {
       spawnSeed,
       heightProvider: jobs.heightProvider,
       ...(start ? { start: { x: start.x, y: start.y, z: start.z } } : {}),
+      ...(save !== undefined ? { save } : {}),
     });
     const session = new GameSession(opts, sim.terrain, sim, jobs);
     if (start) {
@@ -191,6 +228,11 @@ export class GameSession {
     return s ? { x: s.x, y: s.y, z: s.z, yaw: this.yaw, pitch: this.pitch } : null;
   }
 
+  /** Sauvegarde complète de la partie solo (position, regard, corps, sac, objets du monde). */
+  saveData(): { v: 1; yaw: number; pitch: number; sim: unknown } | null {
+    return this.sim ? { v: 1, yaw: this.yaw, pitch: this.pitch, sim: this.sim.serialize() } : null;
+  }
+
   /** Point d'apparition du joueur dans ce monde. */
   get spawn(): SpawnPoint | null {
     return this.sim?.spawn ?? null;
@@ -211,7 +253,7 @@ export class GameSession {
   private key(action: Action): string {
     const code = this.opts.getSettings().bindings[action][0];
     if (this.opts.device.touch) {
-      const touchNames: Partial<Record<Action, string>> = { interact: '« Prendre »', throw: '« Lancer »', crouch: '« Accroupir »', jump: '« Sauter »' };
+      const touchNames: Partial<Record<Action, string>> = { interact: '« Prendre »', throw: '« Lancer »', crouch: '« Accroupir »', jump: '« Sauter »', use: '« Utiliser »', bag: '« Sac »' };
       if (touchNames[action]) return touchNames[action]!;
     }
     return code ? codeLabel(code, this.opts.input.layout) : '?';
@@ -219,7 +261,8 @@ export class GameSession {
 
   private buildCmd(): InputCmd {
     const input = this.opts.input;
-    const active = !this.paused;
+    const bagOpen = this.opts.bag?.isOpen ?? false;
+    const active = !this.paused && !bagOpen;
     const mx = active ? input.move.x : 0;
     const my = active ? input.move.y : 0;
     const sin = Math.sin(this.yaw);
@@ -234,6 +277,9 @@ export class GameSession {
       if (input.isDown('crouch')) buttons |= BTN_CROUCH;
       if (input.isDown('interact')) buttons |= BTN_INTERACT;
       if (input.isDown('throw')) buttons |= BTN_THROW;
+    } else if (bagOpen && !this.paused) {
+      // À genoux devant son sac ouvert.
+      buttons = BTN_CROUCH;
     }
     this.seq++;
     return { seq: this.seq, wx, wz, yaw: this.yaw, pitch: this.pitch, buttons };
@@ -257,11 +303,14 @@ export class GameSession {
     }
 
     if (input.pressed('perf')) this.opts.onTogglePerf?.();
-    if (input.pressed('pause') && now - this.lastUnlockAt > 400) this.setPaused(!this.paused);
+    const bag = this.opts.bag;
+    if (bag?.isOpen && !this.paused && (input.pressed('pause') || input.pressed('bag'))) this.closeBag();
+    else if (input.pressed('pause') && now - this.lastUnlockAt > 400) this.setPaused(!this.paused);
 
-    if (!this.paused) {
+    if (!this.paused && !bag?.isOpen) {
       this.yaw = wrapAngle(this.yaw + input.look.dx);
       this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch + input.look.dy));
+      this.handleActions(dt);
     }
 
     const sim = this.sim!;
@@ -274,11 +323,7 @@ export class GameSession {
       steps++;
     }
     if (steps >= 6) this.acc = 0;
-    for (const ev of sim.takeEvents()) {
-      if (ev.type === 'chute') this.opts.onMessage?.(FALL_MESSAGES[ev.severity]![0], FALL_MESSAGES[ev.severity]![1]);
-      else if (ev.type === 'noyade') this.opts.onMessage?.('Vous manquez d’air ! Remontez à la surface.', 'danger');
-      else if (ev.type === 'reapparition') this.opts.onMessage?.('Retour au point d’apparition.', 'alerte');
-    }
+    for (const ev of sim.takeEvents()) this.handleEvent(ev);
 
     const a = this.acc / TICK_DT;
     const p = sim.prev;
@@ -288,8 +333,19 @@ export class GameSession {
     const z = p.z + (s.z - p.z) * a;
 
     // Effets de caméra : hauteur des yeux (accroupi), balancement, atterrissage, trébuchement.
-    const targetEye = s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT;
-    this.eye += (targetEye - this.eye) * Math.min(1, dt * 10);
+    const v = sim.vitals;
+    let targetEye = s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT;
+    let targetRoll = 0;
+    if (v.state === 'mort') {
+      // Hors du corps : on le voit d'un peu plus haut, en arrière.
+      targetEye = 2.3;
+      this.pitch += (0.75 - this.pitch) * Math.min(1, dt * 2);
+    } else if (v.state !== 'eveille' || v.posture === 'endormi') {
+      targetEye = 0.3;
+      targetRoll = 0.35;
+    } else if (v.posture === 'assis') targetEye = 0.85;
+    this.roll += (targetRoll - this.roll) * Math.min(1, dt * 3);
+    this.eye += (targetEye - this.eye) * Math.min(1, dt * (targetEye < 0.5 ? 3 : 10));
     const hs = Math.sqrt(s.vx * s.vx + s.vz * s.vz);
     let bobY = 0;
     let bobX = 0;
@@ -314,11 +370,13 @@ export class GameSession {
     const settings = this.opts.getSettings();
     this.camera.fov = ((settings.fov + this.fovBoost) * Math.PI) / 180;
     const camY = baseY + this.eye + bobY + this.landOffset;
-    this.camera.position.set(x + Math.cos(this.yaw) * bobX, camY, z - Math.sin(this.yaw) * bobX);
-    this.camera.rotation.set(this.pitch + shakeP, this.yaw, shakeR);
+    this.deadBack += ((v.state === 'mort' ? 2.2 : 0) - this.deadBack) * Math.min(1, dt * 2);
+    this.camera.position.set(x + Math.cos(this.yaw) * bobX - Math.sin(this.yaw) * this.deadBack, camY, z - Math.sin(this.yaw) * bobX - Math.cos(this.yaw) * this.deadBack);
+    this.camera.rotation.set(this.pitch + shakeP, this.yaw, shakeR + this.roll);
     this.world.update(x, camY, z, this.opts.device.mobile ? 4 : 6);
     this.world.updateProps(sim.props.views());
     this.scene.render();
+    if (bag?.isOpen) bag.frame(dt);
     this.lastCpuMs = performance.now() - now;
     this.cpuPerf.frame(this.lastCpuMs);
 
@@ -335,26 +393,231 @@ export class GameSession {
     if (now - this.lastHud > 100) {
       this.lastHud = now;
       this.opts.onHud?.(settings.showPerf ? this.hudText() : null);
-      this.opts.onStatus?.({ stamina: s.stamina, breath: s.breath, exhausted: s.exhausted, underwater: camY < WATER_LEVEL, prompt: this.prompt() });
+      const lim = limits(v);
+      const g = sim.gesture;
+      this.opts.onStatus?.({
+        stamina: s.stamina,
+        staminaMax: s.staminaMax,
+        breath: s.breath,
+        exhausted: s.exhausted,
+        underwater: camY < WATER_LEVEL,
+        prompt: this.prompt(),
+        health: v.health,
+        bleeding: lim.bleeding > 0,
+        blur: v.state === 'eveille' ? lim.blur : 0,
+        eyelids: v.microSleep > 0 ? 1 : 0,
+        gesture: g ? { label: g.label, progress: 1 - g.left / g.total } : null,
+        down: this.downState(),
+      });
     }
   };
 
   /** Indication d'action contextuelle (à remplacer plus tard par une interface intégrée à l'univers). */
   private prompt(): string | null {
     const sim = this.sim;
-    if (!sim || this.paused) return null;
+    if (!sim || this.paused || this.opts.bag?.isOpen) return null;
     const s = sim.state;
+    const v = sim.vitals;
+    if (v.state !== 'eveille' || v.posture === 'endormi' || sim.gesture) return null;
+    if (v.posture === 'assis') return this.opts.device.touch ? 'Bougez pour vous lever · « Sac » pour dormir' : `${this.key('rest')} : se lever (maintenir : dormir) · bouger : se lever`;
     if (s.mode === MODE_CLIMB) return `${this.key('crouch')} : lâcher · ${this.key('jump')} : sauter en arrière`;
     const held = sim.props.held;
     if (held) {
-      return held.mode === 'drag' ? `${this.key('interact')} : lâcher le tronc` : `${this.key('interact')} : poser · ${this.key('throw')} : lancer`;
+      if (held.mode === 'drag') return `${this.key('interact')} : lâcher`;
+      const def = sim.props.defOf(held.id);
+      const item = def ? ITEM_OF_PROP[def.kind] : undefined;
+      const parts = [`${this.key('interact')} : poser`, `${this.key('throw')} : lancer`];
+      if (item && ITEMS[item].food) parts.unshift(`${this.key('use')} : manger`);
+      else if (item === 'chiffon' || item === 'aloes' || item === 'baton') parts.unshift(`${this.key('use')} : soigner`);
+      if (item && item !== 'pierre') parts.push(`${this.key('bag')} : sac`);
+      return parts.join(' · ');
     }
     const t = sim.props.target(s, this.yaw, this.pitch);
     if (!t) return null;
+    if (t.kind === 'corps') return `${this.key('interact')} : fouiller le corps`;
+    if (t.kind === 'sac') return `${this.key('interact')} : ouvrir le sac à dos`;
+    if (QUICK_PICK.has(t.kind)) return `${this.key('interact')} : ramasser ${propWithArticle(t.kind)}`;
     const kg = `${Math.round(t.mass)} kg`;
     if (t.handling === 'trainer') return `${this.key('interact')} : traîner le ${t.label} (${kg})`;
     const article = t.kind === 'pierre' || t.kind === 'buche' ? 'la' : 'le';
     return `${this.key('interact')} : prendre ${article} ${t.label} (${kg}${t.handling === 'deux-mains' ? ', à deux mains' : ''})`;
+  }
+
+  private doAct(a: PlayerAction): void {
+    const sim = this.sim;
+    if (!sim) return;
+    const r = sim.act(a);
+    if (r.message) this.opts.onMessage?.(r.message, r.ok ? 'info' : 'alerte');
+  }
+
+  /** Action du joueur (interface, tests). */
+  act(a: PlayerAction): { ok: boolean; message?: string } {
+    const r = this.sim ? this.sim.act(a) : { ok: false };
+    if (r.message) this.opts.onMessage?.(r.message, r.ok ? 'info' : 'alerte');
+    return r;
+  }
+
+  /** Touches des actions ponctuelles (utiliser, poches, repos, sac). */
+  private handleActions(dt: number): void {
+    const input = this.opts.input;
+    const sim = this.sim;
+    if (!sim) return;
+    const v = sim.vitals;
+    if (v.state !== 'eveille') return;
+    if (input.pressed('bag')) {
+      this.openBag(null);
+      return;
+    }
+    if (input.pressed('use')) this.doAct({ type: 'utiliser' });
+    const pockets: Action[] = ['pocket1', 'pocket2', 'pocket3', 'pocket4'];
+    pockets.forEach((a, i) => {
+      if (input.pressed(a)) this.doAct({ type: 'poche', index: i });
+    });
+    if (input.pressed('pocketNext')) this.cyclePocket();
+    // Repos : appui court = s'asseoir ou se lever ; maintenu = dormir.
+    if (input.isDown('rest')) {
+      if (input.pressed('rest')) {
+        this.restHeld = 0;
+        this.restDone = false;
+        if (v.posture !== 'debout') {
+          this.doAct({ type: 'lever' });
+          this.restDone = true;
+        }
+      }
+      this.restHeld += dt;
+      if (!this.restDone && this.restHeld >= 0.8) {
+        this.doAct({ type: 'dormir' });
+        this.restDone = true;
+      }
+    } else if (this.restHeld > 0) {
+      if (!this.restDone) this.doAct({ type: 'reposer' });
+      this.restHeld = 0;
+    }
+  }
+
+  private cyclePocket(): void {
+    const sim = this.sim!;
+    if (sim.props.held) {
+      this.doAct({ type: 'ranger' });
+      return;
+    }
+    for (let k = 0; k < 4; k++) {
+      const i = (this.nextPocket + k) % 4;
+      if (sim.inventory.pockets[i]) {
+        this.nextPocket = (i + 1) % 4;
+        this.doAct({ type: 'poche', index: i });
+        return;
+      }
+    }
+    this.opts.onMessage?.('Vos poches sont vides.', 'info');
+  }
+
+  /** Ouvre le sac (et un corps ou un sac posé à fouiller). */
+  openBag(otherProp: string | null): void {
+    const sim = this.sim;
+    const bag = this.opts.bag;
+    if (!sim || !bag || sim.vitals.state !== 'eveille' || this.paused) return;
+    if (sim.vitals.posture === 'endormi') return;
+    bag.open(sim, otherProp);
+    this.opts.input.clear();
+    this.opts.onBagChange?.(true);
+  }
+
+  closeBag(): void {
+    const bag = this.opts.bag;
+    if (!bag?.isOpen) return;
+    bag.close();
+    this.opts.input.clear();
+    this.opts.onBagChange?.(false);
+  }
+
+  /** État critique ou inconscient : mourir tout de suite. */
+  giveUp(): void {
+    this.sim?.act({ type: 'abandonner' });
+  }
+
+  private handleEvent(ev: SimEvent): void {
+    const msg = (text: string, tone: Tone) => this.opts.onMessage?.(text, tone);
+    switch (ev.type) {
+      case 'chute': {
+        if (ev.severity >= 4) break;
+        const [base, tone] = FALL_MESSAGES[ev.severity]!;
+        const hurt = ev.injuries.filter((i) => i.kind !== 'contusion').map((i) => `${INJURY_LABELS[i.kind]}${i.kind === 'coupure' && i.grave ? ' profonde' : ''} (${ZONE_LABELS[i.zone]})`);
+        msg(hurt.length ? `${base} ${hurt.join(', ').replace(/^./, (c) => c.toUpperCase())}.` : base, tone);
+        break;
+      }
+      case 'noyade':
+        msg('Vous manquez d’air ! Remontez à la surface.', 'danger');
+        break;
+      case 'message':
+        msg(ev.text, ev.tone);
+        break;
+      case 'ouvrir':
+        this.openBag(ev.prop);
+        break;
+      case 'mort':
+        this.closeBag();
+        break;
+      case 'reapparition': {
+        this.biome = null;
+        this.pitch = 0;
+        if (ev.place === 'secours') {
+          msg('Retour au point d’arrivée.', 'alerte');
+          break;
+        }
+        const where = ev.place === 'sommeil' ? 'là où vous avez dormi' : 'à votre point d’arrivée';
+        const body = !ev.body ? '' : ev.body.distance === 0 ? ' Votre corps est tout près, avec vos affaires.' : ` Votre corps est resté à environ ${ev.body.distance.toLocaleString('fr-FR')} m ${ev.body.direction}, avec vos affaires.`;
+        msg(`Vous vous réveillez ${where}.${body}`, 'alerte');
+        break;
+      }
+      case 'vital': {
+        const e = ev.event;
+        if (e.type === 'inconscient')
+          msg(e.reason === 'choc' ? 'La douleur vous fait perdre connaissance : une jambe cassée a besoin d’une attelle.' : e.reason === 'commotion' ? 'Le choc à la tête vous assomme.' : 'Vous perdez connaissance.', 'danger');
+        else if (e.type === 'critique') msg('État critique : vous perdez votre sang.', 'danger');
+        else if (e.type === 'stabilise') msg('Le saignement s’est arrêté : vous êtes stabilisé.', 'alerte');
+        else if (e.type === 'reveil') msg('Vous reprenez connaissance, très affaibli.', 'alerte');
+        else if (e.type === 'infection') msg(`Une plaie s’est infectée (${ZONE_LABELS[e.zone]}) : fièvre. Désinfectez-la avec de l’aloès.`, 'danger');
+        else if (e.type === 'fievre_finie') msg('La fièvre est tombée.', 'info');
+        else if (e.type === 'gueri') msg(`${INJURY_LABELS[e.kind].replace(/^./, (c) => c.toUpperCase())} guérie (${ZONE_LABELS[e.zone]}).`, 'info');
+        else if (e.type === 'saignement_arrete') msg(`Le saignement s’est arrêté (${ZONE_LABELS[e.zone]}).`, 'info');
+        else if (e.type === 'endormi' && e.forced) msg('Épuisé, vous vous endormez sur place.', 'alerte');
+        else if (e.type === 'reveille') msg('Vous vous réveillez.', 'info');
+        else if (e.type === 'repere') msg('Vous vous souviendrez de cet endroit : vous y réapparaîtrez en cas de mort.', 'info');
+        break;
+      }
+    }
+  }
+
+  /** Écran affiché quand le joueur ne peut plus agir (inconscient, critique, mort, endormi). */
+  private downState(): DownState | null {
+    const sim = this.sim;
+    if (!sim) return null;
+    const v = sim.vitals;
+    if (v.state === 'mort')
+      return {
+        kind: 'mort',
+        title: 'Vous êtes mort',
+        detail: `Cause : ${DEATH_LABELS[v.cause ?? 'abandon']}. Votre corps et vos affaires restent ici. Réveil dans ${Math.max(1, Math.ceil(RESPAWN_DELAY - sim.deadTime))} s…`,
+        canGiveUp: false,
+      };
+    if (v.state === 'critique')
+      return { kind: 'critique', title: 'État critique', detail: `Vous perdez votre sang. Sans aide, vous mourrez dans ${minSec(v.timer)}. Un autre joueur peut bander votre plaie et vous relever.`, canGiveUp: true };
+    if (v.state === 'inconscient')
+      return {
+        kind: 'inconscient',
+        title: 'Vous avez perdu connaissance',
+        detail: sim.state.mode === MODE_SWIM ? 'Vous coulez…' : `Vous reprendrez connaissance dans ${Math.max(1, Math.ceil(v.timer))} s environ.`,
+        canGiveUp: true,
+      };
+    if (v.posture === 'endormi')
+      return {
+        kind: 'endormi',
+        title: 'Vous dormez',
+        detail: `Fatigue : ${Math.round(v.fatigue)} %. ${v.sleepTime >= VITALS.sleepRespawnSeconds ? 'Vous réapparaîtrez ici en cas de mort. ' : ''}Bougez pour vous réveiller.`,
+        canGiveUp: false,
+      };
+    return null;
   }
 
   hudText(): string {
@@ -373,7 +636,8 @@ export class GameSession {
       const b = this.terrain.sampleInto(s.x, s.z).biome;
       lines.push(
         `Position ${s.x.toFixed(0)}, ${s.y.toFixed(1)}, ${s.z.toFixed(0)} · ${BIOME_LABELS[b]} · sol : ${SURFACE_LABELS[s.surface]}`,
-        `${MODE_LABELS[s.mode]}${s.crouched ? ' (accroupi)' : ''} · ${hs(s).toFixed(1)} m/s · endurance ${Math.round(s.stamina)}${s.exhausted ? ' (épuisé)' : ''} · souffle ${Math.round(s.breath)} · objets ${this.sim.props.liveCount}`,
+        `${MODE_LABELS[s.mode]}${s.crouched ? ' (accroupi)' : ''} · ${hs(s).toFixed(1)} m/s · endurance ${Math.round(s.stamina)} / ${Math.round(s.staminaMax)}${s.exhausted ? ' (épuisé)' : ''} · souffle ${Math.round(s.breath)} · objets ${this.sim.props.liveCount}`,
+        `santé ${Math.round(this.sim.vitals.health)} · énergie ${Math.round(this.sim.vitals.energy)} · fatigue ${Math.round(this.sim.vitals.fatigue)} · blessures ${this.sim.vitals.injuries.length} · charge ${s.loadKg.toFixed(1)} kg · ${this.sim.vitals.state}`,
       );
     }
     return lines.join('\n');

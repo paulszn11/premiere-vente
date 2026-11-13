@@ -13,6 +13,7 @@ import { TouchControls } from './input/touch-controls';
 import { formatReport } from './perf/benchmark';
 import { BACKEND_LABELS, type EngineResult, createEngine } from './render/engine';
 import { PRESET_LABELS, PRESET_ORDER, type Settings, effectiveQuality, loadSettings, saveSettings } from './settings';
+import { BagView } from './ui/bag-view';
 import { renderSettings } from './ui/settings-panel';
 
 type ScreenName = 'loading' | 'home' | 'game' | 'pause' | 'settings' | 'bench';
@@ -154,8 +155,11 @@ async function boot(): Promise<void> {
     },
   };
 
-  // Position de reprise (commodité du jeu solo ; en multijoueur, la référence sera la sauvegarde de l'hôte).
+  // Sauvegarde de la partie solo dans ce navigateur (position, corps, sac, objets du monde).
+  // En multijoueur (phase 8), la référence sera la sauvegarde de l'hôte.
+  // L'ancienne clé « baz.pose » (phase 2 : position seule) est encore lue.
   const poseKey = () => `baz.pose.${settings.worldSeed}`;
+  const saveKey = () => `baz.save.${settings.worldSeed}`;
   const loadPose = (): Pose | null => {
     try {
       const raw = JSON.parse(localStorage.getItem(poseKey()) ?? 'null') as Pose | null;
@@ -164,18 +168,29 @@ async function boot(): Promise<void> {
       return null;
     }
   };
-  const savePose = () => {
-    const pose = session?.pose();
-    if (!pose) return;
+  const loadSave = (): { yaw: number; pitch: number; sim: unknown } | null => {
     try {
-      localStorage.setItem(poseKey(), JSON.stringify(pose));
+      const raw = JSON.parse(localStorage.getItem(saveKey()) ?? 'null') as { v?: number; yaw?: unknown; pitch?: unknown; sim?: unknown } | null;
+      if (!raw || raw.v !== 1 || typeof raw.yaw !== 'number' || typeof raw.pitch !== 'number' || typeof raw.sim !== 'object') return null;
+      return { yaw: raw.yaw, pitch: raw.pitch, sim: raw.sim };
     } catch {
-      // Stockage indisponible : on repartira du point d'apparition.
+      return null;
+    }
+  };
+  const hasSave = () => loadSave() !== null || loadPose() !== null;
+  const savePose = () => {
+    const data = session?.saveData();
+    if (!data) return;
+    try {
+      localStorage.setItem(saveKey(), JSON.stringify(data));
+    } catch {
+      // Stockage indisponible ou plein : on repartira de la dernière sauvegarde.
     }
   };
   const clearPose = () => {
     try {
       localStorage.removeItem(poseKey());
+      localStorage.removeItem(saveKey());
     } catch {
       // rien à faire
     }
@@ -186,18 +201,53 @@ async function boot(): Promise<void> {
 
   // Indicateurs temporaires (l'interface sera intégrée à l'univers plus tard).
   const staminaBar = $('#status .bar.stamina');
+  const staminaCap = $('#status .bar.stamina .cap');
   const breathBar = $('#status .bar.breath');
   const promptEl = $('#prompt');
+  const vignette = $('#vignette');
+  const eyelids = $('#eyelids');
+  const gestureEl = $('#gesture');
+  const downEl = $('#down-screen');
+  const giveUpBtn = $<HTMLButtonElement>('#btn-give-up');
   let messageTimer = 0;
+  let lastBlur = '';
   const showStatus = (hud: HudState) => {
-    staminaBar.hidden = hud.stamina >= 99.5 && !hud.exhausted;
+    const capped = hud.staminaMax < 99;
+    staminaBar.hidden = hud.stamina >= hud.staminaMax - 0.5 && !capped && !hud.exhausted;
     staminaBar.classList.toggle('exhausted', hud.exhausted);
     (staminaBar.firstElementChild as HTMLElement).style.transform = `scaleX(${hud.stamina / 100})`;
+    staminaCap.style.width = `${Math.max(0, 100 - hud.staminaMax).toFixed(1)}%`;
     breathBar.hidden = hud.breath >= 99.5 && !hud.underwater;
     (breathBar.firstElementChild as HTMLElement).style.transform = `scaleX(${hud.breath / 100})`;
     promptEl.hidden = !hud.prompt;
     promptEl.textContent = hud.prompt ?? '';
+    const hurt = hud.health < 60 ? ((60 - hud.health) / 60) * 0.9 : 0;
+    vignette.style.opacity = String(Math.max(hurt, hud.bleeding ? 0.35 : 0).toFixed(2));
+    vignette.classList.toggle('pulse', hud.bleeding);
+    eyelids.style.opacity = String(hud.eyelids);
+    const blur = hud.blur > 0.05 ? `blur(${(hud.blur * 2.5).toFixed(1)}px)` : '';
+    if (blur !== lastBlur) {
+      canvas.style.filter = blur;
+      lastBlur = blur;
+    }
+    gestureEl.hidden = !hud.gesture;
+    if (hud.gesture) {
+      (gestureEl.querySelector('.label') as HTMLElement).textContent = hud.gesture.label;
+      (gestureEl.querySelector('.bar span') as HTMLElement).style.transform = `scaleX(${hud.gesture.progress.toFixed(3)})`;
+    }
+    const wasDown = !downEl.hidden;
+    downEl.hidden = !hud.down;
+    // À terre ou mort : le curseur est libéré pour pouvoir cliquer « Abandonner ».
+    if (hud.down && hud.down.kind !== 'endormi' && input.locked) input.exitPointerLock();
+    if (wasDown !== !downEl.hidden) updateHint();
+    if (hud.down) {
+      downEl.className = hud.down.kind === 'mort' ? 'dead' : hud.down.kind === 'endormi' ? 'asleep' : '';
+      (downEl.querySelector('.title') as HTMLElement).textContent = hud.down.title;
+      (downEl.querySelector('.detail') as HTMLElement).textContent = hud.down.detail;
+      giveUpBtn.hidden = !hud.down.canGiveUp;
+    }
   };
+  giveUpBtn.addEventListener('click', () => session?.giveUp());
   const showMessage = (text: string, tone: 'info' | 'alerte' | 'danger') => {
     if (!text) return;
     const el = $('#message');
@@ -205,8 +255,16 @@ async function boot(): Promise<void> {
     el.className = tone;
     el.hidden = false;
     window.clearTimeout(messageTimer);
-    messageTimer = window.setTimeout(() => (el.hidden = true), tone === 'info' ? 2500 : 4000);
+    messageTimer = window.setTimeout(() => (el.hidden = true), Math.min(9000, Math.max(tone === 'info' ? 2500 : 4000, text.length * 60)));
   };
+  const bagView = new BagView({
+    root: $('#bag-view'),
+    canvas,
+    engine,
+    input,
+    onClose: () => session?.closeBag(),
+    onMessage: showMessage,
+  });
   const rotateHint = $('#rotate-hint');
   const updateRotateHint = () => {
     rotateHint.hidden = !(device.touch && screen === 'game' && window.innerHeight > window.innerWidth);
@@ -218,7 +276,7 @@ async function boot(): Promise<void> {
     $('#home-world').textContent =
       settings.worldSeed === null
         ? 'Aucun monde pour l’instant : « Jouer » en crée un (16 × 16 km, vous apparaissez à un endroit au hasard).'
-        : `Monde n° ${settings.worldSeed}${loadPose() ? ' · « Jouer » reprend là où vous étiez' : ''}.`;
+        : `Monde n° ${settings.worldSeed}${hasSave() ? ' · « Jouer » reprend votre partie' : ''}.`;
     $('#home-info').textContent = `Version ${GAME_VERSION} · ${BACKEND_LABELS[er.backend]} · qualité ${PRESET_LABELS[q.preset]}${settings.quality === 'auto' ? ' (auto)' : ''} · ${device.gpu}`;
     const b = settings.bindings;
     const k = (a: keyof typeof b) => (b[a][0] ? codeLabel(b[a][0]!, input.layout) : '—');
@@ -232,7 +290,7 @@ async function boot(): Promise<void> {
 
   const hint = $('#click-hint');
   const updateHint = () => {
-    hint.hidden = !(screen === 'game' && !device.touch && !input.locked);
+    hint.hidden = !(screen === 'game' && !device.touch && !input.locked && !bagView.isOpen && $('#down-screen').hidden);
   };
 
   const sessionOpts: SessionOptions = {
@@ -250,8 +308,21 @@ async function boot(): Promise<void> {
       el.hidden = text === null;
       if (text !== null) el.textContent = text;
     },
+    bag: bagView,
+    onBagChange: (open) => {
+      $('#crosshair').hidden = open;
+      if (open) {
+        input.exitPointerLock();
+        touch.show(false);
+      } else {
+        if (!device.touch && screen === 'game' && !session?.paused) input.requestPointerLock();
+        touch.show(device.touch && screen === 'game' && !session?.paused);
+      }
+      updateHint();
+    },
     onPauseChange: (paused) => {
       if (paused) {
+        session?.closeBag();
         savePose();
         input.exitPointerLock();
         touch.show(false);
@@ -265,7 +336,8 @@ async function boot(): Promise<void> {
   };
 
   input.onPointerLockChange = (locked) => {
-    if (!locked && session && screen === 'game' && !session.paused) {
+    const down = session?.sim ? session.sim.vitals.state !== 'eveille' : false;
+    if (!locked && session && screen === 'game' && !session.paused && !bagView.isOpen && !down) {
       session.notePointerUnlock();
       session.setPaused(true);
     }
@@ -273,7 +345,7 @@ async function boot(): Promise<void> {
   };
 
   canvas.addEventListener('click', () => {
-    if (screen === 'game' && session && !session.paused && !device.touch) input.requestPointerLock();
+    if (screen === 'game' && session && !session.paused && !device.touch && !bagView.isOpen) input.requestPointerLock();
   });
 
   document.addEventListener('visibilitychange', () => {
@@ -294,6 +366,7 @@ async function boot(): Promise<void> {
 
   function leaveSession(): void {
     savePose();
+    session?.closeBag();
     session?.dispose();
     session = null;
     input.gameActive = false;
@@ -313,7 +386,13 @@ async function boot(): Promise<void> {
     setLoading('Création du monde…');
     await nextFrame();
     try {
-      session = await GameSession.createPlay(sessionOpts, settings.worldSeed!, settings.spawnSeed!, loadPose(), setLoading);
+      const save = loadSave();
+      const legacy = save ? null : loadPose();
+      session = await GameSession.createPlay(sessionOpts, settings.worldSeed!, settings.spawnSeed!, legacy, setLoading, save?.sim);
+      if (save) {
+        session.yaw = save.yaw;
+        session.pitch = save.pitch;
+      }
     } catch (err) {
       show('home');
       toast(`Le monde n'a pas pu être créé : ${err instanceof Error ? err.message : String(err)}`, 8000);
@@ -361,7 +440,7 @@ async function boot(): Promise<void> {
     void play();
   });
   $('#btn-new-world').addEventListener('click', () => {
-    if (settings.worldSeed !== null && !confirm('Créer un nouveau monde ? Le monde actuel sera remplacé (les sauvegardes complètes arrivent en phase 8).')) return;
+    if (settings.worldSeed !== null && !confirm('Créer un nouveau monde ? Le monde actuel et votre partie seront remplacés.')) return;
     clearPose();
     update({ worldSeed: randomSeed(), spawnSeed: randomSeed() });
     toast('Nouveau monde prêt : appuyez sur « Jouer ».');
@@ -451,6 +530,34 @@ async function boot(): Promise<void> {
       sim.teleport(x, sim.terrain.heightAt(x, z) + 0.2, z);
     },
     input: () => ({ move: { ...input.move }, locked: input.locked, lastDevice: input.lastDevice, touchVisible: touch.visible }),
+    /** Corps, inventaire et geste en cours (copies). */
+    body: () => {
+      const sim = session?.sim;
+      if (!sim) return null;
+      return JSON.parse(
+        JSON.stringify({
+          vitals: sim.vitals,
+          inventory: sim.inventory,
+          gesture: sim.gesture,
+          dead: sim.dead,
+          deaths: sim.deaths,
+          respawnPoint: sim.respawnPoint,
+          lastBody: sim.lastBody,
+          held: sim.props.held,
+          state: { staminaMax: sim.state.staminaMax, speedCap: sim.state.speedCap, restrict: sim.state.restrict, loadKg: sim.state.loadKg },
+        }),
+      );
+    },
+    act: (a: unknown) => session?.act(a as Parameters<GameSession['act']>[0]) ?? null,
+    bag: () => bagView.debug(),
+    bagRun: (label: string) => bagView.run(label),
+    openBag: (prop: string | null = null) => session?.openBag(prop),
+    closeBag: () => session?.closeBag(),
+    giveUp: () => session?.giveUp(),
+    save: () => {
+      savePose();
+      return localStorage.getItem(saveKey());
+    },
   };
 
   refreshHome();

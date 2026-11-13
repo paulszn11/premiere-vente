@@ -26,6 +26,9 @@ function curve(v: number): number {
 
 export type InputDevice = 'keyboard' | 'gamepad' | 'touch';
 
+/** Boutons tactiles dont on détecte l'appui (les autres sont maintenus ou basculés). */
+const TOUCH_EDGE_ACTIONS: Action[] = ['jump', 'interact', 'throw', 'use', 'bag'];
+
 export class InputManager {
   /** Déplacement voulu : x = droite, y = avant (longueur ≤ 1). */
   readonly move = { x: 0, y: 0 };
@@ -45,6 +48,10 @@ export class InputManager {
   private current = new Set<string>();
   private prev = new Set<string>();
   private edges = new Set<string>();
+  private touchPrev = new Set<Action>();
+  private touchEdges = new Set<Action>();
+  /** Touches appuyées depuis la dernière image, même déjà relâchées (appui bref). */
+  private readonly tapped = new Set<string>();
   private mouseDX = 0;
   private mouseDY = 0;
   private lockedAt = -1e9;
@@ -159,6 +166,7 @@ export class InputManager {
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
     if (e.key && e.key.length === 1 && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) this.layout.set(e.code, e.key);
+    if (!e.repeat) this.tapped.add(e.code);
     this.held.add(e.code);
     this.lastDevice = 'keyboard';
     if (this.gameActive && this.isBound(e.code)) e.preventDefault();
@@ -187,6 +195,7 @@ export class InputManager {
     if (e.target !== this.canvas) return;
     if (this.locked) {
       this.held.add(`Mouse${e.button}`);
+      this.tapped.add(`Mouse${e.button}`);
       this.lastDevice = 'keyboard';
     }
   };
@@ -213,8 +222,14 @@ export class InputManager {
     const s = this.getSettings();
     const pad = this.pollGamepad();
     this.current = new Set([...this.held, ...this.padCodes]);
-    this.edges = new Set([...this.current].filter((c) => !this.prev.has(c)));
+    // Un appui bref (relâché avant cette image) compte quand même pour cette image.
+    this.edges = new Set([...[...this.current].filter((c) => !this.prev.has(c)), ...this.tapped]);
+    this.tapped.clear();
     this.prev = this.current;
+    const tt = this.touch?.visible ? this.touch.takeTaps() : new Set<string>();
+    const touchNow = new Set(TOUCH_EDGE_ACTIONS.filter((a) => this.touchHeld(a) || tt.has(a)));
+    this.touchEdges = new Set([...touchNow].filter((a) => !this.touchPrev.has(a) || tt.has(a)));
+    this.touchPrev = new Set([...touchNow].filter((a) => this.touchHeld(a)));
 
     const t = this.touch?.visible ? this.touch : null;
     if (t && (t.moveX || t.moveY || t.lookDX || t.lookDY || t.jumpHeld)) this.lastDevice = 'touch';
@@ -238,12 +253,14 @@ export class InputManager {
   }
 
   private codeDown(action: Action): boolean {
-    return this.getSettings().bindings[action].some((c) => this.current.has(c));
+    return this.getSettings().bindings[action].some((c) => this.current.has(c) || this.edges.has(c));
   }
 
-  /** Action maintenue (clavier, souris, manette ou bouton tactile). */
-  isDown(action: Action): boolean {
-    if (this.codeDown(action)) return true;
+  private touchDown(action: Action): boolean {
+    return this.touchHeld(action) || this.touchEdges.has(action);
+  }
+
+  private touchHeld(action: Action): boolean {
     const t = this.touch?.visible ? this.touch : null;
     if (!t) return false;
     if (action === 'jump') return t.jumpHeld;
@@ -251,12 +268,24 @@ export class InputManager {
     if (action === 'crouch') return t.crouchOn;
     if (action === 'interact') return t.interactHeld;
     if (action === 'throw') return t.throwHeld;
+    if (action === 'use') return t.useHeld;
+    if (action === 'bag') return t.bagHeld;
     return false;
   }
 
-  /** Action déclenchée pendant cette image. */
+  /** Action maintenue (clavier, souris, manette ou bouton tactile). */
+  isDown(action: Action): boolean {
+    return this.codeDown(action) || this.touchDown(action);
+  }
+
+  /** Action déclenchée pendant cette image (appui d'une touche, d'un bouton ou d'un bouton tactile). */
   pressed(action: Action): boolean {
-    return this.getSettings().bindings[action].some((c) => this.edges.has(c));
+    return this.getSettings().bindings[action].some((c) => this.edges.has(c)) || this.touchEdges.has(action);
+  }
+
+  /** Code précis (touche ou bouton de manette) appuyé pendant cette image. */
+  codePressed(code: string): boolean {
+    return this.edges.has(code);
   }
 
   /** Oublie les touches maintenues (changement d'écran, perte du focus). */
@@ -265,6 +294,9 @@ export class InputManager {
     this.prev = new Set();
     this.current = new Set();
     this.edges = new Set();
+    this.touchEdges = new Set();
+    this.touchPrev = new Set();
+    this.tapped.clear();
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.touch?.reset();

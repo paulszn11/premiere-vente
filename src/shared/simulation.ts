@@ -418,7 +418,8 @@ export class LocalSimulation {
     if (lb && this.props.defOf(lb.id)) {
       const dx = lb.x - point.x;
       const dz = lb.z - point.z;
-      body = { distance: Math.max(100, Math.round(Math.hypot(dx, dz) / 100) * 100), direction: compassDirection(dx, dz) };
+      const d = Math.hypot(dx, dz);
+      body = { distance: d < 25 ? 0 : Math.max(100, Math.round(d / 100) * 100), direction: compassDirection(dx, dz) };
     }
     this.push({ type: 'reapparition', tick: this.tick, place, body });
   }
