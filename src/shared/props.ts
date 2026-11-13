@@ -12,16 +12,22 @@ import type { NodeKind } from './resources';
 import { hash32 } from './rng';
 import type { Terrain } from './terrain';
 import { floraInChunk } from './vegetation';
+import type { EngineState, PartState } from './vehicles';
 
 /** Objets transportables : leur type est aussi leur identifiant dans le catalogue. */
 export type ItemPropKind = Exclude<ItemId, never>;
 export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer' | InstallPropKind | 'carcasse';
 
 /** Installations construites (phase 5) et pièges (phase 6) : objets fixes. */
-export type InstallPropKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | TrapKind;
+export type InstallPropKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | TrapKind | MachinePropKind;
+/** Machines (phase 7). */
+export type MachinePropKind = 'roue_eau' | 'machine_fixe' | 'meule' | 'soufflet_meca' | 'pompe';
+export const MACHINE_KINDS = new Set<PropKind>(['roue_eau', 'machine_fixe', 'meule', 'soufflet_meca', 'pompe']);
 export type TrapKind = 'collet' | 'assommoir' | 'fosse';
-export const INSTALL_PROP_KINDS = new Set<PropKind>(['coffre', 'etabli', 'puits', 'fourneau', 'forge', 'collet', 'assommoir', 'fosse']);
+export const INSTALL_PROP_KINDS = new Set<PropKind>(['coffre', 'etabli', 'puits', 'fourneau', 'forge', 'collet', 'assommoir', 'fosse', ...MACHINE_KINDS]);
 export const TRAP_KINDS = new Set<PropKind>(['collet', 'assommoir', 'fosse']);
+/** Demi-hauteur des installations : le centre de leur volume est à cette hauteur au-dessus du sol. */
+export const INSTALL_HALF: Record<InstallPropKind, number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4, collet: 0.05, assommoir: 0.3, fosse: 0.05, roue_eau: 1.3, machine_fixe: 0.7, meule: 0.5, soufflet_meca: 0.4, pompe: 0.6 };
 
 /** Carcasse d'un animal (phase 6) : viande restante, moment de la mort. */
 export interface CarcassState {
@@ -56,6 +62,14 @@ export interface FurnaceState {
   work: number;
   /** Loupes de fer prêtes à retirer. */
   blooms: number;
+}
+
+/** État d'une machine (phase 7) : chaudière et usure (machine fixe), puissance reçue ou fournie. */
+export interface MachineState {
+  engine?: EngineState;
+  part?: PartState;
+  /** Sources : puissance fournie (W). Machines entraînées : part de la puissance demandée reçue (0 à 1). */
+  power: number;
 }
 
 /** État d'un foyer. */
@@ -99,6 +113,7 @@ export interface PropDef {
   on?: { s: string; p: number };
   carcass?: CarcassState;
   trap?: TrapState;
+  machine?: MachineState;
 }
 
 const OTHER_LABELS = {
@@ -120,6 +135,11 @@ const OTHER_LABELS = {
   assommoir: 'assommoir',
   fosse: 'fosse à pieux',
   carcasse: 'carcasse',
+  roue_eau: 'roue à eau',
+  machine_fixe: 'machine à vapeur fixe',
+  meule: 'meule',
+  soufflet_meca: 'soufflet mécanique',
+  pompe: 'pompe',
 } as const;
 
 export const PROP_LABELS: Record<PropKind, string> = {
@@ -128,7 +148,7 @@ export const PROP_LABELS: Record<PropKind, string> = {
   ...OTHER_LABELS,
 };
 
-const FEMININE = new Set<string>(['tronc_', 'touffe_herbe', 'forge', 'fosse', 'carcasse']);
+const FEMININE = new Set<string>(['tronc_', 'touffe_herbe', 'forge', 'fosse', 'carcasse', 'roue_eau', 'machine_fixe', 'meule', 'pompe']);
 
 /** « la pierre », « le bâton », « l'aloès ». */
 export function propWithArticle(kind: PropKind): string {
@@ -194,6 +214,11 @@ export function propMass(p: Pick<PropDef, 'kind' | 'radius' | 'length' | 'contai
     case 'assommoir':
     case 'fosse':
     case 'carcasse':
+    case 'roue_eau':
+    case 'machine_fixe':
+    case 'meule':
+    case 'soufflet_meca':
+    case 'pompe':
       return 0;
     case 'sac':
       return bagTotalMass(p.container?.bag ?? []);
@@ -300,9 +325,31 @@ export function itemShape(kind: PropKind): { radius: number; length: number } {
       return { radius: 0.45, length: 0.6 };
     case 'fosse':
       return { radius: 1, length: 0.1 };
+    case 'roue_eau':
+      return { radius: 1.3, length: 1.3 };
+    case 'machine_fixe':
+      return { radius: 0.6, length: 0.7 };
+    case 'meule':
+      return { radius: 0.5, length: 0.5 };
+    case 'soufflet_meca':
+      return { radius: 0.5, length: 0.4 };
+    case 'pompe':
+      return { radius: 0.35, length: 0.6 };
     case 'viande_crue':
     case 'viande_cuite':
       return { radius: 0.08, length: 0.16 };
+    case 'petite_roue':
+      return { radius: 0.22, length: 0.08 };
+    case 'roue':
+      return { radius: 0.5, length: 0.12 };
+    case 'essieu':
+      return { radius: 0.04, length: 1.7 };
+    case 'machine_vapeur':
+      return { radius: 0.42, length: 1.1 };
+    case 'roue_aubes':
+      return { radius: 0.6, length: 0.7 };
+    case 'gouvernail':
+      return { radius: 0.25, length: 1.6 };
     default:
       return { radius: 0.1, length: 0 };
   }

@@ -28,18 +28,23 @@ export const GROUP_OBSTACLE = 0x0008;
 export const GROUP_HELD = 0x0010;
 /** Gisements plats (herbes, argile, gravier) et foyers : visables, mais on marche dessus. */
 export const GROUP_NODE = 0x0020;
+/** Véhicules (phase 7) : ils heurtent le décor, les objets, le joueur et les autres véhicules. */
+export const GROUP_VEHICLE = 0x0040;
 
 export function interactionGroups(membership: number, filter: number): number {
   return (((membership & 0xffff) << 16) | (filter & 0xffff)) >>> 0;
 }
 
 /** Les joueurs rencontrent le décor, les obstacles et les objets (pas les autres joueurs en phase 2). */
-export const PLAYER_GROUPS = interactionGroups(GROUP_PLAYER, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
+export const PLAYER_GROUPS = interactionGroups(GROUP_PLAYER, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP | GROUP_VEHICLE);
 export const TERRAIN_GROUPS = interactionGroups(GROUP_TERRAIN, 0xffff);
 export const OBSTACLE_GROUPS = interactionGroups(GROUP_OBSTACLE, 0xffff);
-export const PROP_GROUPS = interactionGroups(GROUP_PROP, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP | GROUP_PLAYER | GROUP_HELD);
+export const PROP_GROUPS = interactionGroups(GROUP_PROP, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP | GROUP_PLAYER | GROUP_HELD | GROUP_VEHICLE);
 export const HELD_GROUPS = interactionGroups(GROUP_HELD, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
-export const DRAGGED_GROUPS = interactionGroups(GROUP_PROP, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
+export const VEHICLE_GROUPS = interactionGroups(GROUP_VEHICLE, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP | GROUP_PLAYER | GROUP_VEHICLE);
+/** Requête de visée des véhicules. */
+export const QUERY_VEHICLES = interactionGroups(0xffff, GROUP_VEHICLE);
+export const DRAGGED_GROUPS = interactionGroups(GROUP_PROP, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP | GROUP_VEHICLE);
 /** Requête ne touchant que le sol et les rochers (escalade). */
 export const QUERY_TERRAIN = interactionGroups(0xffff, GROUP_TERRAIN);
 /** Requête ne touchant que les objets déplaçables. */

@@ -55,7 +55,8 @@ describe('grille et géométrie', () => {
       expect(p.steps.length).toBeGreaterThan(0);
       expect(p.hp).toBeGreaterThan(0);
       expect(p.description.length).toBeGreaterThan(10);
-      expect((p.piece === null) !== (p.install === null)).toBe(true);
+      // Exactement l'un des trois : pièce de la grille, installation ou véhicule (phase 7).
+      expect([p.piece !== null, p.install !== null, p.vehicle !== undefined].filter(Boolean).length).toBe(1);
     }
   });
 });

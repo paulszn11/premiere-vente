@@ -9,7 +9,8 @@ import { type Container, type ItemMeta, readContainer } from './inventory';
 import { BTN_INTERACT, BTN_THROW, type InputCmd, MODE_CLIMB, MODE_SWIM, type MoveState, ONE_HAND_CARRY_KG, R_NO_HEAVY, R_NO_THROW } from './movement';
 import { DRAGGED_GROUPS, GROUP_OBSTACLE, GROUP_TERRAIN, HELD_GROUPS, NODE_GROUPS, PROP_GROUPS, type PhysicsWorld, QUERY_TARGETS, RAPIER, type TreeHit, interactionGroups } from './physics';
 import { ITEMS } from './items';
-import { BODY_MASS, DENSITY, type FireState, type FurnaceState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay, TRAP_KINDS } from './props';
+import { readMachine } from './machines';
+import { BODY_MASS, DENSITY, type FireState, type FurnaceState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay, TRAP_KINDS, MACHINE_KINDS } from './props';
 import { nodesInChunk } from './resources';
 import { chunkCoord } from './terrain';
 
@@ -83,7 +84,7 @@ export const REACH = 2.4;
 const ANGULAR_DAMPING: Partial<Record<PropKind, number>> = { pierre: 1.5, buche: 3, tronc: 2.5, baton: 3, corps: 4, sac: 3, manche: 3, perche: 3, lance: 3, baton_fouir: 3 };
 const QUERY_TRUNKS = interactionGroups(0xffff, GROUP_OBSTACLE);
 /** Gisements solides (on les heurte) ; les autres sont plats. */
-const SOLID_NODES = new Set<PropKind>(['bloc_quartz', 'filon_fer', 'coffre', 'etabli', 'puits', 'fourneau', 'forge']);
+const SOLID_NODES = new Set<PropKind>(['bloc_quartz', 'filon_fer', 'coffre', 'etabli', 'puits', 'fourneau', 'forge', 'roue_eau', 'machine_fixe', 'meule', 'soufflet_meca', 'pompe']);
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const AIM_BALL = new RAPIER.Ball(0.14);
 const QUERY_SCENERY = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
@@ -171,11 +172,32 @@ function colliderFor(def: PropDef): RAPIER.ColliderDesc {
       return RAPIER.ColliderDesc.cuboid(0.4, 0.3, 0.4);
     case 'fosse':
       return RAPIER.ColliderDesc.cuboid(1, 0.05, 1);
+    // Machines (fixes) : def.y est le centre du volume.
+    case 'roue_eau':
+      return RAPIER.ColliderDesc.cuboid(0.35, 1.3, 1.3);
+    case 'machine_fixe':
+      return RAPIER.ColliderDesc.cuboid(0.6, 0.7, 0.75);
+    case 'meule':
+      return RAPIER.ColliderDesc.cuboid(0.35, 0.5, 0.5);
+    case 'soufflet_meca':
+      return RAPIER.ColliderDesc.cuboid(0.4, 0.4, 0.6);
+    case 'pompe':
+      return RAPIER.ColliderDesc.cuboid(0.3, 0.6, 0.3);
     case 'carcasse':
       return RAPIER.ColliderDesc.cuboid(Math.max(0.3, def.length / 2), Math.max(0.15, r * 0.6), Math.max(0.2, r));
     case 'viande_crue':
     case 'viande_cuite':
       return RAPIER.ColliderDesc.roundCuboid(def.length / 2, r * 0.4, r * 0.6, r * 0.2).setMass(m);
+    // Phase 7 : pièces de véhicules (roues posées à plat, essieu et machine couchés).
+    case 'petite_roue':
+    case 'roue':
+    case 'roue_aubes':
+      return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setMass(m);
+    case 'essieu':
+    case 'machine_vapeur':
+      return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setRotation(LOG_ROT).setMass(m);
+    case 'gouvernail':
+      return RAPIER.ColliderDesc.cuboid(def.length / 2, 0.05, r).setMass(m);
     case 'pot_cru':
     case 'pot':
     case 'batee':
@@ -703,6 +725,7 @@ function readStored(raw: unknown): StoredProp | null {
     // Une créature retenue n'est pas sauvegardée : le piège se relit vide (armé ou non).
     def.trap = { armed: t.armed === true, caught: null, ...(t.broken === true ? { broken: true } : {}) };
   }
+  if (MACHINE_KINDS.has(def.kind)) def.machine = readMachine(def.kind, d.machine);
   if (fin(d.emptiedAt)) def.emptiedAt = d.emptiedAt;
   if (fin(d.size) && d.size > 0 && d.size < 5) def.size = d.size;
   if (typeof d.meta === 'object' && d.meta !== null) {

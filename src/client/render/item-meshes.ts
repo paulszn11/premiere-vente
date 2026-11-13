@@ -311,7 +311,104 @@ export function itemParts(kind: PropKind): Part[] {
     }
     case 'carcasse':
       return [[ball(1, 0.5, 0.5, 4), 0.5, 0.36, 0.26]];
+    // Phase 7 : pièces (roues à plat, axe vertical ; essieu et machine couchés le long de x).
+    case 'petite_roue':
+    case 'roue': {
+      const r = kind === 'roue' ? 0.5 : 0.22;
+      const t = kind === 'roue' ? 0.12 : 0.08;
+      return wheelParts(r, t, kind === 'roue');
+    }
+    case 'essieu':
+      return [
+        [rod(1.5, 0.08, 6), ...WOOD],
+        [rod(0.12, 0.06, 6, -0.79), ...IRON],
+        [rod(0.12, 0.06, 6, 0.79), ...IRON],
+      ];
+    case 'machine_vapeur':
+      return [
+        [rod(1.0, 0.72, 12, 0.05), ...IRON],
+        [box(0.5, 0.55, 0.62, -0.42, -0.08, 0), 0.62, 0.42, 0.28],
+        [can(0.5, 0.14, 8, 0.55), 0.18, 0.18, 0.2],
+        [rod(0.45, 0.16, 8, 0.3, -0.3, 0.32), 0.3, 0.3, 0.32],
+      ];
+    case 'roue_aubes': {
+      const parts: Part[] = [[can(0.7, 0.18, 8), ...IRON]];
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        parts.push([box(0.5, 0.65, 0.05, Math.cos(a) * 0.38, 0, Math.sin(a) * 0.38, -a), ...WOOD]);
+      }
+      return parts;
+    }
+    case 'gouvernail':
+      return [
+        [box(0.6, 0.04, 0.45, 0.45, 0, 0), ...WOOD],
+        [rod(1.2, 0.05, 6, -0.3), ...WOOD],
+      ];
+    // Machines (centre du volume à mi-hauteur ; axe des roues le long de x).
+    case 'roue_eau': {
+      const parts: Part[] = [
+        [rod(0.9, 0.22, 8), ...IRON],
+        [box(0.12, 1.45, 0.16, -0.48, -0.62, 0), ...WOOD],
+        [box(0.12, 1.45, 0.16, 0.48, -0.62, 0), ...WOOD],
+      ];
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2;
+        parts.push([paddle(0.6, 0.55, 0.05, a, 1.0), ...WOOD]);
+        parts.push([paddle(0.62, 0.05, 0.62, a + Math.PI / 10, 1.22), 0.38, 0.27, 0.17]);
+      }
+      return parts;
+    }
+    case 'machine_fixe':
+      return [
+        [box(1.15, 0.32, 1.35, 0, -0.54, 0), ...STONE],
+        [rod(1.0, 0.72, 12, 0.05, 0.02), ...IRON],
+        [box(0.5, 0.55, 0.62, -0.42, -0.06, 0), 0.62, 0.42, 0.28],
+        [can(0.5, 0.14, 8, 0.6), 0.18, 0.18, 0.2],
+        [rod(0.08, 0.95, 16, 0.62, 0.05, 0), 0.3, 0.3, 0.32],
+      ];
+    case 'meule':
+      return [
+        [box(0.5, 0.16, 0.62, 0, -0.42, 0), ...WOOD],
+        [box(0.08, 0.95, 0.08, -0.3, -0.02, 0), ...WOOD],
+        [box(0.08, 0.95, 0.08, 0.3, -0.02, 0), ...WOOD],
+        [rod(0.72, 0.05, 6, 0, 0.15, 0), ...IRON],
+        [rod(0.14, 0.76, 16, 0, 0.15, 0), 0.62, 0.6, 0.55],
+      ];
+    case 'soufflet_meca':
+      return [
+        [box(0.6, 0.18, 0.95, 0, -0.25, 0), ...WOOD],
+        [box(0.56, 0.22, 0.88, 0, -0.05, 0), 0.3, 0.2, 0.13],
+        [box(0.6, 0.06, 0.95, 0, 0.1, 0, 0, 0.08), ...WOOD],
+        [rod(0.45, 0.09, 6, 0, -0.22, 0.65, Math.PI / 2), ...IRON],
+        [box(0.05, 0.45, 0.05, 0.34, 0.15, -0.35), ...IRON],
+      ];
+    case 'pompe':
+      return [
+        [box(0.5, 0.14, 0.5, 0, -0.53, 0), ...STONE],
+        [can(1.1, 0.18, 8, 0), ...IRON],
+        [rod(0.35, 0.08, 6, 0.18, 0.3, 0), ...IRON],
+        [box(0.95, 0.06, 0.06, -0.15, 0.58, 0, 0, 0.25), ...WOOD],
+      ];
   }
+}
+
+/** Planche disposée en rayon autour de l'axe x (pales d'une roue). */
+function paddle(w: number, h: number, d: number, angle: number, radius: number): VertexData {
+  const vd = CreateBoxVertexData({ width: w, height: h, depth: d });
+  vd.transform(Matrix.Translation(0, radius, 0).multiply(Matrix.RotationX(angle)));
+  return vd;
+}
+
+/** Roue à plat (axe vertical) : jante, moyeu, rayons ; bandage de fer pour la grande roue. */
+export function wheelParts(r: number, t: number, iron: boolean): Part[] {
+  const parts: Part[] = [[can(t, r * 2, 14, 0, r * 2), ...(iron ? IRON : WOOD)]];
+  parts.push([can(t * 1.05, r * 1.7, 14, 0, r * 1.7), 0.38, 0.27, 0.17]);
+  parts.push([can(t * 1.4, r * 0.35, 8), ...WOOD]);
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI;
+    parts.push([box(r * 1.7, t * 0.6, r * 0.12, 0, 0, 0, a), ...WOOD]);
+  }
+  return parts;
 }
 
 /** Assemble des pièces colorées en un seul maillage. */

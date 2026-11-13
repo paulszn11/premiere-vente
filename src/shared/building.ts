@@ -5,6 +5,7 @@
 
 import { WATER_LEVEL } from './constants';
 import { ITEMS, type ItemId, type ToolTag } from './items';
+import { FRAMES, type FrameKind } from './vehicles';
 
 /** Côté d'une case de la grille (m). */
 export const GRID = 2;
@@ -22,7 +23,9 @@ export const PLACE_REACH = 6;
 export const SITE_RADIUS = 2.5;
 
 export type PieceKind = 'sol' | 'dallage' | 'poteau' | 'mur' | 'porte' | 'toit' | 'echelle' | 'cloture';
-export type InstallKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | 'collet' | 'assommoir' | 'fosse';
+export type InstallKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | 'collet' | 'assommoir' | 'fosse' | MachineKind;
+/** Machines (phase 7) : sources d'énergie et machines entraînées par un arbre de transmission. */
+export type MachineKind = 'roue_eau' | 'machine_fixe' | 'meule' | 'soufflet_meca' | 'pompe';
 export type Material = 'bois' | 'torchis' | 'pierre' | 'chaume';
 export type PlanId =
   | 'sol_rondins'
@@ -41,7 +44,12 @@ export type PlanId =
   | 'forge'
   | 'collet'
   | 'assommoir'
-  | 'fosse';
+  | 'fosse'
+  | 'chariot_bras'
+  | 'chariot'
+  | 'radeau'
+  | 'pirogue'
+  | MachineKind;
 
 /** Emplacement sur la grille : case (sol, toit), bord (mur, porte, échelle, clôture), coin (poteau). */
 export type SlotType = 'f' | 'e' | 'c' | 'r';
@@ -84,6 +92,10 @@ export interface PlanDef {
   description: string;
   /** Seulement sur la terre ferme (dallage, puits). */
   groundOnly?: boolean;
+  /** Phase 7 : le chantier devient un véhicule (châssis sur lequel on installe des pièces). */
+  vehicle?: FrameKind;
+  /** Contrainte d'eau : dans l'eau peu profonde (bateaux), près de l'eau (pompe), près d'un courant (roue à eau). */
+  water?: 'dans' | 'rive' | 'courant';
 }
 
 const tie = (n: number): PlanStep['iron'] => ({ label: 'Clouer', needs: [['clous', n]], tool: 'percuteur' });
@@ -382,11 +394,183 @@ export const PLANS: Record<PlanId, PlanDef> = {
     description: 'Fosse garnie de pieux, couverte d’herbes : la créature (ou le joueur) qui marche dessus tombe et reste prise.',
     groundOnly: true,
   },
+  // Phase 7 : véhicules (un châssis, puis des pièces installées) et machines.
+  chariot_bras: {
+    id: 'chariot_bras',
+    label: 'Chariot à bras',
+    piece: null,
+    install: null,
+    vehicle: 'chariot_bras',
+    slot: 'libre',
+    material: 'bois',
+    hp: 200,
+    steps: [
+      { label: 'Tailler le plateau', needs: [['buche', 2]], tool: 'tranchant', seconds: 8 },
+      { label: 'Monter les brancards', needs: [['perche', 2], ['corde', 2]], tool: null, seconds: 6 },
+    ],
+    known: true,
+    hintedBy: [],
+    hint: '',
+    description: 'Un plateau à brancards sur quatre petites roues (à fabriquer au plan de travail, puis à installer). On le pousse : les bûches et les pierres posées dessus voyagent avec lui.',
+    groundOnly: true,
+  },
+  chariot: {
+    id: 'chariot',
+    label: 'Chariot',
+    piece: null,
+    install: null,
+    vehicle: 'chariot',
+    slot: 'libre',
+    material: 'bois',
+    hp: 500,
+    steps: [
+      { label: 'Équarrir le châssis', needs: [['buche', 4]], tool: 'hache', seconds: 12 },
+      { label: 'Clouer le plateau', needs: [['buche', 2], ['clous', 16]], tool: 'percuteur', seconds: 10 },
+      { label: 'Monter la direction', needs: [['barre_fer', 1], ['boulons', 4]], tool: 'percuteur', seconds: 8 },
+    ],
+    known: false,
+    hintedBy: ['roue', 'essieu'],
+    hint: 'Une roue cerclée de fer… Quatre roues, deux essieux et un châssis solide : un chariot. Avec une machine à vapeur, il roulerait tout seul.',
+    description: 'Châssis à quatre roues cerclées de fer et deux essieux, avec un siège et la place d’une machine à vapeur. Sans machine, il se pousse (lentement).',
+    groundOnly: true,
+  },
+  radeau: {
+    id: 'radeau',
+    label: 'Radeau',
+    piece: null,
+    install: null,
+    vehicle: 'radeau',
+    slot: 'libre',
+    material: 'bois',
+    hp: 350,
+    steps: [
+      { label: 'Aligner les bûches', needs: [['buche', 6]], tool: null, seconds: 8 },
+      { label: 'Lier les traverses', needs: [['perche', 2], ['corde', 4]], tool: null, seconds: 10 },
+    ],
+    known: true,
+    hintedBy: [],
+    hint: '',
+    description: 'Des bûches liées, assemblées dans l’eau peu profonde. On pagaie ; une machine à vapeur et une roue à aubes le font avancer seul, un gouvernail aide à tourner.',
+    water: 'dans',
+  },
+  pirogue: {
+    id: 'pirogue',
+    label: 'Pirogue (mukoro)',
+    piece: null,
+    install: null,
+    vehicle: 'pirogue',
+    slot: 'libre',
+    material: 'bois',
+    hp: 250,
+    steps: [
+      { label: 'Équarrir le tronc', needs: [['buche', 4]], tool: 'hache', seconds: 14 },
+      { label: 'Évider au feu', needs: [['baton', 4], ['herbe', 2]], tool: 'feu', seconds: 12 },
+      { label: 'Creuser et lisser la coque', needs: [], tool: 'tranchant', seconds: 14 },
+    ],
+    known: false,
+    hintedBy: ['hache', 'hache_fer'],
+    hint: 'Avec une hache, on pourrait creuser un tronc comme les pêcheurs du Zambèze : une pirogue (mukoro).',
+    description: 'Creusée dans un tronc, au bord de l’eau : rapide et légère à la pagaie, mais étroite (un chargement haut la fait chavirer).',
+    water: 'dans',
+  },
+  roue_eau: {
+    id: 'roue_eau',
+    label: 'Roue à eau',
+    piece: null,
+    install: 'roue_eau',
+    slot: 'libre',
+    material: 'bois',
+    hp: 300,
+    steps: [
+      { label: 'Tailler l’arbre et les pales', needs: [['buche', 3], ['perche', 2]], tool: 'hache', seconds: 12 },
+      { label: 'Assembler la roue', needs: [['clous', 12], ['barre_fer', 1]], tool: 'percuteur', seconds: 10 },
+    ],
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Le courant du fleuve ne s’arrête jamais… Une roue à pales sur la rive tournerait toute seule.',
+    description: 'Sur une rive où le courant est assez fort (Zambèze, Limpopo), elle entraîne les machines à moins de 6 m. Plus le courant est fort, plus elle est puissante.',
+    water: 'courant',
+  },
+  machine_fixe: {
+    id: 'machine_fixe',
+    label: 'Machine à vapeur fixe',
+    piece: null,
+    install: 'machine_fixe',
+    slot: 'libre',
+    material: 'pierre',
+    hp: 400,
+    steps: [
+      { label: 'Monter le socle', needs: [['pierre', 20]], tool: null, seconds: 6 },
+      { label: 'Boulonner la machine', needs: [['machine_vapeur', 1], ['boulons', 4]], tool: 'percuteur', seconds: 10 },
+    ],
+    known: false,
+    hintedBy: ['machine_vapeur'],
+    hint: 'Cette machine à vapeur pourrait aussi rester sur un socle et entraîner d’autres machines.',
+    description: 'Une machine à vapeur sur un socle de pierres : du bois, de l’eau, du feu, et elle entraîne les machines à moins de 6 m (4 kW à pleine pression).',
+    groundOnly: true,
+  },
+  meule: {
+    id: 'meule',
+    label: 'Meule',
+    piece: null,
+    install: 'meule',
+    slot: 'libre',
+    material: 'pierre',
+    hp: 250,
+    steps: [
+      { label: 'Tailler la meule', needs: [['pierre', 15]], tool: 'percuteur', seconds: 10 },
+      { label: 'Monter le bâti et l’axe', needs: [['buche', 1], ['perche', 1], ['barre_fer', 1]], tool: 'tranchant', seconds: 8 },
+    ],
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Une pierre ronde qui tourne vite affûterait mieux qu’à la main…',
+    description: 'Entraînée par une source d’énergie à moins de 6 m, elle rend leur tranchant aux lames sans user leur durabilité maximale (contrairement à l’affûtage sur une pierre).',
+    groundOnly: true,
+  },
+  soufflet_meca: {
+    id: 'soufflet_meca',
+    label: 'Soufflet mécanique',
+    piece: null,
+    install: 'soufflet_meca',
+    slot: 'libre',
+    material: 'bois',
+    hp: 150,
+    steps: [
+      { label: 'Monter la caisse', needs: [['buche', 1], ['perche', 2]], tool: 'tranchant', seconds: 6 },
+      { label: 'Poser la bielle et la tuyère', needs: [['barre_fer', 1], ['clous', 6], ['argile', 1]], tool: 'percuteur', seconds: 8 },
+    ],
+    known: false,
+    hintedBy: ['machine_vapeur'],
+    hint: 'Une machine pourrait actionner le soufflet du bas fourneau à votre place…',
+    description: 'À moins de 3 m d’un bas fourneau allumé, et entraîné par une source d’énergie, il souffle tout seul : la fonte du fer avance sans vous.',
+    groundOnly: true,
+  },
+  pompe: {
+    id: 'pompe',
+    label: 'Pompe',
+    piece: null,
+    install: 'pompe',
+    slot: 'libre',
+    material: 'bois',
+    hp: 200,
+    steps: [
+      { label: 'Forer le tuyau', needs: [['perche', 1], ['barre_fer', 2]], tool: 'percuteur', seconds: 8 },
+      { label: 'Monter le piston', needs: [['boulons', 4], ['corde', 1]], tool: 'percuteur', seconds: 8 },
+    ],
+    known: false,
+    hintedBy: ['machine_vapeur'],
+    hint: 'Remplir la chaudière pot après pot… Une pompe entraînée par une machine le ferait seule.',
+    description: 'Près de l’eau et entraînée par une source d’énergie, elle remplit la chaudière des véhicules et des machines à moins de 6 m ; on y remplit aussi un pot.',
+    water: 'rive',
+  },
 };
 
 export const PLAN_IDS = Object.keys(PLANS) as PlanId[];
 export const PIECE_PLANS = PLAN_IDS.filter((id) => PLANS[id].piece !== null);
 export const INSTALL_PLANS = PLAN_IDS.filter((id) => PLANS[id].install !== null);
+export const VEHICLE_PLANS = PLAN_IDS.filter((id) => PLANS[id].vehicle !== undefined);
+/** Plans posés librement (installations, machines, véhicules) : des chantiers, pas des pièces de la grille. */
+export const FREE_PLANS = new Set<PlanId>([...INSTALL_PLANS, ...VEHICLE_PLANS]);
 
 export const MATERIAL_LABELS: Record<Material, string> = { bois: 'bois', torchis: 'torchis', pierre: 'pierre', chaume: 'chaume' };
 
@@ -822,6 +1006,9 @@ export class BuildState {
   private nextStructure = 1;
   private nextSite = 1;
 
+  /** Courant de l'eau (roue à eau) ; fourni par la simulation. */
+  currentAt: (x: number, z: number) => { x: number; z: number } = () => ({ x: 0, z: 0 });
+
   constructor(private readonly heightAt: (x: number, z: number) => number) {}
 
   structure(id: string): Structure | undefined {
@@ -967,6 +1154,30 @@ export class BuildState {
       on = inp.onPiece;
       const s = this.structure(on.s)!;
       y = pieceTransform(s, p.slot).y;
+    } else if (def.vehicle) {
+      // Véhicule : toute l'emprise du châssis compte.
+      const f = FRAMES[def.vehicle];
+      const c = Math.cos(yaw);
+      const n = Math.sin(yaw);
+      const hs: number[] = [];
+      for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 0], [0, 1], [0, -1]] as const) {
+        const lx = a * f.half.x;
+        const lz = b * f.half.z;
+        hs.push(this.heightAt(x + lx * c + lz * n, z - lx * n + lz * c));
+      }
+      const hmax = Math.max(...hs);
+      const hmin = Math.min(...hs);
+      if (def.water === 'dans') {
+        const depth = WATER_LEVEL - hs[4]!;
+        if (depth < 0.25) return fail('Un bateau s’assemble dans l’eau peu profonde, au bord.');
+        if (depth > 1.1) return fail('L’eau est trop profonde ici pour y travailler : rapprochez-vous du bord.');
+        if (hmax > WATER_LEVEL + 0.1) return fail('Trop près de la rive : la coque doit être entièrement dans l’eau.');
+        y = WATER_LEVEL;
+      } else {
+        if (hmin < WATER_LEVEL + 0.1) return fail('Pas dans l’eau.');
+        if (hmax - hmin > 0.5) return fail('Le sol est trop en pente ici.');
+        y = hmin;
+      }
     } else {
       const hs = [this.heightAt(x - 0.5, z - 0.5), this.heightAt(x + 0.5, z - 0.5), this.heightAt(x - 0.5, z + 0.5), this.heightAt(x + 0.5, z + 0.5)];
       const hmax = Math.max(...hs);
@@ -975,15 +1186,35 @@ export class BuildState {
       y = hmin;
       if (hmin < WATER_LEVEL + 0.1) return fail('Pas dans l’eau.');
       if (inp.plan === 'puits' && hmin > WATER_LEVEL + 4) return fail('L’eau est trop profonde sous la terre ici : creusez près d’un fleuve ou d’une zone humide.');
+      if (def.water === 'rive' && !this.waterNear(x, z, 4, 0)) return fail('Une pompe se pose au bord de l’eau (à moins de 4 m).');
+      if (def.water === 'courant') {
+        const cur = this.waterNear(x, z, 3, 0.25);
+        if (!cur) return fail(this.waterNear(x, z, 3, 0) ? 'Le courant est trop faible ici : il faut un fleuve qui coule (Zambèze, Limpopo).' : 'Une roue à eau se pose sur la rive d’un fleuve (à moins de 3 m du courant).');
+      }
     }
     out.free = { x, y, z, yaw, on };
     out.world = { x, y, z, yaw };
     out.ground = on === null;
     out.support = 1;
-    if (reach > PLACE_REACH) return fail('Trop loin : approchez-vous.');
-    if (Math.hypot(x - inp.player.x, z - inp.player.z) < 0.7) return fail('Vous êtes dans le chemin.');
-    for (const site of this.sites) if (Math.hypot(site.x - x, site.z - z) < 1) return fail('Il y a déjà un chantier ici.');
+    if (reach > PLACE_REACH + (def.vehicle ? 2 : 0)) return fail('Trop loin : approchez-vous.');
+    const room = def.vehicle ? footprintRadius(inp.plan) : 0.7;
+    if (Math.hypot(x - inp.player.x, z - inp.player.z) < room) return fail('Vous êtes dans le chemin.');
+    for (const site of this.sites) if (Math.hypot(site.x - x, site.z - z) < Math.max(1, footprintRadius(site.plan) + footprintRadius(inp.plan) - 0.4)) return fail('Il y a déjà un chantier ici.');
     return { ...out, ok: true };
+  }
+
+  /** Eau (au moins 0,3 m de fond) à moins de r mètres, avec un courant d'au moins minCurrent m/s. */
+  waterNear(x: number, z: number, r: number, minCurrent: number): boolean {
+    for (let k = 0; k <= 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const d = k === 16 ? 0 : r;
+      const px = x + Math.cos(a) * d;
+      const pz = z + Math.sin(a) * d;
+      if (this.heightAt(px, pz) > WATER_LEVEL - 0.3) continue;
+      const c = this.currentAt(px, pz);
+      if (Math.hypot(c.x, c.z) >= minCurrent) return true;
+    }
+    return false;
   }
 
   /** Hauteurs du terrain aux extrémités de l'emplacement (coins d'une case, bouts d'un bord, coin). */
@@ -1195,7 +1426,7 @@ export class BuildState {
     if (Array.isArray(r.sites)) {
       for (const so of r.sites.slice(0, 2000)) {
         const o = so as Record<string, unknown>;
-        if (typeof o?.id !== 'string' || typeof o.plan !== 'string' || !(o.plan in PLANS) || PLANS[o.plan as PlanId].install === null) continue;
+        if (typeof o?.id !== 'string' || typeof o.plan !== 'string' || !(o.plan in PLANS) || !FREE_PLANS.has(o.plan as PlanId)) continue;
         if (!num(o.x, 9000) || !num(o.y, 5000) || !num(o.z, 9000) || !num(o.yaw, 100)) continue;
         const plan = o.plan as PlanId;
         const step = int(o.step, 100) ? Math.max(0, Math.min(PLANS[plan].steps.length - 1, o.step)) : 0;
@@ -1348,7 +1579,20 @@ export function stiltPosts(s: Structure, p: Piece, heightAt: (x: number, z: numb
 }
 
 export function siteBox(site: InstallSite): Box {
+  const v = PLANS[site.plan].vehicle;
+  if (v) {
+    const f = FRAMES[v];
+    return { x: site.x, y: site.y + 0.4, z: site.z, hx: f.half.x + 0.1, hy: 0.45, hz: f.half.z + 0.1, yaw: site.yaw };
+  }
   return { x: site.x, y: site.y + 0.45, z: site.z, hx: 0.55, hy: 0.45, hz: 0.55, yaw: site.yaw };
+}
+
+/** Rayon de l'emprise d'un plan posé librement (m). */
+export function footprintRadius(plan: PlanId): number {
+  const v = PLANS[plan].vehicle;
+  if (!v) return 0.6;
+  const f = FRAMES[v];
+  return Math.hypot(f.half.x, f.half.z);
 }
 
 /** Distance d'entrée d'un rayon dans une boîte orientée, ou null. */

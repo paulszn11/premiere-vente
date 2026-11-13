@@ -26,7 +26,14 @@ export type RecipeId =
   | 'boulons'
   | 'clous'
   | 'hache_fer'
-  | 'couteau_fer';
+  | 'couteau_fer'
+  // Phase 7 : pièces de véhicules et de machines
+  | 'petite_roue'
+  | 'roue'
+  | 'essieu'
+  | 'machine_vapeur'
+  | 'roue_aubes'
+  | 'gouvernail';
 
 export interface RecipeStep {
   label: string;
@@ -325,6 +332,115 @@ export const RECIPES: Record<RecipeId, Recipe> = {
     hintedBy: ['barre_fer'],
     hint: 'Une barre de fer forgée en lame, un manche : un couteau en fer.',
     station: 'forge',
+  },
+  // Phase 7 : pièces de véhicules et de machines.
+  petite_roue: {
+    id: 'petite_roue',
+    label: 'Petite roue',
+    inputs: [
+      ['buche', 1],
+      ['baton', 2],
+      ['corde', 1],
+    ],
+    steps: [
+      { label: 'Tailler le moyeu et la jante dans la bûche', tool: 'tranchant', seconds: 6 },
+      { label: 'Monter les rayons et ligaturer', tool: null, seconds: 4 },
+    ],
+    output: { item: 'petite_roue', count: 1 },
+    known: true,
+    hintedBy: [],
+    hint: '',
+  },
+  roue: {
+    id: 'roue',
+    label: 'Roue cerclée de fer',
+    inputs: [
+      ['buche', 2],
+      ['barre_fer', 1],
+      ['clous', 8],
+    ],
+    steps: [
+      { label: 'Assembler la jante et les rayons', tool: 'tranchant', seconds: 8 },
+      { label: 'Cercler à chaud le bandage de fer', tool: 'percuteur', seconds: 8 },
+    ],
+    output: { item: 'roue', count: 1 },
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Une jante de bois, un bandage de fer posé à chaud à la forge : une roue qui tiendra la charge.',
+    station: 'forge',
+  },
+  essieu: {
+    id: 'essieu',
+    label: 'Essieu',
+    inputs: [
+      ['barre_fer', 2],
+      ['perche', 1],
+    ],
+    steps: [
+      { label: 'Forger les fusées', tool: 'percuteur', seconds: 8 },
+      { label: 'Les emmancher sur la perche', tool: null, seconds: 4 },
+    ],
+    output: { item: 'essieu', count: 1 },
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Une perche, deux fusées de fer à ses bouts : un essieu pour deux roues.',
+    station: 'forge',
+  },
+  machine_vapeur: {
+    id: 'machine_vapeur',
+    label: 'Machine à vapeur',
+    inputs: [
+      ['barre_fer', 6],
+      ['boulons', 8],
+      ['clous', 12],
+      ['argile', 3],
+    ],
+    steps: [
+      { label: 'Forger et river la chaudière', tool: 'percuteur', seconds: 12 },
+      { label: 'Forger le cylindre et ajuster le piston', tool: 'percuteur', seconds: 10 },
+      { label: 'Monter le foyer d’argile', tool: null, seconds: 6 },
+      { label: 'Boulonner l’ensemble', tool: 'percuteur', seconds: 6 },
+    ],
+    output: { item: 'machine_vapeur', count: 1 },
+    known: false,
+    hintedBy: ['boulons'],
+    hint: 'De l’eau chauffée dans une chaudière de fer rivetée pousse un piston : une machine qui travaille seule, tant qu’on la nourrit de bois.',
+    station: 'forge',
+  },
+  roue_aubes: {
+    id: 'roue_aubes',
+    label: 'Roue à aubes',
+    inputs: [
+      ['buche', 3],
+      ['barre_fer', 1],
+      ['boulons', 4],
+    ],
+    steps: [
+      { label: 'Tailler les aubes', tool: 'hache', seconds: 8 },
+      { label: 'Les boulonner sur l’axe de fer', tool: 'percuteur', seconds: 8 },
+    ],
+    output: { item: 'roue_aubes', count: 1 },
+    known: false,
+    hintedBy: ['machine_vapeur'],
+    hint: 'Entraînée par la machine à vapeur, une roue garnie d’aubes pousserait un radeau.',
+    station: 'forge',
+  },
+  gouvernail: {
+    id: 'gouvernail',
+    label: 'Gouvernail',
+    inputs: [
+      ['perche', 1],
+      ['buche', 1],
+      ['corde', 1],
+    ],
+    steps: [
+      { label: 'Tailler le safran', tool: 'hache', seconds: 6 },
+      { label: 'Le ligaturer à la barre', tool: null, seconds: 3 },
+    ],
+    output: { item: 'gouvernail', count: 1 },
+    known: true,
+    hintedBy: [],
+    hint: '',
   },
 };
 

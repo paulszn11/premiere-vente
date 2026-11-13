@@ -44,7 +44,14 @@ export type ItemId =
   | 'couteau_fer'
   // Phase 6 : chasse
   | 'viande_crue'
-  | 'viande_cuite';
+  | 'viande_cuite'
+  // Phase 7 : pièces de véhicules et de machines
+  | 'petite_roue'
+  | 'roue'
+  | 'essieu'
+  | 'machine_vapeur'
+  | 'roue_aubes'
+  | 'gouvernail';
 
 /** Usages d'un outil. */
 export type ToolTag = 'tranchant' | 'hache' | 'percuteur' | 'fouir' | 'batee' | 'feu' | 'recipient' | 'pointe';
@@ -527,6 +534,72 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     stack: 6,
     food: { heal: 30, seconds: 60 },
     description: 'Cuite au feu : nourrissante. Son odeur attire les hyènes et les babouins.',
+  },
+  petite_roue: {
+    id: 'petite_roue',
+    label: 'petite roue',
+    plural: 'petites roues',
+    feminine: true,
+    mass: 4,
+    volume: 22,
+    pocket: false,
+    stack: 4,
+    description: 'Roue taillée dans une bûche, aux rayons ligaturés : il en faut quatre pour un chariot à bras.',
+  },
+  roue: {
+    id: 'roue',
+    label: 'roue cerclée de fer',
+    plural: 'roues cerclées de fer',
+    feminine: true,
+    mass: 25,
+    volume: 90,
+    pocket: false,
+    stack: 1,
+    description: 'Grande roue à bandage de fer, pour un chariot. Elle s’use en roulant, surtout chargée.',
+  },
+  essieu: {
+    id: 'essieu',
+    label: 'essieu',
+    plural: 'essieux',
+    feminine: false,
+    mass: 12,
+    volume: 14,
+    pocket: false,
+    stack: 2,
+    description: 'Axe de bois à fusées de fer qui porte deux roues. Cassé, il bloque ses roues.',
+  },
+  machine_vapeur: {
+    id: 'machine_vapeur',
+    label: 'machine à vapeur',
+    plural: 'machines à vapeur',
+    feminine: true,
+    mass: 160,
+    volume: 400,
+    pocket: false,
+    stack: 1,
+    description: 'Chaudière rivetée, foyer d’argile, cylindre et piston : il lui faut du bois et de l’eau. Sans eau à feu vif, la chaudière se fend. Trop lourde pour être portée : on la traîne.',
+  },
+  roue_aubes: {
+    id: 'roue_aubes',
+    label: 'roue à aubes',
+    plural: 'roues à aubes',
+    feminine: true,
+    mass: 40,
+    volume: 300,
+    pocket: false,
+    stack: 1,
+    description: 'Entraînée par la machine à vapeur, elle propulse un radeau.',
+  },
+  gouvernail: {
+    id: 'gouvernail',
+    label: 'gouvernail',
+    plural: 'gouvernails',
+    feminine: false,
+    mass: 10,
+    volume: 40,
+    pocket: false,
+    stack: 1,
+    description: 'Pour diriger un radeau sans effort, surtout lancé à la vapeur.',
   },
 };
 

@@ -10,7 +10,7 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
 import type { Scene } from '@babylonjs/core/scene';
 import { type BuildState, GRID, LEVEL_H, PLANS, type Piece, type Placement, type PlanId, isDone, pieceTransform, stiltPosts, wallThickness } from '../../shared/building';
-import type { InstallPropKind } from '../../shared/props';
+import { INSTALL_HALF, type InstallPropKind } from '../../shared/props';
 import { type Part, box, buildItemMesh, can, meshFromParts, rod } from './item-meshes';
 
 const WOOD: [number, number, number] = [0.47, 0.34, 0.22];
@@ -154,7 +154,6 @@ function keysFor(plan: PlanId, mat: Piece['mat']): TemplateKey[] {
   }
 }
 
-const INSTALL_HALF: Record<InstallPropKind, number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4, collet: 0.05, assommoir: 0.3, fosse: 0.05 };
 
 const tmpM = new Matrix();
 const tmpQ = new Quaternion();

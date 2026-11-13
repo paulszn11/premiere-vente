@@ -73,6 +73,19 @@ const ITEM_RENDER_KINDS: PropKind[] = [
   'collet',
   'assommoir',
   'fosse',
+  // Phase 7 : pièces de véhicules.
+  'petite_roue',
+  'roue',
+  'essieu',
+  'machine_vapeur',
+  'roue_aubes',
+  'gouvernail',
+  // Machines.
+  'roue_eau',
+  'machine_fixe',
+  'meule',
+  'soufflet_meca',
+  'pompe',
 ];
 const NODE_RENDER_KINDS: PropKind[] = ['bloc_quartz', 'filon_fer', 'touffe_herbe', 'gisement_argile', 'gravier_or'];
 const UNDERWATER = new Color3(0.05, 0.2, 0.24);

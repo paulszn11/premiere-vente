@@ -107,7 +107,7 @@ import {
 } from './movement';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PhysicsWorld, QUERY_TERRAIN, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
-import { type FireState, type InstallPropKind, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
+import { type FireState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
 import { Terrain, chunkCoord } from './terrain';
@@ -196,12 +196,10 @@ export interface Gesture {
 /** Requête de visée pour tracer un plan : le sol et les obstacles (pièces, troncs), pas les objets. */
 const QUERY_BUILD = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
 /** Plan de chaque installation (pour ses débris). */
-const INSTALL_PLANS_BY_KIND: Record<InstallPropKind, PlanId> = { coffre: 'coffre', etabli: 'etabli', puits: 'puits', fourneau: 'fourneau', forge: 'forge', collet: 'collet', assommoir: 'assommoir', fosse: 'fosse' };
+const INSTALL_PLANS_BY_KIND: Record<InstallPropKind, PlanId> = { coffre: 'coffre', etabli: 'etabli', puits: 'puits', fourneau: 'fourneau', forge: 'forge', collet: 'collet', assommoir: 'assommoir', fosse: 'fosse', roue_eau: 'roue_eau', machine_fixe: 'machine_fixe', meule: 'meule', soufflet_meca: 'soufflet_meca', pompe: 'pompe' };
 const PROP_NAMES: Partial<Record<PropKind, string>> = { coffre: 'Le coffre', etabli: 'L’établi', puits: 'Le puits', fourneau: 'Le fourneau', forge: 'La forge', collet: 'Le collet', assommoir: 'L’assommoir', fosse: 'La fosse' };
 /** Portée des gestes de construction (m). */
 const BUILD_REACH = 3.4;
-/** Demi-hauteur des installations (le centre de leur volume est à cette hauteur au-dessus du sol). */
-const INSTALL_HALF: Record<InstallPropKind, number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4, collet: 0.05, assommoir: 0.3, fosse: 0.05 };
 
 /** Outils nécessaires, pour les messages. */
 export const TOOL_NEEDS: Record<ToolTag, string> = {
