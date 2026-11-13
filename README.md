@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 6 terminée (202 tests unitaires et 186 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
+**État : phase 7 terminée (222 tests unitaires et 206 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -30,12 +30,19 @@ Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le n
   - combats avec ce qu'on tient (coups localisés, objets lancés), carcasses à dépecer, viande à cuire, pièges (collet, assommoir, fosse à pieux) ;
   - une créature mystérieuse dans les eaux profondes du lac ;
   - des sons placés dans l'espace, fabriqués par le navigateur ;
+- les véhicules et les machines (phase 7) :
+  - on trace un châssis (chariot à bras, chariot, radeau, pirogue *mukoro*), puis on y installe des pièces fabriquées : roues, essieux, machine à vapeur, roue à aubes, gouvernail ;
+  - vraie physique : suspensions et adhérence, centre de gravité, renversement, flottaison et courant ; la machine à vapeur se nourrit de bois et d'eau ;
+  - usure, pannes et réparations pièce par pièce ; chocs ; on pousse, on pagaie (endurance) ou on conduit ;
+  - machines entraînées par une roue à eau ou une machine à vapeur fixe : meule, soufflet mécanique (la fonte du fer se fait seule), pompe ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
 
 Le jeu est solo pour l'instant. Le multijoueur arrive en phase 8 : un joueur héberge le monde, les autres le rejoignent avec un code privé. Les graphismes restent volontairement simples. Le détail est dans [`docs/ETAT.md`](docs/ETAT.md).
 
 ![Les régions du monde](docs/captures/biomes-phase2.png)
+
+![Un chariot à vapeur (phase 7)](docs/captures/vehicule-chariot-vapeur.png)
 
 ## Jouer
 
@@ -88,6 +95,18 @@ Face aux créatures :
 | Dépecer une carcasse (une lame en main) | Clic droit ou F | LT | « Utiliser » |
 | Se dégager d'un piège, réarmer un piège | E | X | « Prendre » |
 
+Véhicules et machines :
+
+| Action | Clavier / souris | Manette | Tactile |
+| --- | --- | --- | --- |
+| Ouvrir le panneau d'un véhicule ou d'une machine (monter, pousser, pièces, chaudière) | E | X / Carré | « Prendre » |
+| Accélérer, reculer, tourner | W S A D | Stick gauche | Joystick |
+| Freiner | Espace | A / Croix | « Sauter » |
+| Descendre, lâcher les brancards | E | X / Carré | « Prendre » |
+| Panneau du véhicule en conduisant (bois, eau, feu) | Tab ou I | Y / Triangle | « Sac » |
+
+Un châssis terminé reste calé tant qu'il lui manque des roues : ouvrez son panneau pour installer les pièces (en main, dans le sac ou posées à côté). La machine à vapeur demande du bois, de l'eau (un pot) et du feu (archet, torche ou foyer voisin), puis quelques dizaines de secondes de chauffe.
+
 Écoutez : les cris, les frôlements et les battements de cœur préviennent du danger. Un feu ou une torche tient la plupart des animaux à distance. Un casque aide à situer les sons ; le volume se règle dans « Réglages » → « Son ».
 
 Pour bien démarrer :
@@ -100,7 +119,8 @@ Pour essayer rapidement chaque région, ouvrez le menu pause, puis « Réglages 
 - la téléportation à côté du gisement de quartz, d'argile, de fer ou d'or le plus proche ;
 - un jeu d'outils (couteau, hache, bâton à fouir, batée, archet, pot, galet) ;
 - des matériaux de construction posés à côté de vous (bûches, perches, bâtons, pierres, argile, cordes, herbes, clous) ;
-- des créatures à faire apparaître devant vous, et une baignade au-dessus des eaux profondes du lac, là où rôde la créature.
+- des créatures à faire apparaître devant vous, et une baignade au-dessus des eaux profondes du lac, là où rôde la créature ;
+- un véhicule prêt à rouler ou à naviguer (chariot à bras, chariot à vapeur, radeau, pirogue…), et des pièces, du fer et des outils pour les véhicules, avec tous les plans.
 
 Ces outils seront retirés ou réservés à l'hôte en multijoueur.
 
@@ -132,7 +152,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; « phase6 » : créatures et horreur ; chacun sur ordinateur, téléphone et manette).
+- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,phase7,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; « phase6 » : créatures et horreur ; « phase7 » : véhicules et machines ; chacun sur ordinateur, téléphone et manette).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
@@ -142,7 +162,9 @@ Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 src/shared/     code commun au client et au futur serveur : géographie, relief, flore,
                 objets, inventaire, corps du joueur (santé, blessures), ressources
                 (gisements, arbres), fabrication (recettes, qualité, usure), construction
-                (plans, stabilité, dégâts, collisions des pièces), actions,
+                (plans, stabilité, dégâts, collisions des pièces), créatures et
+                écosystème, véhicules (pièces, machine à vapeur, usure, physique
+                des roues et de la flottaison), machines et transmission, actions,
                 physique, déplacements, simulation à pas fixe, apparitions,
                 protocole, codes de monde
 src/client/     jeu dans le navigateur : rendu (Babylon.js), commandes, réglages,
@@ -169,3 +191,4 @@ Le projet Vercel `bienvenue-au-zimbabwe` construit le site avec `npm run build` 
 - [`docs/PHASE-4.md`](docs/PHASE-4.md) : ressources et fabrication (matériaux, recettes, outils, feu, tests, limites)
 - [`docs/PHASE-5.md`](docs/PHASE-5.md) : construction (décisions, difficultés techniques, stabilité, destruction, installations, fer, tests, limites)
 - [`docs/PHASE-6.md`](docs/PHASE-6.md) : créatures et horreur (catalogue proposé, sens, comportements, écosystème, combats, pièges, sons, tests, limites)
+- [`docs/PHASE-7.md`](docs/PHASE-7.md) : véhicules et machines (types proposés, pièces, mécanique, conduite, usure et pannes, machines, difficultés techniques, tests, limites)

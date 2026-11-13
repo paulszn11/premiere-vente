@@ -110,6 +110,20 @@ Côté client :
 - `audio/sound.ts` fabrique les sons (Web Audio), les place dans l'espace et gère le cœur, l'ambiance sous l'eau et le grondement ;
 - `session.ts` calcule le danger et la peur (bord rouge, vue qui s'assombrit).
 
+### Véhicules et machines (phase 7)
+
+| Module | Rôle |
+| --- | --- |
+| `vehicles.ts` | Châssis et pièces (proposition, section 15) : emplacements, masses, usure, réparations, installation ; masse, centre de gravité et inertie ; machine à vapeur (bois, chaleur, pression, eau, surchauffe) ; usure et tirage des pannes ; ridelles ; sauvegarde contrôlée. Aucune dépendance au moteur physique |
+| `vehicle-physics.ts` | Corps Rapier des véhicules proches : contrôleur de roues (suspensions, adhérence, moteur, freins, direction), couple de renversement ajouté, flottaison point par point, traînée, courant, pagaie et roue à aubes ; position relue après chaque pas |
+| `machines.ts` | Sources (roue à eau, machine fixe) et machines entraînées (meule, soufflet, pompe) ; réseaux de transmission de proche en proche (6 m) et partage de la puissance |
+| `simulation.ts` | Chantiers qui deviennent des véhicules, panneau et actions (monter, pousser, pièces, chaudière, redresser), conduite (la commande lue dans le repère de la vue), effort et endurance, chocs, créatures percutées, bilans d'usure toutes les 0,5 s, machines et leurs effets |
+
+Côté client :
+- `vehicle-view.ts` dessine les véhicules (formes simples, roues qui tournent, braquent et suivent la suspension, roue à aubes, fumée, cales), interpolés entre deux pas comme le joueur ;
+- `structure-view.ts` dessine les chantiers et les fantômes des châssis ;
+- `session.ts` fait tourner la vue avec le véhicule conduit et affiche le tableau de bord ; `bag-view.ts` montre le panneau du véhicule ou de la machine.
+
 ## 2. Technologies retenues
 
 | Domaine | Choix | Raisons | Alternatives écartées |
@@ -129,7 +143,7 @@ Côté client :
 
 | Fichier | Taille | Compressé (gzip) |
 | --- | --- | --- |
-| Code du jeu + Babylon.js | 1,43 Mo | 346 Ko |
+| Code du jeu + Babylon.js | 1,67 Mo | 427 Ko |
 | Fil de calcul du terrain | 12 Ko | — |
 | Moteur physique (WebAssembly) | 3,08 Mo | 1,19 Mo |
 
@@ -178,5 +192,7 @@ Décisions prises depuis :
 - **13/11/2026 :** décisions confiées par le propriétaire du projet, inspirées de jeux du même style et détaillées dans `docs/PHASE-3.md`. Elles portent sur la réapparition (dernier sommeil, sinon point d'arrivée), la conservation des corps (jusqu'à ce qu'ils soient vidés) et les conditions de secours (perte de connaissance, puis 90 s d'état critique en cas de saignement).
 - **13/11/2026 (phase 4) :** propositions pour la liste des matériaux, leurs propriétés et l'amélioration de l'équipement, inspirées de jeux du même style et détaillées dans `docs/PHASE-4.md`. Ces éléments relèvent de la section 15 : ils restent signalés et modifiables.
 - **13/11/2026 (phase 5) :** propositions pour les matériaux de construction, leurs propriétés (résistance, poids, combustion) et les améliorations des constructions, détaillées dans `docs/PHASE-5.md`. Elles relèvent elles aussi de la section 15 : signalées et modifiables.
+- **13/11/2026 (phase 6) :** proposition de catalogue des créatures, détaillée dans `docs/PHASE-6.md` (section 15 : signalée et modifiable).
+- **13/11/2026 (phase 7) :** proposition de types de véhicules (chariot à bras, chariot à vapeur, radeau, pirogue) et de composants (roues, essieux, machine à vapeur, roue à aubes, gouvernail), et de machines (roue à eau, machine fixe, meule, soufflet mécanique, pompe), détaillée dans `docs/PHASE-7.md` (section 15 : signalée et modifiable).
 
-Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures, les matériaux (proposition en place depuis la phase 4, modifiable), le commerce, les véhicules, le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.
+Conformément au § 15 du cahier des charges, aucune décision définitive n'a été prise sur : le catalogue des créatures (proposition en place depuis la phase 6, modifiable), les matériaux (proposition en place depuis la phase 4, modifiable), le commerce, les véhicules et leurs composants (proposition en place depuis la phase 7, modifiable), le partage des cartes, les rôles et permissions, la récupération d'identité, l'administration du serveur. Les valeurs actuelles (taille des chunks, vitesses de déplacement, hauteur de saut…) sont des réglages de prototype, modifiables.

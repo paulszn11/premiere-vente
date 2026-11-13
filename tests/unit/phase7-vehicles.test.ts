@@ -341,6 +341,30 @@ describe('simulation : construire, équiper, conduire', () => {
     s.dispose();
   });
 
+  it('chargement : les bûches et la pierre posées sur le plateau voyagent avec le chariot (ridelles), même en virage', () => {
+    const h = setup();
+    const { s, act } = h;
+    const id = s.spawnVehicle('chariot_bras', s.state.x, s.state.z + 2.5, 0, { parts: 'toutes' });
+    h.run(60);
+    const v = s.vehicle(id)!;
+    const loads = [0, 1, 2].map((k) => s.props.spawnDynamic({ kind: 'buche', x: v.x - 0.2 + k * 0.2, y: v.y + 0.8, z: v.z, rot: 0, radius: 0.07, length: 0.6 }));
+    loads.push(s.props.spawnDynamic({ kind: 'pierre', x: v.x, y: v.y + 0.85, z: v.z + 0.4, rot: 0, radius: 0.12, length: 0 }));
+    h.run(90);
+    expect(act({ type: 'vehicule', v: v.id, op: 'monter' }).ok).toBe(true);
+    const z0 = v.z;
+    h.look(0);
+    h.run(60 * 6, 0, 1);
+    h.run(60 * 2, 0.7, 0.7);
+    h.run(60 * 2, 0, 0, 1);
+    expect(Math.hypot(v.x - s.state.x, v.z - z0)).toBeGreaterThan(8);
+    for (const id2 of loads) {
+      const p = s.props.position(id2)!;
+      expect(Math.hypot(p.x - v.x, p.z - v.z)).toBeLessThan(0.9);
+      expect(p.y - v.y).toBeGreaterThan(0.55);
+    }
+    s.dispose();
+  });
+
   it('chariot à vapeur : bois, eau, feu, la pression monte, on conduit ; sauvegarde et reprise', () => {
     const h = setup();
     const { s, act } = h;

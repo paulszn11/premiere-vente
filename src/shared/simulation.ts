@@ -138,6 +138,7 @@ import {
   vehicleName,
   waterDrive,
   wearParts,
+  yawOf,
 } from './vehicles';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
@@ -1465,7 +1466,7 @@ export class LocalSimulation {
         return { action: t.armed ? `${PROP_ARTICLE(tp.kind)} est tendu` : `réarmer ${PROP_ARTICLE(tp.kind)}`, ready: !t.armed, interact: true };
       }
     }
-    if (h?.item === 'pot' && (this.inWater() || this.nearInstall('puits', 2.6))) return { action: 'remplir le pot d’eau', ready: true, interact: false };
+    if (h?.item === 'pot' && this.waterAtHand()) return { action: 'remplir le pot d’eau', ready: true, interact: false };
     const t = this.props.target(s, this.yaw, this.pitch);
     const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
     const tree = this.props.targetTree(s, this.yaw, this.pitch);
@@ -1538,7 +1539,7 @@ export class LocalSimulation {
     // Phase 6 : une créature visée (ou celle qui vous tient) passe avant tout.
     const fight = this.attackCreature(h);
     if (fight) return fight;
-    if (h?.item === 'pot' && (this.inWater() || this.nearInstall('puits', 2.6))) return this.fillPot({ zone: 'main' });
+    if (h?.item === 'pot' && this.waterAtHand()) return this.fillPot({ zone: 'main' });
     const t = this.props.target(s, this.yaw, this.pitch);
     const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
     const tree = this.props.targetTree(s, this.yaw, this.pitch);
@@ -2044,9 +2045,14 @@ export class LocalSimulation {
     return ok();
   }
 
-  private fillPot(from: HandOrSlot): ActionResult {
+  /** De l'eau à portée de main : dans l'eau, dans un bateau, à côté d'un puits ou d'une pompe qui tourne. */
+  private waterAtHand(): boolean {
     const aboard = this.driving ? FRAMES[this.vehicle(this.driving.v)?.frame ?? 'chariot'].medium === 'eau' : false;
-    if (!this.inWater() && !aboard && !this.nearInstall('puits', 2.6) && !this.pumpNearby()) return fail('Il faut être dans l’eau (fleuve, lac), dans un bateau, ou à côté d’un puits ou d’une pompe qui tourne pour remplir le pot.');
+    return this.inWater() || aboard || !!this.nearInstall('puits', 2.6) || this.pumpNearby();
+  }
+
+  private fillPot(from: HandOrSlot): ActionResult {
+    if (!this.waterAtHand()) return fail('Il faut être dans l’eau (fleuve, lac), dans un bateau, ou à côté d’un puits ou d’une pompe qui tourne pour remplir le pot.');
     const ref = this.stackRef(from);
     if (!ref || ref.st.item !== 'pot') return fail('Il faut un pot en terre cuite.');
     ensureToolMeta(ref.st);
@@ -3772,7 +3778,23 @@ export class LocalSimulation {
       }
       this.consumeNeeds(def.install.needs, c);
       const m = src.take();
+      const wasChocked = f.medium === 'terre' && missingForRolling(v) !== null;
       v.parts.push({ slot: sd.id, kind: sd.part, wear: m.wear, broken: m.broken, q: m.q });
+      // Dernière roue : on ôte les cales ; le châssis est posé droit, au-dessus du sol le plus haut
+      // sous ses roues (sur un sol en pente, aucune roue ne doit partir de sous la terre).
+      if (wasChocked && !missingForRolling(v)) {
+        const yaw = yawOf(v);
+        v.qx = 0;
+        v.qy = Math.sin(yaw / 2);
+        v.qz = 0;
+        v.qw = Math.cos(yaw / 2);
+        let top = -Infinity;
+        for (const w of f.slots.filter((x) => x.part === 'roue' || x.part === 'petite_roue')) {
+          const p = toWorld(v, { x: w.x, y: 0, z: w.z });
+          top = Math.max(top, this.phys.groundHeight(p.x, p.z, v.y + 3, QUERY_BUILD) ?? this.terrain.heightAt(p.x, p.z));
+        }
+        if (Number.isFinite(top)) v.y = top + 0.03;
+      }
       if (def.install.tool) this.wearTool(def.install.tool, 1);
       this.knowledge.xp += 3;
       const left = missingForRolling(v);
@@ -3935,7 +3957,9 @@ export class LocalSimulation {
   /** Outil de test : un véhicule posé, avec ses pièces et une chaudière en pression si demandé. */
   spawnVehicle(frame: FrameKind, x: number, z: number, yaw = 0, opts: { parts?: PartKind[] | 'toutes'; steam?: boolean } = {}): string {
     const f = FRAMES[frame];
-    const y = f.medium === 'eau' ? WATER_LEVEL + 0.12 : this.terrain.heightAt(x, z) + 0.05;
+    const ground = this.terrain.heightAt(x, z);
+    // Un bateau posé sur la terre y reste échoué (on le pousse à l'eau).
+    const y = f.medium === 'eau' ? Math.max(WATER_LEVEL + 0.12, ground - f.hull!.bottom + 0.05) : ground + 0.05;
     const v = makeVehicle(`veh${this.nextVehicle++}`, frame, x, y, z, yaw);
     for (const sd of f.slots) if (opts.parts === 'toutes' || opts.parts?.includes(sd.part)) v.parts.push({ slot: sd.id, kind: sd.part, wear: 0, broken: false, q: 70 });
     if (opts.steam && v.parts.some((p) => p.kind === 'machine_vapeur')) v.engine = { fuel: ENGINE.maxFuel, lit: true, heat: 1, pressure: 1, water: ENGINE.water };

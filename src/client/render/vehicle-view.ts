@@ -11,7 +11,7 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
 import type { Scene } from '@babylonjs/core/scene';
 import type { LocalSimulation } from '../../shared/simulation';
-import { FRAMES, type FrameKind, PARTS, type PartKind, type VehicleState, onChocks } from '../../shared/vehicles';
+import { FRAMES, type FrameKind, PARTS, type PartKind, type VehicleState, onChocks, railBoxes } from '../../shared/vehicles';
 import { type Part, box, itemParts, meshFromParts, rod, wheelParts } from './item-meshes';
 
 const WOOD: [number, number, number] = [0.45, 0.33, 0.22];
@@ -20,27 +20,25 @@ const DARK: [number, number, number] = [0.3, 0.21, 0.13];
 /** Châssis ou coque, dans le repère du véhicule (avant = +z, origine au sol). */
 export function frameParts(frame: FrameKind): Part[] {
   const f = FRAMES[frame];
+  // Ridelles : les mêmes volumes que pour la physique.
+  const rails: Part[] = railBoxes(frame).map((b) => [box(b.hx * 2, b.hy * 2, b.hz * 2, b.x, b.y, b.z), ...DARK]);
   switch (frame) {
     case 'chariot_bras':
       return [
-        [box(0.9, 0.08, 1.5, 0, f.cy), ...WOOD],
-        [box(0.05, 0.14, 1.5, -0.43, f.cy + 0.1), ...DARK],
-        [box(0.05, 0.14, 1.5, 0.43, f.cy + 0.1), ...DARK],
-        [box(0.86, 0.14, 0.05, 0, f.cy + 0.1, 0.73), ...DARK],
+        [box(f.half.x * 2, f.half.y * 2, f.half.z * 2, 0, f.cy), ...WOOD],
+        ...rails,
         [box(0.05, 0.05, 0.9, -0.3, f.cy + 0.16, -1.15), ...WOOD],
         [box(0.05, 0.05, 0.9, 0.3, f.cy + 0.16, -1.15), ...WOOD],
         [box(0.66, 0.04, 0.04, 0, f.cy + 0.16, -1.55), ...WOOD],
       ];
     case 'chariot':
       return [
-        [box(1.5, 0.12, 3.0, 0, f.cy), ...WOOD],
-        [box(0.06, 0.32, 3.0, -0.72, f.cy + 0.2), ...DARK],
-        [box(0.06, 0.32, 3.0, 0.72, f.cy + 0.2), ...DARK],
-        [box(1.44, 0.32, 0.06, 0, f.cy + 0.2, -1.48), ...DARK],
-        [box(1.0, 0.08, 0.4, 0, f.cy + 0.42, -1.25), ...WOOD],
-        [box(0.08, 0.38, 0.08, -0.42, f.cy + 0.22, -1.25), ...DARK],
-        [box(0.08, 0.38, 0.08, 0.42, f.cy + 0.22, -1.25), ...DARK],
-        [box(0.12, 0.12, 2.4, 0, f.cy - 0.12), ...DARK],
+        [box(f.half.x * 2, f.half.y * 2, f.half.z * 2, 0, f.cy), ...WOOD],
+        ...rails,
+        [box(1.0, 0.08, 0.4, 0, (f.seat?.y ?? 1.3) + 0.12, -1.25), ...WOOD],
+        [box(0.08, 0.3, 0.08, -0.42, (f.seat?.y ?? 1.3) - 0.05, -1.25), ...DARK],
+        [box(0.08, 0.3, 0.08, 0.42, (f.seat?.y ?? 1.3) - 0.05, -1.25), ...DARK],
+        [box(0.12, 0.12, 2.4, 0, f.cy - 0.16), ...DARK],
       ];
     case 'radeau': {
       const parts: Part[] = [];

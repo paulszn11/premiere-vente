@@ -39,6 +39,8 @@ export interface FrameDef {
   /** Demi-dimensions du collisionneur et hauteur de son centre au-dessus de l'origine du véhicule. */
   half: Vec3;
   cy: number;
+  /** Hauteur des ridelles autour du plateau (0 : aucune) : le chargement ne glisse pas dehors. */
+  rail: number;
   /** Pieds du conducteur (local) ; joueur qui pousse, derrière (chariots). */
   seat: Vec3 | null;
   push: { x: number; z: number } | null;
@@ -89,6 +91,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     hp: 200,
     half: { x: 0.45, y: 0.08, z: 0.75 },
     cy: 0.55,
+    rail: 0.26,
     seat: null,
     push: { x: 0, z: -1.45 },
     cargo: { volume: 150, maxKg: 250, x: 0, y: 0.75, z: 0 },
@@ -108,6 +111,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     hp: 500,
     half: { x: 0.75, y: 0.1, z: 1.5 },
     cy: 0.95,
+    rail: 0.32,
     seat: { x: 0, y: 1.3, z: -1.15 },
     push: { x: 0, z: -2.1 },
     cargo: { volume: 300, maxKg: 600, x: 0, y: 1.3, z: -0.25 },
@@ -132,6 +136,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     hp: 350,
     half: { x: 1.2, y: 0.18, z: 1.5 },
     cy: 0,
+    rail: 0,
     seat: { x: 0, y: 0.18, z: 0.55 },
     push: null,
     cargo: { volume: 400, maxKg: 500, x: 0, y: 0.4, z: 0.3 },
@@ -172,6 +177,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     hp: 250,
     half: { x: 0.33, y: 0.22, z: 2.4 },
     cy: 0,
+    rail: 0,
     seat: { x: 0, y: -0.08, z: -0.7 },
     push: null,
     cargo: { volume: 150, maxKg: 150, x: 0, y: 0.05, z: 0.9 },
@@ -203,6 +209,21 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
 };
 
 export const FRAME_KINDS = Object.keys(FRAMES) as FrameKind[];
+
+/** Ridelles d'un plateau (repère du véhicule) : côtés, avant, arrière. */
+export function railBoxes(frame: FrameKind): Array<{ x: number; y: number; z: number; hx: number; hy: number; hz: number }> {
+  const f = FRAMES[frame];
+  if (f.rail <= 0) return [];
+  const t = 0.025;
+  const y = f.cy + f.half.y + f.rail / 2;
+  const hy = f.rail / 2;
+  return [
+    { x: -(f.half.x - t), y, z: 0, hx: t, hy, hz: f.half.z },
+    { x: f.half.x - t, y, z: 0, hx: t, hy, hz: f.half.z },
+    { x: 0, y, z: f.half.z - t, hx: f.half.x - 2 * t, hy, hz: t },
+    { x: 0, y, z: -(f.half.z - t), hx: f.half.x - 2 * t, hy, hz: t },
+  ];
+}
 
 export const PARTS: Record<PartKind, PartDef> = {
   petite_roue: { id: 'petite_roue', item: 'petite_roue', label: 'petite roue', feminine: true, mass: 4, perKm: 0.05, perHour: 0, repair: [['baton', 1], ['corde', 1]], repairTool: 'tranchant', install: { seconds: 4, tool: null, needs: [] } },

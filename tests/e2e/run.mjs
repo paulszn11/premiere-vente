@@ -1411,7 +1411,8 @@ async function phase4Scenario(browser) {
   const restStamina = () => page.evaluate(() => (window.__game.sim().state.stamina = window.__game.sim().state.staminaMax));
 
   let c = await craft();
-  check('Départ : 6 recettes connues (fibres, corde, couteau, bâton à fouir, foyer, torche), plan de travail vide', c.knowledge.known.length === 6 && c.knowledge.known.includes('torche') && c.bench.length === 0, c.knowledge.known.join(', '));
+  // Phase 7 : la petite roue et le gouvernail (en bois) sont connus d'emblée, comme le chariot à bras et le radeau.
+  check('Départ : 8 recettes connues (fibres, corde, couteau, bâton à fouir, foyer, torche ; petite roue, gouvernail), plan de travail vide', c.knowledge.known.length === 8 && c.knowledge.known.includes('torche') && c.knowledge.known.includes('petite_roue') && c.bench.length === 0, c.knowledge.known.join(', '));
 
   // 1. Tailler le quartz : un galet en main, F maintenu sur le bloc.
   const stoneId = await aimAtNearestStone(page);
@@ -2676,9 +2677,12 @@ async function phase7Scenario(browser, touchOnly = false) {
   await sleep(300);
   await press(2);
   await sleep(400);
-  const pOpen = (await pPage.evaluate(() => window.__game.bag())).open;
-  await pPage.evaluate(() => window.__game.bagRun('Monter sur le siège'));
+  const pBag = await pPage.evaluate(() => window.__game.bag());
+  const pOpen = pBag.open && pBag.actions[0] === 'Monter sur le siège';
+  // A : la première action du panneau (monter sur le siège).
+  await press(0);
   await sleep(400);
+  const pSeated = (await pPage.evaluate(() => window.__game.driving()))?.mode === 'siege';
   const pv0 = await pPage.evaluate((id) => ({ ...window.__game.sim().vehicle(id) }), pWagon);
   await axes([0, -1, 0, 0]);
   await sleep(3000);
@@ -2688,7 +2692,7 @@ async function phase7Scenario(browser, touchOnly = false) {
   await press(2);
   await sleep(400);
   const pAfter = await pPage.evaluate(() => window.__game.driving());
-  check('Manette : X ouvre le chariot, on monte, le stick gauche le fait avancer, X pour descendre', pOpen && Math.hypot(pv1.x - pv0.x, pv1.z - pv0.z) > 5 && pAfter === null, `${Math.hypot(pv1.x - pv0.x, pv1.z - pv0.z).toFixed(1)} m`);
+  check('Manette : X ouvre le chariot, A pour monter sur le siège, le stick gauche le fait avancer, X pour descendre', pOpen && pSeated && Math.hypot(pv1.x - pv0.x, pv1.z - pv0.z) > 5 && pAfter === null, `${Math.hypot(pv1.x - pv0.x, pv1.z - pv0.z).toFixed(1)} m · ${pBag.actions.slice(0, 2).join(', ')}`);
   check('Aucune erreur dans la console (phase 7, manette)', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
   await padCtx.close();
 }

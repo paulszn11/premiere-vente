@@ -480,6 +480,8 @@ export class BagView {
         out.push({ label: 'Prendre', run: () => this.act({ type: 'prendre_dans', prop, from }) });
       }
     }
+    // Véhicule : ses actions (en tête si on a ouvert son panneau : A à la manette = monter ou pousser).
+    const vehOut: ActionButton[] = [];
     const veh = this.openedVehicle();
     if (veh) {
       const id = veh.id;
@@ -490,35 +492,37 @@ export class BagView {
         if (r.message) this.deps.onMessage(r.message, r.ok ? 'info' : 'alerte');
         if (r.ok && sim.driving) this.deps.onClose();
       };
-      if (driving) out.push({ label: sim.driving!.mode === 'pousse' ? 'Lâcher les brancards' : 'Descendre', run: () => this.act({ type: 'vehicule', v: id, op: 'descendre' }) });
-      else if (uprightness(veh) < 0.6) out.push({ label: `Redresser ${vehicleName(veh)}`, run: () => this.act({ type: 'vehicule', v: id, op: 'redresser' }) });
+      if (driving) vehOut.push({ label: sim.driving!.mode === 'pousse' ? 'Lâcher les brancards' : 'Descendre', run: () => this.act({ type: 'vehicule', v: id, op: 'descendre' }) });
+      else if (uprightness(veh) < 0.6) vehOut.push({ label: `Redresser ${vehicleName(veh)}`, run: () => this.act({ type: 'vehicule', v: id, op: 'redresser' }) });
       else if (f.medium === 'eau') {
-        out.push({ label: 'Monter à bord', run: board('monter') });
-        out.push({ label: 'Pousser le bateau', run: () => this.act({ type: 'vehicule', v: id, op: 'pousser' }) });
+        vehOut.push({ label: 'Monter à bord', run: board('monter') });
+        vehOut.push({ label: 'Pousser le bateau', run: () => this.act({ type: 'vehicule', v: id, op: 'pousser' }) });
       } else {
-        if (f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur')) out.push({ label: 'Monter sur le siège', run: board('monter') });
-        out.push({ label: 'Pousser', run: board('pousser') });
+        if (f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur')) vehOut.push({ label: 'Monter sur le siège', run: board('monter') });
+        vehOut.push({ label: 'Pousser', run: board('pousser') });
       }
       if (veh.parts.some((p) => p.kind === 'machine_vapeur')) {
         const e = veh.engine;
-        out.push({ label: 'Charger le foyer (une bûche ou un bâton)', run: () => this.act({ type: 'vehicule', v: id, op: 'bois' }) });
-        out.push({ label: 'Verser de l’eau dans la chaudière (un pot)', disabled: e.water > ENGINE.water - 0.5, run: () => this.act({ type: 'vehicule', v: id, op: 'eau' }) });
-        out.push(e.lit ? { label: 'Éteindre le foyer', run: () => this.act({ type: 'vehicule', v: id, op: 'eteindre' }) } : { label: 'Allumer le foyer', disabled: e.fuel <= 0, run: () => this.act({ type: 'vehicule', v: id, op: 'allumer' }) });
+        vehOut.push({ label: 'Charger le foyer (une bûche ou un bâton)', run: () => this.act({ type: 'vehicule', v: id, op: 'bois' }) });
+        vehOut.push({ label: 'Verser de l’eau dans la chaudière (un pot)', disabled: e.water > ENGINE.water - 0.5, run: () => this.act({ type: 'vehicule', v: id, op: 'eau' }) });
+        vehOut.push(e.lit ? { label: 'Éteindre le foyer', run: () => this.act({ type: 'vehicule', v: id, op: 'eteindre' }) } : { label: 'Allumer le foyer', disabled: e.fuel <= 0, run: () => this.act({ type: 'vehicule', v: id, op: 'allumer' }) });
       }
       if (!driving) {
         for (const sd of f.slots) {
           const p = partAt(veh, sd.id);
           const where = SLOT_LABELS[sd.id] ?? sd.id;
           if (!p) {
-            out.push({ label: `Installer ${partName(sd.part, 'un')} (${where})`, run: () => this.act({ type: 'vehicule', v: id, op: 'installer', slot: sd.id }) });
+            vehOut.push({ label: `Installer ${partName(sd.part, 'un')} (${where})`, run: () => this.act({ type: 'vehicule', v: id, op: 'installer', slot: sd.id }) });
             continue;
           }
-          if (p.broken || p.wear >= 0.25) out.push({ label: `Réparer ${partName(p.kind)} (${where}) : ${PARTS[p.kind].repair.map(needLabel).join(', ')}`, run: () => this.act({ type: 'vehicule', v: id, op: 'reparer', slot: sd.id }) });
-          out.push({ label: `Retirer ${partName(p.kind)} (${where})`, run: () => this.act({ type: 'vehicule', v: id, op: 'retirer', slot: sd.id }) });
+          if (p.broken || p.wear >= 0.25) vehOut.push({ label: `Réparer ${partName(p.kind)} (${where}) : ${PARTS[p.kind].repair.map(needLabel).join(', ')}`, run: () => this.act({ type: 'vehicule', v: id, op: 'reparer', slot: sd.id }) });
+          vehOut.push({ label: `Retirer ${partName(p.kind)} (${where})`, run: () => this.act({ type: 'vehicule', v: id, op: 'retirer', slot: sd.id }) });
         }
-        if (veh.hp < f.hp) out.push({ label: `Réparer ${f.medium === 'eau' ? 'la coque' : 'le châssis'} (${FRAME_REPAIR.needs.map(needLabel).join(', ')})`, run: () => this.act({ type: 'vehicule', v: id, op: 'reparer' }) });
+        if (veh.hp < f.hp) vehOut.push({ label: `Réparer ${f.medium === 'eau' ? 'la coque' : 'le châssis'} (${FRAME_REPAIR.needs.map(needLabel).join(', ')})`, run: () => this.act({ type: 'vehicule', v: id, op: 'reparer' }) });
       }
     }
+    if (this.otherVehicle) out.unshift(...vehOut);
+    else out.push(...vehOut);
     const mach = this.otherMachine();
     if (mach && this.otherProp && mach.kind === 'machine_fixe' && mach.m.engine) {
       const prop = this.otherProp;

@@ -6,7 +6,7 @@
 import { WATER_LEVEL } from './constants';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, type PhysicsWorld, RAPIER, VEHICLE_GROUPS, interactionGroups } from './physics';
 import { chunkCoord, type Terrain } from './terrain';
-import { FRAMES, type VehicleState, type WheelInfo, enginePower, massProps, onChocks, toWorld, uprightness, waterDrive, wheelsOf } from './vehicles';
+import { FRAMES, type VehicleState, type WheelInfo, enginePower, massProps, onChocks, railBoxes, toWorld, uprightness, waterDrive, wheelsOf } from './vehicles';
 
 /** Commande du conducteur : accélérer (−1 à 1), tourner (−1 gauche à 1 droite), freiner. */
 export interface DriveInput {
@@ -104,7 +104,7 @@ export class VehiclePhysics {
       .setAdditionalMassProperties(mp.mass, mp.com, mp.inertia, { x: 0, y: 0, z: 0, w: 1 })
       .setLinearDamping(f.medium === 'eau' ? 0.05 : 0.08)
       .setAngularDamping(f.medium === 'eau' ? 0.9 : 0.4)
-      .setCcdEnabled(true)
+      .setCcdEnabled(false)
       .setCanSleep(true);
     const body = world.createRigidBody(desc);
     if (keepVel && !chocks) {
@@ -124,6 +124,12 @@ export class VehiclePhysics {
     );
     colliders.push(c);
     this.byHandle.set(c.handle, v.id);
+    // Ridelles : le chargement posé sur le plateau ne glisse ni ne roule dehors.
+    for (const b of railBoxes(v.frame)) {
+      const rc = world.createCollider(RAPIER.ColliderDesc.cuboid(b.hx, b.hy, b.hz).setTranslation(b.x, b.y, b.z).setDensity(0).setFriction(0.6).setCollisionGroups(VEHICLE_GROUPS), body);
+      colliders.push(rc);
+      this.byHandle.set(rc.handle, v.id);
+    }
     // Machine à vapeur : un volume solide sur le plateau (on le heurte).
     const engine = v.parts.find((p) => p.kind === 'machine_vapeur');
     const slot = engine ? f.slots.find((s) => s.id === engine.slot) : undefined;
