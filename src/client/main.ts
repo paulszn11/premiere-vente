@@ -16,6 +16,17 @@ import { PRESET_LABELS, PRESET_ORDER, type Settings, effectiveQuality, loadSetti
 import { BagView } from './ui/bag-view';
 import { SoundSystem } from './audio/sound';
 import { SPECIES, type SpeciesId } from '../shared/creatures';
+import { type FrameKind, uprightness } from '../shared/vehicles';
+
+/** Outils de test : véhicules prêts à l'emploi. */
+const VEHICLE_TOOLS: Array<{ id: string; label: string; frame: FrameKind; steam: boolean }> = [
+  { id: 'chariot_bras', label: 'Chariot à bras', frame: 'chariot_bras', steam: false },
+  { id: 'chariot_vapeur', label: 'Chariot à vapeur (machine en pression)', frame: 'chariot', steam: true },
+  { id: 'chariot', label: 'Chariot sans machine', frame: 'chariot', steam: false },
+  { id: 'radeau', label: 'Radeau (à la pagaie)', frame: 'radeau', steam: false },
+  { id: 'radeau_vapeur', label: 'Radeau à vapeur (roue à aubes)', frame: 'radeau', steam: true },
+  { id: 'pirogue', label: 'Pirogue (mukoro)', frame: 'pirogue', steam: false },
+];
 import { renderSettings } from './ui/settings-panel';
 
 type ScreenName = 'loading' | 'home' | 'game' | 'pause' | 'settings' | 'bench';
@@ -180,6 +191,18 @@ async function boot(): Promise<void> {
           show('pause');
           toast(ok ? 'Vous nagez au-dessus des eaux profondes du lac. Nagez, et écoutez…' : 'Impossible.');
         },
+        vehicles: VEHICLE_TOOLS.map((v) => ({ id: v.id, label: v.label })),
+        onVehicle: (id: string) => {
+          const t = VEHICLE_TOOLS.find((v) => v.id === id);
+          const made = t ? (session?.spawnVehicle(t.frame, t.steam) ?? null) : null;
+          show('pause');
+          toast(made ? `${t!.label} devant vous : Prendre pour l’ouvrir, puis monter ou pousser.` : 'Impossible ici.');
+        },
+        onVehicleKit: () => {
+          session?.giveVehicleKit();
+          show('pause');
+          toast('Pièces, fer et outils reçus ; tous les plans de véhicules et de machines sont connus (onglet « Construire »).');
+        },
       };
     },
   };
@@ -237,6 +260,7 @@ async function boot(): Promise<void> {
   const dreadEl = $('#dread');
   const eyelids = $('#eyelids');
   const gestureEl = $('#gesture');
+  const vehicleEl = $('#vehicle-hud');
   const downEl = $('#down-screen');
   const giveUpBtn = $<HTMLButtonElement>('#btn-give-up');
   const wakeBtn = $<HTMLButtonElement>('#btn-wake');
@@ -267,6 +291,8 @@ async function boot(): Promise<void> {
       (gestureEl.querySelector('.label') as HTMLElement).textContent = hud.gesture.label;
       (gestureEl.querySelector('.bar span') as HTMLElement).style.transform = `scaleX(${hud.gesture.progress.toFixed(3)})`;
     }
+    vehicleEl.hidden = !hud.vehicle;
+    if (hud.vehicle && vehicleEl.textContent !== hud.vehicle) vehicleEl.textContent = hud.vehicle;
     const wasDown = !downEl.hidden;
     downEl.hidden = !hud.down;
     // À terre ou mort : le curseur est libéré pour pouvoir cliquer « Abandonner ».
@@ -580,6 +606,10 @@ async function boot(): Promise<void> {
       session.yaw = Math.atan2(dx, dz);
       session.pitch = Math.atan2(eyeY - y, Math.hypot(dx, dz));
     },
+    /** Incline le regard vers le bas (tests, captures). */
+    lookDown: (pitch: number) => {
+      if (session) session.pitch = pitch;
+    },
     /** Place le joueur à des coordonnées précises (tests). */
     place: (x: number, z: number) => {
       const sim = session?.sim;
@@ -658,6 +688,11 @@ async function boot(): Promise<void> {
       );
     },
     spawnCreatures: (sp: string, distance = 25, n?: number) => session?.spawnCreatures(sp as SpeciesId, distance, n) ?? 0,
+    spawnVehicle: (frame: string, steam = false) => session?.spawnVehicle(frame as FrameKind, steam) ?? null,
+    vehicleKit: () => session?.giveVehicleKit() ?? 0,
+    vehicles: () =>
+      session?.sim?.vehicles.map((v) => ({ id: v.id, frame: v.frame, x: v.x, y: v.y, z: v.z, hp: v.hp, parts: v.parts.map((p) => ({ ...p })), engine: { ...v.engine }, upright: uprightness(v) })) ?? [],
+    driving: () => (session?.sim?.driving ? { ...session.sim.driving, speed: session.sim.lastDrive?.speed ?? 0, effort: session.sim.effortW } : null),
     lakeTest: () => session?.lakeTest() ?? false,
     stopBuild: () => session?.stopBuild(),
     bag: () => bagView.debug(),

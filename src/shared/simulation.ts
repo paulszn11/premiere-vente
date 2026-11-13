@@ -417,6 +417,8 @@ export class LocalSimulation {
   private readonly machineLoad = new Map<string, number>();
   /** Effort du joueur qui pousse ou pagaie (W, lissé, pour l'affichage). */
   effortW = 0;
+  /** Pose des véhicules avant le dernier pas (pour interpoler l'affichage). */
+  readonly vehiclePrev = new Map<string, { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number }>();
   private readonly collider: RAPIER.Collider;
   private lastDrownEvent = -1e9;
   private yaw = 0;
@@ -3392,6 +3394,7 @@ export class LocalSimulation {
     }
     this.phys.step(TICK_DT);
     for (const v of this.vehicles) {
+      this.vehiclePrev.set(v.id, { x: v.x, y: v.y, z: v.z, qx: v.qx, qy: v.qy, qz: v.qz, qw: v.qw });
       if (!this.vphys.has(v.id)) continue;
       const x0 = v.x;
       const y0 = v.y;

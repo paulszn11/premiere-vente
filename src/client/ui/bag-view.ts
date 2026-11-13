@@ -4,11 +4,13 @@
 
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
 import type { BuildRef, PlayerAction } from '../../shared/actions';
-import { INSTALL_PLANS, type Need, PIECE_PLANS, PLANS, PLAN_IDS, type PlanId, maxHp, needLabel, pieceTransform, repairNeeds, stepsOf } from '../../shared/building';
+import { INSTALL_PLANS, type Need, PIECE_PLANS, PLANS, PLAN_IDS, type PlanId, VEHICLE_PLANS, maxHp, needLabel, pieceTransform, repairNeeds, stepsOf } from '../../shared/building';
+import { MACHINES, RUNS_AT } from '../../shared/machines';
+import { ENGINE, FRAMES, FRAME_REPAIR, PARTS, partAt, partName, uprightness, vehicleName } from '../../shared/vehicles';
 import { RECIPES, RECIPE_IDS, canDismantle, conditionOf, experimentHint, improveOptions, repairOptions, skillLevel } from '../../shared/crafting';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
 import { ITEMS, type ItemId, itemName } from '../../shared/items';
-import { ITEM_OF_PROP, PROP_LABELS } from '../../shared/props';
+import { ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, PROP_LABELS } from '../../shared/props';
 import { type LocalSimulation, TOOL_NEEDS, type Tone } from '../../shared/simulation';
 import {
   INJURY_LABELS,
@@ -42,6 +44,19 @@ interface ActionButton {
 }
 
 type Tab = 'sac' | 'corps' | 'fabriquer' | 'construire' | 'carnet';
+/** Emplacements des pièces d'un véhicule. */
+const SLOT_LABELS: Record<string, string> = {
+  roue_avg: 'avant gauche',
+  roue_avd: 'avant droite',
+  roue_arg: 'arrière gauche',
+  roue_ard: 'arrière droite',
+  essieu_av: 'avant',
+  essieu_ar: 'arrière',
+  machine: 'sur le plateau',
+  aubes: 'à l’arrière',
+  gouvernail: 'à l’arrière',
+};
+
 const TABS: Tab[] = ['sac', 'corps', 'fabriquer', 'construire', 'carnet'];
 type ListKey = 'item' | 'body' | 'zone' | 'bench' | 'craft' | 'plans';
 
@@ -75,6 +90,10 @@ export class BagView {
   private otherProp: string | null = null;
   /** Pièce de construction ou chantier ouvert (E dessus). */
   private otherBuild: BuildRef | null = null;
+  /** Phase 7 : véhicule ouvert (pièces, chaudière, conduite). */
+  private otherVehicle: string | null = null;
+  /** Moment d'ouverture : le toucher qui ouvre le panneau ne doit pas cliquer le bouton apparu sous le doigt. */
+  private openedAt = 0;
   private selected: BagSlot | null = { zone: 'poche', index: 0 };
   private zone: Zone | null = null;
   private tab: Tab = 'sac';
@@ -148,7 +167,9 @@ export class BagView {
     const etabli = otherProp ? sim.props.defOf(otherProp)?.kind === 'etabli' : false;
     this.otherProp = etabli ? null : otherProp;
     this.otherBuild = build;
+    this.otherVehicle = null;
     this.open_ = true;
+    this.openedAt = performance.now();
     this.deps.root.hidden = false;
     this.selected = this.otherProp ? { zone: 'autre-poche', index: 0 } : { zone: 'poche', index: 0 };
     if (this.otherProp && !sim.props.container(this.otherProp)?.pockets.length) this.selected = { zone: 'autre-sac', index: 0 };
@@ -156,11 +177,18 @@ export class BagView {
     this.setTab(etabli ? 'fabriquer' : 'sac');
   }
 
+  /** Ouvre le panneau d'un véhicule (et le sac). */
+  openVehicle(sim: LocalSimulation, id: string): void {
+    this.open(sim, null, null);
+    this.otherVehicle = id;
+  }
+
   close(): void {
     this.open_ = false;
     this.sim = null;
     this.otherProp = null;
     this.otherBuild = null;
+    this.otherVehicle = null;
     this.deps.root.hidden = true;
     this.badges.textContent = '';
   }
@@ -222,6 +250,29 @@ export class BagView {
     if (!def?.fire || !pos) return null;
     if (Math.hypot(pos.x - sim.state.x, pos.z - sim.state.z) > 3.4) return null;
     return { def, fire: def.fire };
+  }
+
+  /** Véhicule ouvert, à portée (ou conduit). */
+  private openedVehicle() {
+    const sim = this.sim;
+    if (!sim) return null;
+    const id = this.otherVehicle ?? sim.driving?.v ?? null;
+    const v = id ? sim.vehicle(id) : undefined;
+    if (!v) return null;
+    const f = FRAMES[v.frame];
+    if (sim.driving?.v !== v.id && Math.hypot(v.x - sim.state.x, v.z - sim.state.z) > Math.hypot(f.half.x, f.half.z) + 3.6) return null;
+    return v;
+  }
+
+  /** Machine ouverte (à portée). */
+  private otherMachine() {
+    const sim = this.sim;
+    if (!sim || !this.otherProp) return null;
+    const def = sim.props.defOf(this.otherProp);
+    const pos = sim.props.position(this.otherProp);
+    if (!def || !MACHINE_KINDS.has(def.kind) || !pos) return null;
+    if (Math.hypot(pos.x - sim.state.x, pos.z - sim.state.z) > 3.6) return null;
+    return { def, kind: def.kind as MachinePropKind, m: def.machine ?? { power: 0 } };
   }
 
   private otherContainer() {
@@ -379,7 +430,7 @@ export class BagView {
         return all.length ? ` (${all.join(', ')})` : '';
       };
       const lacks = (needs: Array<[ItemId, number]>) => needs.some(([item, n]) => sim.available(item) < n);
-      for (const o of repairOptions(st)) {
+      for (const o of repairOptions(st, sim.meuleNearby())) {
         out.push({
           label: `Réparer : ${o.label.toLowerCase()}${needText(o.needs, [])}`,
           disabled: lacks(o.needs) || (o.tool !== null && !sim.hasTool(o.tool)),
@@ -428,6 +479,54 @@ export class BagView {
         const from: Slot = { zone: s.zone === 'autre-poche' ? 'poche' : 'sac', index: s.index };
         out.push({ label: 'Prendre', run: () => this.act({ type: 'prendre_dans', prop, from }) });
       }
+    }
+    const veh = this.openedVehicle();
+    if (veh) {
+      const id = veh.id;
+      const f = FRAMES[veh.frame];
+      const driving = sim.driving?.v === id;
+      const board = (op: 'monter' | 'pousser') => () => {
+        const r = sim.act({ type: 'vehicule', v: id, op });
+        if (r.message) this.deps.onMessage(r.message, r.ok ? 'info' : 'alerte');
+        if (r.ok && sim.driving) this.deps.onClose();
+      };
+      if (driving) out.push({ label: sim.driving!.mode === 'pousse' ? 'Lâcher les brancards' : 'Descendre', run: () => this.act({ type: 'vehicule', v: id, op: 'descendre' }) });
+      else if (uprightness(veh) < 0.6) out.push({ label: `Redresser ${vehicleName(veh)}`, run: () => this.act({ type: 'vehicule', v: id, op: 'redresser' }) });
+      else if (f.medium === 'eau') {
+        out.push({ label: 'Monter à bord', run: board('monter') });
+        out.push({ label: 'Pousser le bateau', run: () => this.act({ type: 'vehicule', v: id, op: 'pousser' }) });
+      } else {
+        if (f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur')) out.push({ label: 'Monter sur le siège', run: board('monter') });
+        out.push({ label: 'Pousser', run: board('pousser') });
+      }
+      if (veh.parts.some((p) => p.kind === 'machine_vapeur')) {
+        const e = veh.engine;
+        out.push({ label: 'Charger le foyer (une bûche ou un bâton)', run: () => this.act({ type: 'vehicule', v: id, op: 'bois' }) });
+        out.push({ label: 'Verser de l’eau dans la chaudière (un pot)', disabled: e.water > ENGINE.water - 0.5, run: () => this.act({ type: 'vehicule', v: id, op: 'eau' }) });
+        out.push(e.lit ? { label: 'Éteindre le foyer', run: () => this.act({ type: 'vehicule', v: id, op: 'eteindre' }) } : { label: 'Allumer le foyer', disabled: e.fuel <= 0, run: () => this.act({ type: 'vehicule', v: id, op: 'allumer' }) });
+      }
+      if (!driving) {
+        for (const sd of f.slots) {
+          const p = partAt(veh, sd.id);
+          const where = SLOT_LABELS[sd.id] ?? sd.id;
+          if (!p) {
+            out.push({ label: `Installer ${partName(sd.part, 'un')} (${where})`, run: () => this.act({ type: 'vehicule', v: id, op: 'installer', slot: sd.id }) });
+            continue;
+          }
+          if (p.broken || p.wear >= 0.25) out.push({ label: `Réparer ${partName(p.kind)} (${where}) : ${PARTS[p.kind].repair.map(needLabel).join(', ')}`, run: () => this.act({ type: 'vehicule', v: id, op: 'reparer', slot: sd.id }) });
+          out.push({ label: `Retirer ${partName(p.kind)} (${where})`, run: () => this.act({ type: 'vehicule', v: id, op: 'retirer', slot: sd.id }) });
+        }
+        if (veh.hp < f.hp) out.push({ label: `Réparer ${f.medium === 'eau' ? 'la coque' : 'le châssis'} (${FRAME_REPAIR.needs.map(needLabel).join(', ')})`, run: () => this.act({ type: 'vehicule', v: id, op: 'reparer' }) });
+      }
+    }
+    const mach = this.otherMachine();
+    if (mach && this.otherProp && mach.kind === 'machine_fixe' && mach.m.engine) {
+      const prop = this.otherProp;
+      const e = mach.m.engine;
+      out.push({ label: 'Charger le foyer (une bûche ou un bâton)', run: () => this.act({ type: 'machine', prop, op: 'bois' }) });
+      out.push({ label: 'Verser de l’eau dans la chaudière (un pot)', disabled: e.water > ENGINE.water - 0.5, run: () => this.act({ type: 'machine', prop, op: 'eau' }) });
+      out.push(e.lit ? { label: 'Éteindre le foyer', run: () => this.act({ type: 'machine', prop, op: 'eteindre' }) } : { label: 'Allumer le foyer', disabled: e.fuel <= 0, run: () => this.act({ type: 'machine', prop, op: 'allumer' }) });
+      if (mach.m.part && (mach.m.part.broken || mach.m.part.wear >= 0.25)) out.push({ label: `Réparer la machine (${PARTS.machine_vapeur.repair.map(needLabel).join(', ')})`, run: () => this.act({ type: 'machine', prop, op: 'reparer' }) });
     }
     const furnace = this.otherFurnace();
     if (furnace && this.otherProp) {
@@ -530,6 +629,7 @@ export class BagView {
       el.disabled = !!b.disabled;
       // Le bouton exécute toujours l'action la plus récente à sa place (état à jour).
       el.addEventListener('click', () => {
+        if (performance.now() - this.openedAt < 450) return;
         const cur = this.lists[key][i];
         if (cur && !cur.disabled) cur.run();
       });
@@ -563,6 +663,32 @@ export class BagView {
     if (furnace) {
       const f = furnace.f;
       title = `Bas fourneau ${f.lit ? `allumé (${Math.ceil(f.fuel / 60)} min de bois, chaleur ${Math.round(f.heat)} %)` : `éteint (${Math.ceil(f.fuel / 60)} min de bois)`} · minerai ${f.ore}/4 · fer ${Math.round((f.work / 24) * 100)} %${f.blooms ? ` · ${f.blooms} loupe prête` : ''} · ${title}`;
+    }
+    const veh = this.openedVehicle();
+    if (veh) {
+      const f = FRAMES[veh.frame];
+      const slots = f.slots.length;
+      const parts = veh.parts.length;
+      const broken = veh.parts.filter((p) => p.broken).length;
+      const worn = veh.parts.length ? Math.round((veh.parts.reduce((a, p) => a + p.wear, 0) / veh.parts.length) * 100) : 0;
+      let line = `${cap(f.label)} · état ${Math.round((veh.hp / f.hp) * 100)} %`;
+      if (slots) line += ` · pièces ${parts}/${slots}${broken ? ` (${broken} cassée${broken > 1 ? 's' : ''})` : ''}${parts ? ` · usure moyenne ${worn} %` : ''}`;
+      if (veh.parts.some((p) => p.kind === 'machine_vapeur')) {
+        const e = veh.engine;
+        line += ` · machine : foyer ${e.lit ? 'allumé' : 'éteint'} (${Math.round(e.fuel / 60)} min de bois), pression ${Math.round(e.pressure * 100)} %, eau ${Math.round(e.water)}/${ENGINE.water} L`;
+      }
+      line += ` · ${Math.round(veh.odo)} m parcourus`;
+      title = `${line} · ${title}`;
+    }
+    const mach = this.otherMachine();
+    if (mach) {
+      const def = MACHINES[mach.kind];
+      const m = mach.m;
+      let line = cap(def.label);
+      if (def.source) line += ` · ${Math.round(m.power)} W${mach.kind === 'roue_eau' && m.power <= 0 ? ' (pas de courant ici)' : ''}`;
+      else line += m.power >= RUNS_AT ? ` · tourne (${Math.round(m.power * 100)} % de sa puissance)` : ` · à l’arrêt : il faut une source d’énergie à moins de 6 m (${def.demand} W)`;
+      if (m.engine) line += ` · foyer ${m.engine.lit ? 'allumé' : 'éteint'} (${Math.round(m.engine.fuel / 60)} min), pression ${Math.round(m.engine.pressure * 100)} %, eau ${Math.round(m.engine.water)} L${m.part?.broken ? ' · CASSÉE' : ''}`;
+      title = `${line} · ${title}`;
     }
     const ob = this.openedBuild();
     if (ob) {
@@ -639,7 +765,7 @@ export class BagView {
   /** Plans connus, dans l'ordre : pièces puis installations. */
   private knownPlans(): PlanId[] {
     const k = this.sim!.knowledge.plans;
-    return [...PIECE_PLANS, ...INSTALL_PLANS].filter((id) => k.includes(id));
+    return [...PIECE_PLANS, ...INSTALL_PLANS, ...VEHICLE_PLANS].filter((id) => k.includes(id));
   }
 
   /** Onglet « Construire » : les plans connus, leurs matériaux, et un bouton pour tracer chacun. */

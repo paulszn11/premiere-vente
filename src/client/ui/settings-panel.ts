@@ -23,6 +23,9 @@ export interface SettingsPanelDeps {
         species: Array<{ id: string; label: string }>;
         onSpawn: (sp: string) => void;
         onLake: () => void;
+        vehicles: Array<{ id: string; label: string }>;
+        onVehicle: (id: string) => void;
+        onVehicleKit: () => void;
       } | null)
     | undefined;
 }
@@ -78,7 +81,10 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     <button type="button" id="set-buildkit">Recevoir des matériaux de construction (posés à côté de vous)</button>
     <label class="row"><span>Créatures</span><select id="set-species">${tools.species.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
     <button type="button" id="set-spawn">Faire apparaître à 25 m devant vous</button>
-    <button type="button" id="set-lake">Nager au-dessus des eaux profondes du lac (là où rôde la créature)</button>`
+    <button type="button" id="set-lake">Nager au-dessus des eaux profondes du lac (là où rôde la créature)</button>
+    <label class="row"><span>Véhicule</span><select id="set-vehicle">${tools.vehicles.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
+    <button type="button" id="set-vehicle-go">Faire apparaître ce véhicule devant vous (prêt à rouler ou à naviguer)</button>
+    <button type="button" id="set-vehicle-kit">Recevoir des pièces et des outils pour les véhicules (et tous les plans)</button>`
     : '';
 
   deps.root.innerHTML = `
@@ -137,6 +143,11 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     if (sel && tools) tools.onSpawn(sel.value);
   });
   root.querySelector('#set-lake')?.addEventListener('click', () => tools?.onLake());
+  root.querySelector('#set-vehicle-go')?.addEventListener('click', () => {
+    const sel = root.querySelector<HTMLSelectElement>('#set-vehicle');
+    if (sel && tools) tools.onVehicle(sel.value);
+  });
+  root.querySelector('#set-vehicle-kit')?.addEventListener('click', () => tools?.onVehicleKit());
   live('set-volume', pct, 'volume');
   live('set-scale', pct, 'renderScale');
   live('set-fov', (v) => `${v}°`, 'fov');

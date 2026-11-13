@@ -546,6 +546,22 @@ input[type='range'] {
   margin-top: 4px;
 }
 
+/* Phase 7 : tableau de bord du véhicule conduit (vitesse, chaudière, effort). */
+#vehicle-hud {
+  position: absolute;
+  left: 50%;
+  bottom: calc(46px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(20, 16, 10, 0.55);
+  font-size: 0.85rem;
+  text-align: center;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+
 #gesture .bar span {
   background: #e6ece8;
 }

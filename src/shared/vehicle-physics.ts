@@ -344,11 +344,12 @@ export class VehiclePhysics {
     return { vx: l.x, vy: l.y, vz: l.z, spin: lv.body.angvel().y };
   }
 
-  /** Rotation des roues (affichage). */
-  wheelSpin(id: string): number[] {
+  /** Roues pour l'affichage : rotation, braquage, longueur de suspension. */
+  wheelStates(id: string): Array<{ slot: string; spin: number; steer: number; susp: number }> {
     const lv = this.live.get(id);
     if (!lv?.ctl) return [];
-    return lv.wheels.map((_, i) => lv.ctl!.wheelRotation(i) ?? 0);
+    const ctl = lv.ctl;
+    return lv.wheels.map((w, i) => ({ slot: w.slot, spin: ctl.wheelRotation(i) ?? 0, steer: ctl.wheelSteering(i) ?? 0, susp: ctl.wheelSuspensionLength(i) ?? 0 }));
   }
 
   /** Remet le véhicule d'aplomb (renversé, chaviré), en gardant son cap. */

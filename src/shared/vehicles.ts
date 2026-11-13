@@ -108,7 +108,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     hp: 500,
     half: { x: 0.75, y: 0.1, z: 1.5 },
     cy: 0.95,
-    seat: { x: 0, y: 1.05, z: -1.1 },
+    seat: { x: 0, y: 1.3, z: -1.15 },
     push: { x: 0, z: -2.1 },
     cargo: { volume: 300, maxKg: 600, x: 0, y: 1.3, z: -0.25 },
     slots: [

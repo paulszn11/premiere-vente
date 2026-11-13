@@ -11,6 +11,8 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
 import type { Scene } from '@babylonjs/core/scene';
 import { type BuildState, GRID, LEVEL_H, PLANS, type Piece, type Placement, type PlanId, isDone, pieceTransform, stiltPosts, wallThickness } from '../../shared/building';
 import { INSTALL_HALF, type InstallPropKind } from '../../shared/props';
+import { FRAME_KINDS, type FrameKind } from '../../shared/vehicles';
+import { buildFrameMesh } from './vehicle-view';
 import { type Part, box, buildItemMesh, can, meshFromParts, rod } from './item-meshes';
 
 const WOOD: [number, number, number] = [0.47, 0.34, 0.22];
@@ -173,6 +175,8 @@ export class StructureView {
   private readonly ghost = new Map<TemplateKey, Mesh>();
   private readonly preview = new Map<string, Mesh>();
   private readonly siteMeshes = new Map<InstallPropKind, Mesh>();
+  /** Chantiers de véhicules (châssis en cours). */
+  private readonly frameSites = new Map<FrameKind, Mesh>();
   private readonly ghostMat: StandardMaterial;
   private readonly okMat: StandardMaterial;
   private readonly badMat: StandardMaterial;
@@ -214,6 +218,12 @@ export class StructureView {
       m.isVisible = false;
       m.alwaysSelectAsActiveMesh = true;
       this.siteMeshes.set(kind, m);
+    }
+    for (const frame of FRAME_KINDS) {
+      const m = buildFrameMesh(`chantier ${frame}`, frame, scene, this.ghostMat);
+      m.isVisible = false;
+      m.alwaysSelectAsActiveMesh = true;
+      this.frameSites.set(frame, m);
     }
     const flameMat = new StandardMaterial('incendie', scene);
     flameMat.emissiveColor = new Color3(1, 0.5, 0.1);
@@ -301,6 +311,18 @@ export class StructureView {
       mesh.thinInstanceSetBuffer('matrix', buf, 16, true);
       mesh.isVisible = true;
     }
+    // Chantiers de véhicules : le châssis, en transparence.
+    for (const [frame, mesh] of this.frameSites) {
+      const list = bs.sites.filter((x) => PLANS[x.plan].vehicle === frame && Math.hypot(x.x - camX, x.z - camZ) < 300);
+      if (!list.length) {
+        mesh.isVisible = false;
+        continue;
+      }
+      const buf = new Float32Array(list.length * 16);
+      list.forEach((x, i) => writeMatrix(buf, i, x.x, x.y, x.z, x.yaw));
+      mesh.thinInstanceSetBuffer('matrix', buf, 16, true);
+      mesh.isVisible = true;
+    }
   }
 
   /** Fantôme du plan qu'on trace (null : rien). */
@@ -310,6 +332,18 @@ export class StructureView {
     const def = PLANS[pl.plan];
     const mat = pl.ok ? this.okMat : this.badMat;
     const w = pl.world;
+    if (def.vehicle) {
+      const key = `vehicule:${def.vehicle}:${pl.ok ? 'ok' : 'non'}`;
+      let m = this.preview.get(key);
+      if (!m) {
+        m = buildFrameMesh(`plan ${key}`, def.vehicle, this.scene, mat);
+        this.preview.set(key, m);
+      }
+      m.position.set(w.x, w.y, w.z);
+      m.rotation.set(0, w.yaw, 0);
+      m.isVisible = true;
+      return;
+    }
     if (def.install) {
       const key = `install:${def.install}:${pl.ok ? 'ok' : 'non'}`;
       let m = this.preview.get(key);
@@ -337,7 +371,7 @@ export class StructureView {
   }
 
   dispose(): void {
-    for (const m of [...this.solid.values(), ...this.ghost.values(), ...this.preview.values(), ...this.siteMeshes.values()]) m.dispose();
+    for (const m of [...this.solid.values(), ...this.ghost.values(), ...this.preview.values(), ...this.siteMeshes.values(), ...this.frameSites.values()]) m.dispose();
     this.flames.dispose();
     this.ghostMat.dispose();
     this.okMat.dispose();

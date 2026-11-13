@@ -31,6 +31,10 @@ import { TerrainJobs } from '../render/terrain-jobs';
 import { WorldView } from '../render/world-view';
 import { StructureView } from '../render/structure-view';
 import { CreatureView } from '../render/creature-view';
+import { VehicleView } from '../render/vehicle-view';
+import { ENGINE, FRAMES, type FrameKind, type PartKind, PARTS, enginePower, waterDrive, yawOf } from '../../shared/vehicles';
+import { MACHINES, RUNS_AT } from '../../shared/machines';
+import { MACHINE_KINDS, type MachinePropKind } from '../../shared/props';
 import type { SoundSystem } from '../audio/sound';
 import { SPECIES, type SpeciesId } from '../../shared/creatures';
 import { inLakeDomain } from '../../shared/fauna';
@@ -66,6 +70,8 @@ export interface HudState {
   /** Phase 6 : éclair rouge après une morsure (0 à 1), assombrissement quand le danger rôde (0 à 1). */
   strike: number;
   dread: number;
+  /** Phase 7 : tableau de bord du véhicule conduit (vitesse, chaudière, effort), ou null. */
+  vehicle: string | null;
 }
 
 export interface SessionOptions {
@@ -133,6 +139,9 @@ export class GameSession {
   private readonly lights: PointLight[] = [];
   /** Créatures, carcasses, traces de sang (phase 6). */
   readonly creatureView: CreatureView;
+  readonly vehicleView: VehicleView;
+  /** Cap du véhicule conduit au cadre précédent : la vue tourne avec lui. */
+  private lastVehicleYaw: number | null = null;
   private strikeAt = -1e9;
   private lastRustle = 0;
   private dread = 0;
@@ -216,6 +225,7 @@ export class GameSession {
     smat.specularColor = new Color3(0, 0, 0);
     this.structures = new StructureView(this.scene, smat, (x, z) => terrain.heightAt(x, z));
     this.creatureView = new CreatureView(this.scene);
+    this.vehicleView = new VehicleView(this.scene, smat);
     // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
     opts.onBuildMode?.(false);
     this.applySettings();
@@ -499,6 +509,14 @@ export class GameSession {
     }
     if (steps >= 6) this.acc = 0;
     for (const ev of sim.takeEvents()) this.handleEvent(ev);
+    // Aux commandes d'un véhicule : la vue tourne avec lui (on peut toujours regarder autour).
+    const dv = sim.driving ? sim.vehicle(sim.driving.v) : undefined;
+    if (dv) {
+      const vy = yawOf(dv);
+      if (this.lastVehicleYaw === null) this.yaw = vy;
+      else this.yaw = wrapAngle(this.yaw + wrapAngle(vy - this.lastVehicleYaw));
+      this.lastVehicleYaw = vy;
+    } else this.lastVehicleYaw = null;
 
     const a = this.acc / TICK_DT;
     const p = sim.prev;
@@ -568,6 +586,7 @@ export class GameSession {
     this.structures.setPreview(planning ? sim.previewPlan(this.buildPlan!, this.buildTurn) : null);
     this.updateLights(views, x, camY, z, now);
     this.updateFauna(sim, views, x, camY, z, now, dt);
+    this.vehicleView.update(sim, a, x, z, dt, now);
     this.scene.render();
     if (bag?.isOpen) bag.frame(dt);
     this.lastCpuMs = performance.now() - now;
@@ -603,6 +622,7 @@ export class GameSession {
         down: this.downState(),
         strike: Math.max(0, 1 - (now - this.strikeAt) / 600),
         dread: this.dread,
+        vehicle: this.vehicleHud(sim),
       });
     }
   };
@@ -616,6 +636,11 @@ export class GameSession {
     if (v.state !== 'eveille' || v.posture === 'endormi' || sim.gesture) return null;
     if (v.posture === 'assis') return this.opts.device.touch ? 'Bougez pour vous lever · « Sac » pour dormir' : `${this.key('rest')} : se lever (maintenir : dormir) · bouger : se lever`;
     if (s.mode === MODE_CLIMB) return `${this.key('crouch')} : lâcher · ${this.key('jump')} : sauter en arrière`;
+    if (sim.driving) {
+      const leave = sim.driving.mode === 'pousse' ? 'lâcher' : 'descendre';
+      if (this.opts.device.touch) return `Joystick : avancer et tourner · « Sauter » : freiner · « Prendre » : ${leave}`;
+      return `${this.key('forward')} ${this.key('back')} : avancer, reculer · ${this.key('left')} ${this.key('right')} : tourner · ${this.key('jump')} : freiner · ${this.key('interact')} : ${leave} · ${this.key('bag')} : véhicule`;
+    }
     if (this.buildPlan) {
       const pl = sim.previewPlan(this.buildPlan, this.buildTurn);
       const name = PLANS[this.buildPlan].label.toLowerCase();
@@ -651,6 +676,12 @@ export class GameSession {
     if (t.kind === 'fourneau') {
       const f = sim.props.defOf(t.id)?.furnace;
       return `${this.key('interact')} : bas fourneau (${f?.lit ? `allumé, chaleur ${Math.round(f.heat)} %` : 'éteint'})`;
+    }
+    if (MACHINE_KINDS.has(t.kind)) {
+      const m = sim.props.defOf(t.id)?.machine;
+      const def = MACHINES[t.kind as MachinePropKind];
+      const state = def.source ? `${Math.round(m?.power ?? 0)} W` : (m?.power ?? 0) >= RUNS_AT ? 'tourne' : 'à l’arrêt, sans énergie';
+      return `${this.key('interact')} : ${def.label} (${state})`;
     }
     if (t.fixed) return null;
     if (t.kind === 'corps') return `${this.key('interact')} : fouiller le corps`;
@@ -765,6 +796,73 @@ export class GameSession {
     this.opts.onBagChange?.(true);
   }
 
+  /** Panneau d'un véhicule (pièces, chaudière, conduite), avec le sac. */
+  openVehicle(id: string): void {
+    const sim = this.sim;
+    const bag = this.opts.bag;
+    if (!sim || !bag || sim.vitals.state !== 'eveille' || this.paused || sim.vitals.posture === 'endormi') return;
+    bag.openVehicle(sim, id);
+    this.opts.input.clear();
+    this.opts.onBagChange?.(true);
+  }
+
+  /** Tableau de bord du véhicule conduit. */
+  private vehicleHud(sim: LocalSimulation): string | null {
+    const d = sim.driving;
+    const v = d ? sim.vehicle(d.v) : undefined;
+    if (!d || !v) return null;
+    const f = FRAMES[v.frame];
+    const kmh = Math.round(Math.abs(sim.lastDrive?.speed ?? 0) * 3.6);
+    const out = [`${f.label.charAt(0).toUpperCase()}${f.label.slice(1)} · ${kmh} km/h`];
+    const steam = v.parts.some((p) => p.kind === 'machine_vapeur');
+    if (steam) {
+      const e = v.engine;
+      out.push(`pression ${Math.round(e.pressure * 100)} %`, `eau ${Math.round(e.water)}/${ENGINE.water} L`, e.lit ? `feu ${Math.max(1, Math.ceil(e.fuel / 60))} min` : 'foyer éteint');
+    }
+    const engine = f.medium === 'terre' ? enginePower(v) > 0 : waterDrive(v) && enginePower(v) > 0;
+    if (d.mode === 'pousse' || !engine) out.push(`effort ${Math.round(sim.effortW)} W`);
+    const broken = v.parts.filter((p) => p.broken);
+    if (broken.length) out.push(`${broken.length} pièce${broken.length > 1 ? 's' : ''} cassée${broken.length > 1 ? 's' : ''}`);
+    out.push(`état ${Math.round((v.hp / f.hp) * 100)} %`);
+    return out.join(' · ');
+  }
+
+  /** Outil de test : un véhicule prêt à rouler (ou à naviguer) devant le joueur. */
+  spawnVehicle(frame: FrameKind, steam = false): string | null {
+    const sim = this.sim;
+    if (!sim) return null;
+    const s = sim.state;
+    const f = FRAMES[frame];
+    const d = Math.hypot(f.half.x, f.half.z) + 2;
+    const x = s.x + Math.sin(this.yaw) * d;
+    const z = s.z + Math.cos(this.yaw) * d;
+    const parts: PartKind[] = f.medium === 'terre' ? ['petite_roue', 'roue', 'essieu'] : ['gouvernail'];
+    if (steam) parts.push('machine_vapeur', 'roue_aubes');
+    return sim.spawnVehicle(frame, x, z, this.yaw, { parts, steam });
+  }
+
+  /** Outil de test : de quoi fabriquer et équiper des véhicules (pièces, fer, bois, outils). */
+  giveVehicleKit(): number {
+    const sim = this.sim;
+    if (!sim) return 0;
+    const inv = sim.inventory;
+    if (!inv.bag) inv.bag = [];
+    const tool = (item: ItemStack['item']) => {
+      const st: ItemStack = { item, count: 1 };
+      ensureToolMeta(st, 70);
+      return st;
+    };
+    for (const k of ['petite_roue', 'gouvernail'] as PartKind[]) inv.bag.push({ item: PARTS[k].item, count: k === 'petite_roue' ? 4 : 1 });
+    inv.bag.push(tool('hache_fer'), tool('archet'), tool('couteau_fer'), { item: 'barre_fer', count: 4 }, { item: 'boulons', count: 12 });
+    const pot = tool('pot');
+    pot.w = 1;
+    inv.bag.push(pot);
+    store(inv, { item: 'corde', count: 6 });
+    store(inv, { item: 'clous', count: 24 });
+    for (const p of ['chariot_bras', 'chariot', 'radeau', 'pirogue', 'roue_eau', 'machine_fixe', 'meule', 'soufflet_meca', 'pompe'] as PlanId[]) if (!sim.knowledge.plans.includes(p)) sim.knowledge.plans.push(p);
+    return inv.bag.length;
+  }
+
   closeBag(): void {
     const bag = this.opts.bag;
     if (!bag?.isOpen) return;
@@ -849,6 +947,12 @@ export class GameSession {
         break;
       case 'ouvrir':
         this.openBag(ev.prop || null, ev.build ?? null);
+        break;
+      case 'vehicule':
+        this.openVehicle(ev.v);
+        break;
+      case 'machine':
+        this.openBag(ev.prop);
         break;
       case 'mort':
         this.closeBag();

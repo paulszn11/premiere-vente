@@ -2423,6 +2423,276 @@ async function phase6Scenario(browser) {
   await padCtx.close();
 }
 
+async function phase7Scenario(browser, touchOnly = false) {
+  console.log('\n— Phase 7 : véhicules et machines (ordinateur)');
+  if (!touchOnly) {
+  const ctx = await browser.newContext({ viewport: { width: 1000, height: 560 } });
+  await ctx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const page = await ctx.newPage();
+  const errors = watchErrors(page, 'phase 7');
+  await page.goto(BASE);
+  await startGame(page);
+  await settle(page);
+  const message = () => page.textContent('#message');
+  const driving = () => page.evaluate(() => window.__game.driving());
+  const vehicles = () => page.evaluate(() => window.__game.vehicles());
+  const aimAt = (id, dy = 0.6) =>
+    page.evaluate(([vid, h]) => {
+      const v = window.__game.sim().vehicle(vid);
+      window.__game.lookAt(v.x, v.y + h, v.z);
+    }, [id, dy]);
+  // 1. Plans : chariot à bras et radeau connus d'emblée ; le kit de test apprend les autres.
+  const known0 = await page.evaluate(() => window.__game.sim().knowledge.plans.slice());
+  await page.evaluate(() => window.__game.vehicleKit());
+  await page.evaluate(() => window.__game.openBag());
+  await sleep(400);
+  const allButtons = (await page.evaluate(() => window.__game.bag())).all;
+  await page.evaluate(() => window.__game.closeBag());
+  check(
+    'Plans : chariot à bras et radeau connus d’emblée ; onglet Construire : véhicules et machines',
+    known0.includes('chariot_bras') && known0.includes('radeau') && ['chariot à bras', 'chariot (', 'radeau', 'pirogue', 'roue à eau', 'machine à vapeur fixe', 'meule', 'soufflet mécanique', 'pompe'].every((w) => allButtons.some((b) => b.toLowerCase().includes(`tracer : ${w}`))),
+    allButtons.filter((b) => b.startsWith('Tracer')).length + ' plans',
+  );
+  // 2. Tracer le chariot à bras (fantôme), le chantier, deux étapes : le châssis calé attend ses roues.
+  const ground = await page.evaluate(() => {
+    const s = window.__game.sim().state;
+    const yaw = window.__game.session().yaw;
+    return { x: s.x + Math.sin(yaw) * 3.6, y: window.__game.sim().terrain.heightAt(s.x + Math.sin(yaw) * 3.6, s.z + Math.cos(yaw) * 3.6), z: s.z + Math.cos(yaw) * 3.6 };
+  });
+  await page.evaluate(() => window.__game.startBuild('chariot_bras'));
+  await page.evaluate(([g]) => window.__game.lookAt(g.x, g.y, g.z), [ground]);
+  await sleep(500);
+  const ghostPrompt = await page.textContent('#prompt');
+  await page.click('#game');
+  await sleep(500);
+  const site = await page.evaluate(() => window.__game.sim().build.sites.find((x) => x.plan === 'chariot_bras') ?? null);
+  check('Plan du chariot à bras : le fantôme suit le regard, un clic pose le chantier', !!site, `« ${ghostPrompt} »`);
+  await page.evaluate(() => window.__game.stopBuild());
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.bag.push({ item: 'buche', count: 1, mass: 5, radius: 0.07, length: 0.6 }, { item: 'buche', count: 1, mass: 5, radius: 0.07, length: 0.6 }, { item: 'perche', count: 2 });
+  });
+  if (site) await page.evaluate(([st]) => window.__game.lookAt(st.x, st.y + 0.4, st.z), [site]);
+  await sleep(300);
+  for (let step = 0; step < 2; step++) {
+    await page.keyboard.press('KeyF');
+    await waitFor(page, (n) => (window.__game.sim().build.sites.find((x) => x.plan === 'chariot_bras')?.step ?? 99) > n, step, 15000).catch(() => undefined);
+    await sleep(300);
+  }
+  await sleep(500);
+  let vs = await vehicles();
+  const cart = vs.find((v) => v.frame === 'chariot_bras');
+  check('Chantier en deux étapes (F) : le chariot à bras est terminé, calé, sans roues', !!cart && cart.parts.length === 0, (await message()) ?? '');
+  // 3. Prendre sur le châssis : son panneau ; on installe les quatre petites roues.
+  if (cart) await aimAt(cart.id, 0.55);
+  await sleep(300);
+  await page.keyboard.press('KeyE');
+  await sleep(500);
+  let bag = await page.evaluate(() => window.__game.bag());
+  const panel = bag.open && bag.all.some((b) => b.startsWith('Installer une petite roue'));
+  for (const slot of ['avant gauche', 'avant droite', 'arrière gauche', 'arrière droite']) {
+    await page.evaluate((label) => window.__game.bagRun(label), `Installer une petite roue (${slot})`);
+    await waitFor(page, () => !window.__game.sim().gesture, null, 10000).catch(() => undefined);
+    await sleep(200);
+  }
+  vs = await vehicles();
+  const cart2 = vs.find((v) => v.frame === 'chariot_bras');
+  check('Prendre (E) sur le châssis ouvre son panneau ; quatre petites roues installées', panel && cart2?.parts.length === 4, `${cart2?.parts.length} roues · ${(await message()) ?? ''}`);
+  // 4. Pousser : le joueur prend les brancards, avance (W), le chariot roule devant lui ; E pour lâcher.
+  await page.evaluate(() => window.__game.bagRun('Pousser'));
+  await sleep(300);
+  const d0 = await driving();
+  const p0 = cart2 ? { x: cart2.x, z: cart2.z } : { x: 0, z: 0 };
+  await page.keyboard.down('KeyW');
+  await sleep(3500);
+  const hud = await page.textContent('#vehicle-hud');
+  const hudShown = await page.isVisible('#vehicle-hud');
+  await page.keyboard.up('KeyW');
+  vs = await vehicles();
+  const cart3 = vs.find((v) => v.frame === 'chariot_bras');
+  const moved = cart3 ? Math.hypot(cart3.x - p0.x, cart3.z - p0.z) : 0;
+  const st = (await sess(page)).state;
+  check('Pousser : le joueur derrière les brancards, W fait rouler le chariot ; tableau de bord (vitesse, effort)', d0?.mode === 'pousse' && moved > 2.5 && Math.hypot(st.x - cart3.x, st.z - cart3.z) < 2 && hudShown && /km\/h/.test(hud ?? '') && /effort/.test(hud ?? ''), `${moved.toFixed(1)} m · « ${hud} »`);
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  check('E lâche les brancards', (await driving()) === null);
+  // 5. Chariot à vapeur : on monte sur le siège, la machine l'emmène ; la vue tourne avec lui.
+  const wagon = await page.evaluate(() => window.__game.spawnVehicle('chariot', true));
+  await sleep(800);
+  await aimAt(wagon, 1.0);
+  await sleep(300);
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  bag = await page.evaluate(() => window.__game.bag());
+  const seatBtn = bag.all.includes('Monter sur le siège');
+  await page.evaluate(() => window.__game.bagRun('Monter sur le siège'));
+  await sleep(400);
+  const w0 = (await vehicles()).find((v) => v.id === wagon);
+  await page.keyboard.down('KeyW');
+  await sleep(4000);
+  const fast = (await driving())?.speed ?? 0;
+  const yaw0 = (await sess(page)).yaw;
+  await page.keyboard.down('KeyD');
+  await sleep(1200);
+  await page.keyboard.up('KeyD');
+  const yaw1 = (await sess(page)).yaw;
+  writeFileSync(`${OUT}phase7-chariot.png`, await page.screenshot());
+  await page.keyboard.up('KeyW');
+  await page.keyboard.down('Space');
+  await sleep(1500);
+  await page.keyboard.up('Space');
+  const w1 = (await vehicles()).find((v) => v.id === wagon);
+  const turned = Math.abs(Math.atan2(Math.sin(yaw1 - yaw0), Math.cos(yaw1 - yaw0)));
+  check('Chariot à vapeur : sur le siège, W accélère (machine), D tourne et la vue suit le chariot, Espace freine', seatBtn && fast > 3 && turned > 0.4 && Math.hypot(w1.x - w0.x, w1.z - w0.z) > 10 && (await driving())?.speed < 1, `${fast.toFixed(1)} m/s · virage ${turned.toFixed(2)} rad`);
+  await page.keyboard.press('KeyE');
+  await sleep(500);
+  const out = (await sess(page)).state;
+  const w2 = (await vehicles()).find((v) => v.id === wagon);
+  check('E : on descend à côté du chariot', (await driving()) === null && Math.hypot(out.x - w2.x, out.z - w2.z) > 0.9 && Math.hypot(out.x - w2.x, out.z - w2.z) < 4);
+  // Vue de l'extérieur : on recule de quelques pas et on regarde le chariot (capture).
+  await page.evaluate(([w]) => {
+    const s = window.__game.sim().state;
+    const dx = s.x - w.x;
+    const dz = s.z - w.z;
+    const l = Math.hypot(dx, dz) || 1;
+    window.__game.place(w.x + (dx / l) * 5.5, w.z + (dz / l) * 5.5);
+  }, [w2]);
+  await sleep(600);
+  await page.evaluate(([w]) => window.__game.lookAt(w.x, w.y + 0.9, w.z), [w2]);
+  await sleep(500);
+  writeFileSync(`${OUT}phase7-chariot-dehors.png`, await page.screenshot());
+  // 6. Radeau sur le lac : on monte à bord en nageant, on pagaie (l'endurance baisse).
+  await page.evaluate(() => window.__game.teleport('lac'));
+  await settle(page);
+  const raft = await page.evaluate(() => window.__game.spawnVehicle('radeau', false));
+  await sleep(1500);
+  const r0 = (await vehicles()).find((v) => v.id === raft);
+  const board = await page.evaluate((id) => window.__game.act({ type: 'vehicule', v: id, op: 'monter' }), raft);
+  await sleep(300);
+  const stamina0 = (await sess(page)).state.stamina;
+  await page.keyboard.down('KeyW');
+  await sleep(6000);
+  const hudRaft = await page.textContent('#vehicle-hud');
+  await page.evaluate(() => window.__game.lookDown(0.45));
+  await sleep(300);
+  writeFileSync(`${OUT}phase7-radeau.png`, await page.screenshot());
+  await page.keyboard.up('KeyW');
+  const r1 = (await vehicles()).find((v) => v.id === raft);
+  const stamina1 = (await sess(page)).state.stamina;
+  check('Radeau : il flotte ; on monte à bord depuis l’eau, W pagaie, l’endurance baisse', board?.ok && Math.abs(r0.y) < 0.4 && Math.hypot(r1.x - r0.x, r1.z - r0.z) > 3 && stamina1 < stamina0 - 8, `${board?.message} · ${Math.hypot(r1.x - r0.x, r1.z - r0.z).toFixed(1)} m · endurance ${Math.round(stamina0)} → ${Math.round(stamina1)} · « ${hudRaft} »`);
+  await page.keyboard.press('KeyE');
+  await sleep(400);
+  // 7. Sauvegarde : les véhicules (pièces, chaudière) sont enregistrés.
+  const saved = await page.evaluate(() => window.__game.save());
+  check('Sauvegarde : véhicules enregistrés (pièces, chaudière)', typeof saved === 'string' && saved.includes('"vehicles"') && saved.includes('"machine_vapeur"'));
+  // 8. Outils de test : faire apparaître un véhicule depuis les réglages.
+  const n0 = (await vehicles()).length;
+  await page.keyboard.press('Escape');
+  await waitFor(page, () => window.__game.screen() === 'pause', null, 5000).catch(() => undefined);
+  await page.click('#btn-pause-settings');
+  await sleep(300);
+  await page.selectOption('#set-vehicle', 'pirogue');
+  await page.click('#set-vehicle-go');
+  await sleep(500);
+  const vsAfter = await vehicles();
+  check('Réglages : l’outil de test fait apparaître une pirogue', vsAfter.length === n0 + 1 && vsAfter.some((v) => v.frame === 'pirogue'));
+  check('Aucune erreur dans la console (phase 7)', errors.length === 0, errors.slice(0, 3).join(' | '));
+  await ctx.close();
+  }
+
+  // Téléphone : Prendre sur le chariot, « Pousser », joystick vers l'avant, Prendre pour lâcher.
+  console.log('\n— Phase 7 : téléphone');
+  const tCtx = await browser.newContext({ ...devices['Pixel 7 landscape'] });
+  await tCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), QA_SETTINGS);
+  const tPage = await tCtx.newPage();
+  const tErrors = watchErrors(tPage, 'phase 7 (téléphone)');
+  await tPage.goto(BASE);
+  await startGame(tPage);
+  await settle(tPage);
+  const cdp = await tCtx.newCDPSession(tPage);
+  const tapAt = async (x, y, ms = 120) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(x), y: Math.round(y), id: 7 }] });
+    await sleep(ms);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(250);
+  };
+  const tap = async (sel) => {
+    const r = await tPage.locator(sel).first().boundingBox();
+    await tapAt(r.x + r.width / 2, r.y + r.height / 2);
+  };
+  const tCart = await tPage.evaluate(() => window.__game.spawnVehicle('chariot_bras', false));
+  await sleep(800);
+  await tPage.evaluate((id) => {
+    const v = window.__game.sim().vehicle(id);
+    window.__game.lookAt(v.x, v.y + 0.6, v.z);
+  }, tCart);
+  await sleep(300);
+  await tap('[data-touch="interact"]');
+  await sleep(600);
+  const tBag = await tPage.evaluate(() => window.__game.bag());
+  const tOpen = tBag.open;
+  // Le toucher qui ouvre le panneau ne déclenche pas le bouton apparu sous le doigt.
+  const noGhost = (await tPage.evaluate(() => window.__game.sim().gesture)) === null;
+  writeFileSync(`${OUT}phase7-telephone-panneau.png`, await tPage.screenshot());
+  await tap('.item-actions button:has-text("Pousser")');
+  await sleep(400);
+  const tDrive = await tPage.evaluate(() => window.__game.driving());
+  const tv0 = await tPage.evaluate((id) => ({ ...window.__game.sim().vehicle(id) }), tCart);
+  const vp = tPage.viewportSize();
+  const jx = vp.width * 0.18;
+  const jy = vp.height * 0.7;
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: jx, y: jy, id: 1 }] });
+  for (let k = 1; k <= 6; k++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: jx, y: jy - k * 12, id: 1 }] });
+    await sleep(30);
+  }
+  await sleep(3000);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  const tv1 = await tPage.evaluate((id) => ({ ...window.__game.sim().vehicle(id) }), tCart);
+  const tPrompt = await tPage.textContent('#prompt');
+  await tap('[data-touch="interact"]');
+  await sleep(400);
+  const tAfter = await tPage.evaluate(() => window.__game.driving());
+  check('Téléphone : Prendre sur le chariot ouvre son panneau (sans cliquer le bouton apparu sous le doigt), « Pousser », le joystick le fait rouler, Prendre le lâche', tOpen && noGhost && tDrive?.mode === 'pousse' && Math.hypot(tv1.x - tv0.x, tv1.z - tv0.z) > 1.5 && tAfter === null, `${Math.hypot(tv1.x - tv0.x, tv1.z - tv0.z).toFixed(1)} m · « ${tPrompt} »`);
+  check('Aucune erreur dans la console (phase 7, téléphone)', tErrors.length === 0, tErrors.slice(0, 3).join(' | '));
+  await tCtx.close();
+
+  // Manette : X ouvre le chariot à vapeur, on monte, le stick gauche avance, X pour descendre.
+  console.log('\n— Phase 7 : manette');
+  const padCtx = await browser.newContext({ viewport: { width: 800, height: 450 } });
+  await padCtx.addInitScript(installTestPad, QA_SETTINGS);
+  const pPage = await padCtx.newPage();
+  const pErrors = watchErrors(pPage, 'phase 7 (manette)');
+  await pPage.goto(BASE);
+  await startGame(pPage);
+  await settle(pPage);
+  const { press, axes } = padControls(pPage);
+  const pWagon = await pPage.evaluate(() => window.__game.spawnVehicle('chariot', true));
+  await sleep(800);
+  await pPage.evaluate((id) => {
+    const v = window.__game.sim().vehicle(id);
+    window.__game.lookAt(v.x, v.y + 1.0, v.z);
+  }, pWagon);
+  await sleep(300);
+  await press(2);
+  await sleep(400);
+  const pOpen = (await pPage.evaluate(() => window.__game.bag())).open;
+  await pPage.evaluate(() => window.__game.bagRun('Monter sur le siège'));
+  await sleep(400);
+  const pv0 = await pPage.evaluate((id) => ({ ...window.__game.sim().vehicle(id) }), pWagon);
+  await axes([0, -1, 0, 0]);
+  await sleep(3000);
+  await axes([0, 0, 0, 0]);
+  const pv1 = await pPage.evaluate((id) => ({ ...window.__game.sim().vehicle(id) }), pWagon);
+  await sleep(1500);
+  await press(2);
+  await sleep(400);
+  const pAfter = await pPage.evaluate(() => window.__game.driving());
+  check('Manette : X ouvre le chariot, on monte, le stick gauche le fait avancer, X pour descendre', pOpen && Math.hypot(pv1.x - pv0.x, pv1.z - pv0.z) > 5 && pAfter === null, `${Math.hypot(pv1.x - pv0.x, pv1.z - pv0.z).toFixed(1)} m`);
+  check('Aucune erreur dans la console (phase 7, manette)', pErrors.length === 0, pErrors.slice(0, 3).join(' | '));
+  await padCtx.close();
+}
+
 /**
  * Les scénarios des phases 1 à 5 se jouent sans créatures : un animal ne doit pas fausser un test
  * qui n'a rien à voir avec lui. Les contextes ouverts avec { fauna: true } (phase 6) les gardent.
@@ -2456,7 +2726,7 @@ function noFaunaByDefault(browser) {
   };
 }
 
-// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,performance,captures,webgpu pour ne lancer que certains scénarios.
+// --only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,phase7,performance,captures,webgpu pour ne lancer que certains scénarios.
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = onlyArg ? new Set(onlyArg.slice(7).split(',')) : null;
 const want = (name) => (only ? only.has(name) : name !== 'webgpu' || process.argv.includes('--webgpu'));
@@ -2475,6 +2745,8 @@ try {
   if (want('phase4')) await phase4Scenario(browser);
   if (want('phase5')) await phase5Scenario(browser);
   if (want('phase6')) await phase6Scenario(browser);
+  if (want('phase7')) await phase7Scenario(browser);
+  if (want('phase7t')) await phase7Scenario(browser, true);
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();
