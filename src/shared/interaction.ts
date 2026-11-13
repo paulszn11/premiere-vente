@@ -378,6 +378,15 @@ export class PropSystem {
     return id;
   }
 
+  /** Déplace l'objet tenu avec le joueur (téléportation). */
+  moveHeld(dx: number, dy: number, dz: number): void {
+    const lp = this.held ? this.live.get(this.held.id) : undefined;
+    if (!lp) return;
+    const t = lp.body.translation();
+    lp.body.setTranslation({ x: t.x + dx, y: t.y + dy, z: t.z + dz }, true);
+    lp.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  }
+
   /** Lâche l'objet tenu (sans le lancer). */
   drop(s: MoveState): void {
     this.release(s, 0, null);

@@ -352,7 +352,9 @@ export function ensureToolMeta(st: ItemStack, q = 60): void {
 export function toolPower(st: ItemStack): number {
   const spec = ITEMS[st.item].tool;
   if (!spec) return 0;
-  const q = st.q ?? 60;
+  // Galets : toujours pareils. Objet naturel sans qualité connue : bonne qualité.
+  if (spec.durability <= 0) return spec.power;
+  const q = st.q ?? 75;
   let p = spec.power * (0.6 + (0.4 * q) / 100);
   if (st.d !== undefined && st.dm) {
     const ratio = st.d / st.dm;

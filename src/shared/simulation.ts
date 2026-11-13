@@ -4,7 +4,7 @@
 // En phase 8, cette même logique tournera sur le serveur de l'hôte et le client prédira.
 
 import type { ActionResult, HandOrSlot, PlayerAction } from './actions';
-import { KILL_Y, PHYS_CHUNK_RADIUS, TICK_DT, WATER_LEVEL } from './constants';
+import { KILL_Y, PHYS_CHUNK_RADIUS, STAMINA, TICK_DT, WATER_LEVEL } from './constants';
 import {
   type ImproveKind,
   type Knowledge,
@@ -454,6 +454,8 @@ export class LocalSimulation {
 
   /** Place le joueur à un endroit précis (point d'apparition, outil de test). */
   teleport(x: number, y: number, z: number): void {
+    // L'objet tenu suit le joueur.
+    this.props.moveHeld(x - this.state.x, y - this.state.y, z - this.state.z);
     const s = makeState(x, y, z);
     s.stamina = this.state.stamina;
     copyState(this.state, s);
@@ -642,8 +644,7 @@ export class LocalSimulation {
     if (g.kind === 'allumage') {
       // Faire tourner l'archet épuise.
       const s = this.state;
-      s.stamina = Math.max(0, s.stamina - 5 * TICK_DT);
-      this.extraSpent += 5 * TICK_DT;
+      this.exert(5 * TICK_DT);
       if (s.stamina <= 0) {
         this.gesture = null;
         this.wearTool('feu', 1);
@@ -995,6 +996,14 @@ export class LocalSimulation {
 
   // ——— Phase 4 : récolte, fabrication, feu ———
 
+  /** Effort physique hors déplacement : coûte de l'endurance et en suspend la récupération. */
+  private exert(cost: number): void {
+    const s = this.state;
+    s.stamina = Math.max(0, s.stamina - cost);
+    s.regenDelay = STAMINA.regenDelay;
+    this.extraSpent += cost;
+  }
+
   private noteHints(ids: RecipeId[]): void {
     if (ids.length) this.msg(`Nouvelle idée dans le carnet : ${ids.map((id) => RECIPES[id].label).join(', ')}.`, 'info');
   }
@@ -1139,8 +1148,7 @@ export class LocalSimulation {
     if (this.world.nodeLeft(t.id, kind, this.time) <= 0) return fail('Plus rien à prendre ici pour l’instant : cela se reconstitue avec le temps.');
     const cost = STRIKE_COST[spec.tool ?? 'main']!;
     if (s.stamina < cost) return fail('Trop fatigué : reprenez votre souffle.');
-    s.stamina -= cost;
-    this.extraSpent += cost;
+    this.exert(cost);
     this.useCooldown = STRIKE_TIME;
     const ref = h && spec.tool ? this.stackRef({ zone: 'main' }) : null;
     const power = ref ? toolPower(ref.st) : 1;
@@ -1171,8 +1179,7 @@ export class LocalSimulation {
     const cost = axe ? STRIKE_COST.hache! : STRIKE_COST.tranchant!;
     if (s.stamina < cost) return fail('Trop fatigué : reprenez votre souffle.');
     if (axe && !s.crouched) {
-      s.stamina -= cost;
-      this.extraSpent += cost;
+      this.exert(cost);
       this.useCooldown = STRIKE_TIME;
       this.wearRef(ref, 1);
       const r = this.world.fellStrike(tree.key, spec, power, this.time);
@@ -1193,8 +1200,7 @@ export class LocalSimulation {
     else if (this.world.partLeft(key, 'manche', spec, this.time) > 0) part = 'manche';
     else if (spec.resin && resin === 'aucune') part = 'entaille';
     if (!part) return fail(resin === 'coule' ? 'La résine coule encore : revenez dans quelques minutes.' : 'Cet arbre n’a plus rien à donner pour l’instant : il repoussera.');
-    s.stamina -= cost;
-    this.extraSpent += cost;
+    this.exert(cost);
     this.useCooldown = STRIKE_TIME;
     if (part !== 'resine') this.wearRef(ref, 1);
     const need = part === 'perche' ? 3 : part === 'ecorce' || part === 'manche' ? 2 : 1;
