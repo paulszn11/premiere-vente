@@ -2285,6 +2285,8 @@ async function phase6Scenario(browser) {
     const x = s.x + Math.sin(yaw) * 6;
     const z = s.z + Math.cos(yaw) * 6;
     const trap = sim.props.spawnDynamic({ kind: 'collet', x, y: sim.terrain.heightAt(x, z) + 0.05, z, rot: 0, radius: 0.35, length: 0.1, fixed: true, trap: { armed: true, caught: null } });
+    // Comme un piège construit : les créatures le connaissent tout de suite.
+    sim.noticeWorldChange();
     sim.spawnCreatures('impala', x, z + 0.2, 1);
     return trap;
   });

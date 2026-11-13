@@ -2223,7 +2223,14 @@ export class LocalSimulation {
     if (TRAP_KINDS.has(kind)) prop.trap = { armed: true, caught: null };
     this.build.removeSite(site.id);
     this.props.spawnDynamic(prop);
+    // Un piège terminé est actif tout de suite (les créatures le connaissent sans attendre).
+    if (TRAP_KINDS.has(kind)) this.refreshFaunaEnv();
     this.msg(`${def.label} : terminé.`, 'info');
+  }
+
+  /** Les créatures prennent en compte sans attendre un objet posé (piège, nourriture) : tests, outils. */
+  noticeWorldChange(): void {
+    if (this.fauna.enabled) this.refreshFaunaEnv();
   }
 
   /** E sur une pièce : ouvrir ou fermer une porte ; sinon afficher la pièce (réparer, démonter…). */
