@@ -1,12 +1,19 @@
 // Actions ponctuelles du joueur (sac, soins, repos…). En phase 8, le client les enverra au
 // serveur de l'hôte, qui les validera avec `readAction` avant de les appliquer.
 
+import { PLANS, type PlanId } from './building';
 import type { ImproveKind, RepairKind } from './crafting';
 import type { ClothingPart, Slot } from './inventory';
 import { BENCH_SLOTS, POCKET_COUNT } from './inventory';
 import type { Treatment } from './vitals';
 
 export type HandOrSlot = Slot | { zone: 'main' };
+
+/** Pièce d'une construction, ou chantier d'installation. */
+export type BuildRef = { kind: 'piece'; s: string; p: number } | { kind: 'site'; id: string };
+
+export type PieceOp = 'reparer' | 'torchis' | 'demonter' | 'porte' | 'eteindre';
+export type FurnaceOp = 'minerai' | 'bois' | 'souffler' | 'loupe';
 
 export type PlayerAction =
   /** Range l'objet tenu en main (poche, sinon sac). */
@@ -50,6 +57,16 @@ export type PlayerAction =
   | { type: 'alimenter'; prop: string }
   | { type: 'poser_feu'; prop: string; from: HandOrSlot }
   | { type: 'reprendre_feu'; prop: string }
+  /** Construction : tracer un plan (point visé, rotation en crans de 15°, plancher visé pour une installation). */
+  | { type: 'planifier'; plan: PlanId; aim: { x: number; y: number; z: number }; turn: number; on: { s: string; p: number } | null }
+  /** Faire l'étape suivante d'un chantier (comme « Utiliser » en le visant). */
+  | { type: 'chantier'; target: BuildRef }
+  /** Abandonner un chantier (une partie des matériaux déjà posés est rendue). */
+  | { type: 'annuler_chantier'; target: BuildRef }
+  /** Pièce terminée : réparer, enduire de torchis, démonter, ouvrir/fermer, éteindre. */
+  | { type: 'piece'; s: string; p: number; op: PieceOp }
+  /** Bas fourneau : charger du minerai, du bois, actionner le soufflet, retirer une loupe. */
+  | { type: 'fourneau'; prop: string; op: FurnaceOp }
   /** Interrompt le geste en cours. */
   | { type: 'interrompre' }
   /** État critique ou inconscient : mourir tout de suite (personne ne peut venir). */
@@ -92,6 +109,11 @@ const TYPES = new Set([
   'reprendre_feu',
   'interrompre',
   'abandonner',
+  'planifier',
+  'chantier',
+  'annuler_chantier',
+  'piece',
+  'fourneau',
 ]);
 
 function readSlot(raw: unknown, allowHand: boolean): HandOrSlot | null {
@@ -107,6 +129,16 @@ function readSlot(raw: unknown, allowHand: boolean): HandOrSlot | null {
 }
 
 const propId = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && x.length <= 40;
+const finite = (x: unknown, lim: number): x is number => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= lim;
+const pieceId = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0 && x < 1e6;
+
+function readBuildRef(raw: unknown): BuildRef | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === 'piece') return propId(r.s) && pieceId(r.p) ? { kind: 'piece', s: r.s, p: r.p } : null;
+  if (r.kind === 'site') return propId(r.id) ? { kind: 'site', id: r.id } : null;
+  return null;
+}
 
 /** Vérifie une action reçue (réseau en phase 8) ; renvoie null si elle est invalide. */
 export function readAction(raw: unknown): PlayerAction | null {
@@ -170,6 +202,27 @@ export function readAction(raw: unknown): PlayerAction | null {
       const from = readSlot(r.from, true);
       return propId(r.prop) && from ? { type: 'poser_feu', prop: r.prop, from } : null;
     }
+    case 'planifier': {
+      const a = r.aim as Record<string, unknown> | null;
+      if (typeof r.plan !== 'string' || !Object.prototype.hasOwnProperty.call(PLANS, r.plan) || !a || typeof a !== 'object') return null;
+      if (!finite(a.x, 9000) || !finite(a.y, 5000) || !finite(a.z, 9000) || !(typeof r.turn === 'number' && Number.isInteger(r.turn) && Math.abs(r.turn) <= 24)) return null;
+      let on: { s: string; p: number } | null = null;
+      if (r.on !== null && r.on !== undefined) {
+        const o = r.on as Record<string, unknown>;
+        if (!propId(o.s) || !pieceId(o.p)) return null;
+        on = { s: o.s, p: o.p };
+      }
+      return { type: 'planifier', plan: r.plan as PlanId, aim: { x: a.x, y: a.y, z: a.z }, turn: r.turn, on };
+    }
+    case 'chantier':
+    case 'annuler_chantier': {
+      const target = readBuildRef(r.target);
+      return target ? { type: r.type, target } : null;
+    }
+    case 'piece':
+      return propId(r.s) && pieceId(r.p) && (r.op === 'reparer' || r.op === 'torchis' || r.op === 'demonter' || r.op === 'porte' || r.op === 'eteindre') ? { type: 'piece', s: r.s, p: r.p, op: r.op } : null;
+    case 'fourneau':
+      return propId(r.prop) && (r.op === 'minerai' || r.op === 'bois' || r.op === 'souffler' || r.op === 'loupe') ? { type: 'fourneau', prop: r.prop, op: r.op } : null;
     default:
       return { type: r.type } as PlayerAction;
   }

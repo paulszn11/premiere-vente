@@ -61,6 +61,7 @@ const WOOD: [number, number, number] = [0.45, 0.33, 0.22];
 const TWINE: [number, number, number] = [0.62, 0.52, 0.34];
 const QUARTZ: [number, number, number] = [0.9, 0.9, 0.93];
 const STONE: [number, number, number] = [0.5, 0.49, 0.46];
+const IRON: [number, number, number] = [0.36, 0.37, 0.4];
 
 /** Pièces de chaque objet, à l'échelle réelle (mètres). Gisements : taille 1, mis à l'échelle à l'affichage. */
 export function itemParts(kind: PropKind): Part[] {
@@ -200,6 +201,69 @@ export function itemParts(kind: PropKind): Part[] {
         [can(0.04, 1, 12, 0.02, 0.9), 0.6, 0.56, 0.44],
         [ball(0.05, 0.03, 0.05, 3, 0.2, 0.05, 0.1), 0.85, 0.72, 0.3],
         [ball(0.04, 0.03, 0.04, 3, -0.25, 0.05, -0.15), 0.85, 0.72, 0.3],
+      ];
+    // Phase 5 : éclairage, fer.
+    case 'torche':
+      return [
+        [rod(0.6, 0.04, 6, -0.03), ...WOOD],
+        [rod(0.12, 0.07, 6, 0.26), 0.62, 0.5, 0.26],
+      ];
+    case 'loupe_fer':
+      return [[ball(0.14, 0.1, 0.13, 3), 0.3, 0.27, 0.26]];
+    case 'barre_fer':
+      return [[box(0.35, 0.025, 0.03), ...IRON]];
+    case 'clous':
+      return [
+        [box(0.06, 0.008, 0.008, 0, 0, 0), ...IRON],
+        [box(0.06, 0.008, 0.008, 0, 0.01, 0.02, 0.5), ...IRON],
+        [box(0.06, 0.008, 0.008, 0, 0.005, -0.02, -0.4), ...IRON],
+      ];
+    case 'boulons':
+      return [
+        [rod(0.08, 0.016, 6), ...IRON],
+        [can(0.012, 0.035, 6, 0.0), ...IRON],
+      ];
+    case 'hache_fer':
+      return [
+        [rod(0.65, 0.04, 6), ...WOOD],
+        [box(0.07, 0.06, 0.16, 0.26, 0, 0), ...IRON],
+      ];
+    case 'couteau_fer':
+      return [
+        [rod(0.12, 0.035, 6, -0.08), ...WOOD],
+        [box(0.17, 0.008, 0.032, 0.07), ...IRON],
+      ];
+    // Installations (le centre du volume est l'origine).
+    case 'coffre':
+      return [
+        [box(0.9, 0.5, 0.6, 0, -0.05), ...WOOD],
+        [box(0.92, 0.1, 0.62, 0, 0.25), 0.4, 0.29, 0.19],
+        [box(0.06, 0.12, 0.02, 0, 0.12, 0.31), ...TWINE],
+      ];
+    case 'etabli':
+      return [
+        [box(1.6, 0.12, 0.7, 0, 0.39), ...WOOD],
+        [box(0.08, 0.8, 0.08, -0.7, -0.06, -0.28), ...WOOD],
+        [box(0.08, 0.8, 0.08, 0.7, -0.06, -0.28), ...WOOD],
+        [box(0.08, 0.8, 0.08, -0.7, -0.06, 0.28), ...WOOD],
+        [box(0.08, 0.8, 0.08, 0.7, -0.06, 0.28), ...WOOD],
+      ];
+    case 'puits':
+      return [
+        [can(0.8, 1.4, 14, 0, 1.4), ...STONE],
+        [can(0.82, 0.95, 14, 0.01, 0.95), 0.12, 0.2, 0.26],
+      ];
+    case 'fourneau':
+      return [
+        [can(0.5, 1.1, 10, -0.45, 1.1), ...STONE],
+        [can(0.95, 0.9, 10, 0.25, 0.45), 0.62, 0.4, 0.27],
+        [rod(0.5, 0.08, 6, 0.35, -0.5, 0, Math.PI / 2), 0.58, 0.38, 0.26],
+      ];
+    case 'forge':
+      return [
+        [box(1.2, 0.5, 0.8, 0, -0.15), ...STONE],
+        [box(0.5, 0.35, 0.35, 0.3, 0.27, 0), 0.42, 0.42, 0.44],
+        [can(0.12, 0.5, 8, 0.16), 0.6, 0.4, 0.27],
       ];
     case 'foyer': {
       const parts: Part[] = [];

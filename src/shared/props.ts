@@ -14,7 +14,26 @@ import { floraInChunk } from './vegetation';
 
 /** Objets transportables : leur type est aussi leur identifiant dans le catalogue. */
 export type ItemPropKind = Exclude<ItemId, never>;
-export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer';
+export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer' | InstallPropKind;
+
+/** Installations construites (phase 5) : objets fixes. */
+export type InstallPropKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge';
+export const INSTALL_PROP_KINDS = new Set<PropKind>(['coffre', 'etabli', 'puits', 'fourneau', 'forge']);
+
+/** État d'un bas fourneau (phase 5). */
+export interface FurnaceState {
+  /** Minerai de fer chargé (unités). */
+  ore: number;
+  /** Bois chargé (secondes de combustion). */
+  fuel: number;
+  lit: boolean;
+  /** Chaleur (0 à 100) : monte avec le soufflet, retombe sans lui. */
+  heat: number;
+  /** Travail de réduction accompli (secondes de soufflet à bonne chaleur). */
+  work: number;
+  /** Loupes de fer prêtes à retirer. */
+  blooms: number;
+}
 
 /** État d'un foyer. */
 export interface FireState {
@@ -51,6 +70,10 @@ export interface PropDef {
   /** Taille d'un gisement (mètres). */
   size?: number;
   fire?: FireState;
+  /** Bas fourneau. */
+  furnace?: FurnaceState;
+  /** Installation posée sur un plancher : la pièce qui la porte. */
+  on?: { s: string; p: number };
 }
 
 const OTHER_LABELS = {
@@ -63,6 +86,11 @@ const OTHER_LABELS = {
   filon_fer: 'affleurement de minerai de fer',
   gravier_or: 'gravier aurifère',
   foyer: 'foyer',
+  coffre: 'coffre',
+  etabli: 'établi',
+  puits: 'puits',
+  fourneau: 'bas fourneau',
+  forge: 'forge',
 } as const;
 
 export const PROP_LABELS: Record<PropKind, string> = {
@@ -71,7 +99,7 @@ export const PROP_LABELS: Record<PropKind, string> = {
   ...OTHER_LABELS,
 };
 
-const FEMININE = new Set<string>(['tronc_', 'touffe_herbe']);
+const FEMININE = new Set<string>(['tronc_', 'touffe_herbe', 'forge']);
 
 /** « la pierre », « le bâton », « l'aloès ». */
 export function propWithArticle(kind: PropKind): string {
@@ -128,6 +156,11 @@ export function propMass(p: Pick<PropDef, 'kind' | 'radius' | 'length' | 'contai
     case 'filon_fer':
     case 'gravier_or':
     case 'foyer':
+    case 'coffre':
+    case 'etabli':
+    case 'puits':
+    case 'fourneau':
+    case 'forge':
       return 0;
     case 'sac':
       return bagTotalMass(p.container?.bag ?? []);
@@ -205,6 +238,29 @@ export function itemShape(kind: PropKind): { radius: number; length: number } {
       return { radius: 0.2, length: 0.08 };
     case 'foyer':
       return { radius: 0.45, length: 0 };
+    case 'torche':
+      return { radius: 0.03, length: 0.6 };
+    case 'loupe_fer':
+      return { radius: 0.07, length: 0 };
+    case 'barre_fer':
+      return { radius: 0.02, length: 0.35 };
+    case 'clous':
+    case 'boulons':
+      return { radius: 0.04, length: 0 };
+    case 'hache_fer':
+      return { radius: 0.05, length: 0.65 };
+    case 'couteau_fer':
+      return { radius: 0.02, length: 0.3 };
+    case 'coffre':
+      return { radius: 0.45, length: 0.3 };
+    case 'etabli':
+      return { radius: 0.8, length: 0.45 };
+    case 'puits':
+      return { radius: 0.7, length: 0.4 };
+    case 'fourneau':
+      return { radius: 0.5, length: 0.7 };
+    case 'forge':
+      return { radius: 0.6, length: 0.4 };
     default:
       return { radius: 0.1, length: 0 };
   }

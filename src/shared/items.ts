@@ -33,7 +33,15 @@ export type ItemId =
   | 'pot_cru'
   | 'pot'
   | 'batee'
-  | 'pansement';
+  | 'pansement'
+  // Phase 5 : éclairage et fer
+  | 'torche'
+  | 'loupe_fer'
+  | 'barre_fer'
+  | 'clous'
+  | 'boulons'
+  | 'hache_fer'
+  | 'couteau_fer';
 
 /** Usages d'un outil. */
 export type ToolTag = 'tranchant' | 'hache' | 'percuteur' | 'fouir' | 'batee' | 'feu' | 'recipient' | 'pointe';
@@ -413,6 +421,85 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     pocket: true,
     stack: 6,
     description: 'Chiffon bouilli : bande une plaie sans risque d’infection.',
+  },
+  torche: {
+    id: 'torche',
+    label: 'torche',
+    plural: 'torches',
+    feminine: true,
+    mass: 0.5,
+    volume: 0.8,
+    pocket: false,
+    stack: 1,
+    description: 'S’allume à un feu. Tenue en main ou plantée au sol, elle éclaire et peut mettre le feu au bois et au chaume.',
+  },
+  loupe_fer: {
+    id: 'loupe_fer',
+    label: 'loupe de fer',
+    plural: 'loupes de fer',
+    feminine: true,
+    mass: 2.5,
+    volume: 0.4,
+    pocket: false,
+    stack: 4,
+    description: 'Fer brut sorti du bas fourneau, encore plein de scories. À chauffer et battre à la forge.',
+  },
+  barre_fer: {
+    id: 'barre_fer',
+    label: 'barre de fer',
+    plural: 'barres de fer',
+    feminine: true,
+    mass: 1,
+    volume: 0.2,
+    pocket: false,
+    stack: 6,
+    description: 'Fer forgé, prêt à devenir clous, boulons ou outils.',
+  },
+  clous: {
+    id: 'clous',
+    label: 'clou',
+    plural: 'clous',
+    feminine: false,
+    mass: 0.02,
+    volume: 0.01,
+    pocket: true,
+    stack: 50,
+    description: 'Fixe le bois plus solidement qu’une corde (portes, murs, toits).',
+  },
+  boulons: {
+    id: 'boulons',
+    label: 'boulon',
+    plural: 'boulons',
+    feminine: false,
+    mass: 0.08,
+    volume: 0.02,
+    pocket: true,
+    stack: 20,
+    description: 'Fixe les rondins des planchers et les poteaux.',
+  },
+  hache_fer: {
+    id: 'hache_fer',
+    label: 'hache en fer',
+    plural: 'haches en fer',
+    feminine: true,
+    mass: 1.2,
+    volume: 1.5,
+    pocket: false,
+    stack: 1,
+    tool: { tags: ['hache', 'tranchant'], durability: 600, reach: 0.65, balance: 0.4, power: 1.6 },
+    description: 'Tête de fer forgée, emmanchée. Abat et taille bien plus vite qu’une hache de pierre.',
+  },
+  couteau_fer: {
+    id: 'couteau_fer',
+    label: 'couteau en fer',
+    plural: 'couteaux en fer',
+    feminine: false,
+    mass: 0.25,
+    volume: 0.3,
+    pocket: true,
+    stack: 1,
+    tool: { tags: ['tranchant'], durability: 400, reach: 0.3, balance: 0.75, power: 1.5 },
+    description: 'Lame forgée : coupe, taille et écorce longtemps.',
   },
 };
 

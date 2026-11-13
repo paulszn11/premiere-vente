@@ -8,7 +8,7 @@ import { type Container, type ItemMeta, readContainer } from './inventory';
 import { BTN_INTERACT, BTN_THROW, type InputCmd, MODE_CLIMB, MODE_SWIM, type MoveState, ONE_HAND_CARRY_KG, R_NO_HEAVY, R_NO_THROW } from './movement';
 import { DRAGGED_GROUPS, GROUP_OBSTACLE, GROUP_TERRAIN, HELD_GROUPS, NODE_GROUPS, PROP_GROUPS, type PhysicsWorld, QUERY_TARGETS, RAPIER, type TreeHit, interactionGroups } from './physics';
 import { ITEMS } from './items';
-import { BODY_MASS, DENSITY, type FireState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay } from './props';
+import { BODY_MASS, DENSITY, type FireState, type FurnaceState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay } from './props';
 import { nodesInChunk } from './resources';
 import { chunkCoord } from './terrain';
 
@@ -77,7 +77,7 @@ export const REACH = 2.4;
 const ANGULAR_DAMPING: Partial<Record<PropKind, number>> = { pierre: 1.5, buche: 3, tronc: 2.5, baton: 3, corps: 4, sac: 3, manche: 3, perche: 3, lance: 3, baton_fouir: 3 };
 const QUERY_TRUNKS = interactionGroups(0xffff, GROUP_OBSTACLE);
 /** Gisements solides (on les heurte) ; les autres sont plats. */
-const SOLID_NODES = new Set<PropKind>(['bloc_quartz', 'filon_fer']);
+const SOLID_NODES = new Set<PropKind>(['bloc_quartz', 'filon_fer', 'coffre', 'etabli', 'puits', 'fourneau', 'forge']);
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const AIM_BALL = new RAPIER.Ball(0.14);
 const QUERY_SCENERY = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
@@ -136,7 +136,28 @@ function colliderFor(def: PropDef): RAPIER.ColliderDesc {
     case 'couteau':
     case 'hache':
     case 'archet':
+    case 'hache_fer':
+    case 'couteau_fer':
+    case 'barre_fer':
       return RAPIER.ColliderDesc.cuboid(def.length / 2, r * 0.6, r).setMass(m);
+    case 'torche':
+      return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setRotation(LOG_ROT).setMass(m);
+    case 'loupe_fer':
+      return RAPIER.ColliderDesc.roundCuboid(r * 0.7, r * 0.6, r * 0.7, r * 0.3).setMass(m);
+    case 'clous':
+    case 'boulons':
+      return RAPIER.ColliderDesc.cuboid(r, r * 0.4, r).setMass(m);
+    // Installations (fixes) : def.y est le centre du volume.
+    case 'coffre':
+      return RAPIER.ColliderDesc.cuboid(0.45, 0.3, 0.3);
+    case 'etabli':
+      return RAPIER.ColliderDesc.cuboid(0.8, 0.45, 0.35);
+    case 'puits':
+      return RAPIER.ColliderDesc.cylinder(0.4, 0.7);
+    case 'fourneau':
+      return RAPIER.ColliderDesc.cylinder(0.7, 0.5);
+    case 'forge':
+      return RAPIER.ColliderDesc.cuboid(0.6, 0.4, 0.4);
     case 'pot_cru':
     case 'pot':
     case 'batee':
@@ -505,6 +526,7 @@ export class PropSystem {
         v.lit = lp.def.fire.lit;
         v.pot = lp.def.fire.pot?.item ?? null;
       }
+      if (lp.def.furnace) v.lit = lp.def.furnace.lit;
       out.push(v);
     }
     return out;
@@ -548,6 +570,15 @@ export class PropSystem {
     }
     for (const [id, st] of this.stored) if (!seen.has(id)) props.push(st);
     return { taken: [...this.taken], props, nextDyn: this.nextDyn };
+  }
+
+  /** Bas fourneaux simulés ou mémorisés. */
+  furnaces(): Array<{ def: PropDef; furnace: FurnaceState }> {
+    const out: Array<{ def: PropDef; furnace: FurnaceState }> = [];
+    this.forEachDynamic((def) => {
+      if (def.furnace) out.push({ def, furnace: def.furnace });
+    });
+    return out;
   }
 
   /** Foyers simulés ou mémorisés (pour faire brûler le feu). */
@@ -606,7 +637,16 @@ function readStored(raw: unknown): StoredProp | null {
   };
   if (d.dynamic === true) def.dynamic = true;
   if (d.fixed === true) def.fixed = true;
-  if (def.kind === 'sac' || def.kind === 'corps') def.container = readContainer(d.container);
+  if (def.kind === 'sac' || def.kind === 'corps' || def.kind === 'coffre') def.container = readContainer(d.container);
+  if (typeof d.on === 'object' && d.on !== null) {
+    const o = d.on as Record<string, unknown>;
+    if (typeof o.s === 'string' && o.s.length <= 40 && typeof o.p === 'number' && Number.isInteger(o.p)) def.on = { s: o.s, p: o.p };
+  }
+  if (def.kind === 'fourneau' && typeof d.furnace === 'object' && d.furnace !== null) {
+    const f = d.furnace as Record<string, unknown>;
+    const clamp = (v: unknown, max: number) => (fin(v) ? Math.max(0, Math.min(max, v)) : 0);
+    def.furnace = { ore: Math.round(clamp(f.ore, 4)), fuel: clamp(f.fuel, 3600), lit: f.lit === true, heat: clamp(f.heat, 100), work: clamp(f.work, 100), blooms: Math.round(clamp(f.blooms, 4)) };
+  }
   if (fin(d.emptiedAt)) def.emptiedAt = d.emptiedAt;
   if (fin(d.size) && d.size > 0 && d.size < 5) def.size = d.size;
   if (typeof d.meta === 'object' && d.meta !== null) {
@@ -616,7 +656,7 @@ function readStored(raw: unknown): StoredProp | null {
       def.meta = meta as ItemMeta;
     }
   }
-  if (def.kind === 'foyer' && typeof d.fire === 'object' && d.fire !== null) {
+  if ((def.kind === 'foyer' || def.kind === 'forge' || def.kind === 'torche') && typeof d.fire === 'object' && d.fire !== null) {
     const f = d.fire as Record<string, unknown>;
     const pot = f.pot ? readContainer({ pockets: [f.pot] }).pockets[0] ?? null : null;
     def.fire = { lit: f.lit === true, fuel: fin(f.fuel) ? Math.max(0, Math.min(36000, f.fuel)) : 0, pot, cook: fin(f.cook) ? Math.max(0, f.cook) : 0 };

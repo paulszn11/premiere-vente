@@ -3,8 +3,32 @@
 // blessures, soins), son inventaire, la mort, le corps laissé dans le monde et la réapparition.
 // En phase 8, cette même logique tournera sur le serveur de l'hôte et le client prédira.
 
-import type { ActionResult, HandOrSlot, PlayerAction } from './actions';
-import { KILL_Y, PHYS_CHUNK_RADIUS, STAMINA, TICK_DT, WATER_LEVEL } from './constants';
+import type { ActionResult, BuildRef, FurnaceOp, HandOrSlot, PieceOp, PlayerAction } from './actions';
+import {
+  type BuildTarget,
+  BuildState,
+  type Need,
+  PLANS,
+  PLACE_REACH,
+  type PlanId,
+  type PlanStep,
+  SITE_RADIUS,
+  type InstallSite,
+  combustible,
+  damageFor,
+  floorUnder,
+  isDone,
+  maxHp,
+  needLabel,
+  pieceBoxes,
+  pieceTransform,
+  plansFrom,
+  rayBuild,
+  repairNeeds,
+  salvage,
+  stepsOf,
+} from './building';
+import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, KILL_Y, PHYS_CHUNK_RADIUS, STAMINA, TICK_DT, WATER_LEVEL } from './constants';
 import {
   type ImproveKind,
   type Knowledge,
@@ -79,7 +103,8 @@ import {
   quantizeInput,
   stepMovement,
 } from './movement';
-import { type HeightProvider, PhysicsWorld, type RAPIER, initPhysics } from './physics';
+import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PhysicsWorld, QUERY_TERRAIN, RAPIER, initPhysics, interactionGroups } from './physics';
+import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
 import { type FireState, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, itemShape } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
@@ -126,14 +151,14 @@ export type SimEvent =
   | { type: 'noyade'; tick: number }
   | { type: 'vital'; event: VitalEvent; tick: number }
   | { type: 'message'; text: string; tone: Tone; tick: number }
-  /** Le joueur veut ouvrir un sac posé ou fouiller un corps. */
-  | { type: 'ouvrir'; prop: string; tick: number }
+  /** Le joueur veut ouvrir un sac posé, un coffre, un foyer, fouiller un corps, ou voir une pièce de construction. */
+  | { type: 'ouvrir'; prop: string; tick: number; build?: BuildRef }
   | { type: 'mort'; cause: DeathCause; tick: number }
   | { type: 'reapparition'; tick: number; place: 'sommeil' | 'arrivee' | 'secours'; body: { distance: number; direction: string } | null };
 
 /** Geste en cours (manger, soigner) : il prend du temps et bouger l'interrompt. */
 export interface Gesture {
-  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage';
+  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage' | 'construction' | 'soufflet';
   label: string;
   total: number;
   left: number;
@@ -146,7 +171,20 @@ export interface Gesture {
   repair?: RepairKind;
   improve?: ImproveKind;
   prop?: string;
+  /** Construction : chantier ou pièce visée, et ce qu'on y fait. */
+  build?: BuildRef;
+  buildOp?: 'etape' | 'reparer' | 'torchis' | 'demonter';
 }
+
+/** Requête de visée pour tracer un plan : le sol et les obstacles (pièces, troncs), pas les objets. */
+const QUERY_BUILD = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
+/** Plan de chaque installation (pour ses débris). */
+const INSTALL_PLANS_BY_KIND: Record<'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge', PlanId> = { coffre: 'coffre', etabli: 'etabli', puits: 'puits', fourneau: 'fourneau', forge: 'forge' };
+const PROP_NAMES: Partial<Record<PropKind, string>> = { coffre: 'Le coffre', etabli: 'L’établi', puits: 'Le puits', fourneau: 'Le fourneau', forge: 'La forge' };
+/** Portée des gestes de construction (m). */
+const BUILD_REACH = 3.4;
+/** Demi-hauteur des installations (le centre de leur volume est à cette hauteur au-dessus du sol). */
+const INSTALL_HALF: Record<'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge', number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4 };
 
 /** Outils nécessaires, pour les messages. */
 export const TOOL_NEEDS: Record<ToolTag, string> = {
@@ -196,6 +234,8 @@ export interface SimSave {
   };
   props: ReturnType<PropSystem['serialize']>;
   world: ReturnType<WorldState['serialize']>;
+  /** Constructions (phase 5) ; absentes des anciennes sauvegardes. */
+  build?: ReturnType<BuildState['serialize']>;
 }
 
 export interface SimulationOptions {
@@ -257,6 +297,12 @@ export class LocalSimulation {
   knowledge: Knowledge = makeKnowledge();
   /** Fabrication en cours sur le plan de travail : recette et étape suivante. */
   craft: { recipe: RecipeId; step: number } | null = null;
+  /** Constructions et chantiers (phase 5). */
+  readonly build: BuildState;
+  /** Collisions des constructions proches. */
+  readonly structPhys: StructurePhysics;
+  /** Chocs subis par les pièces pendant le pas (dégâts à appliquer). */
+  private readonly impacts = new Map<string, number>();
   /** Coups déjà portés sur une cible (gisement, partie d'un arbre). */
   private readonly strikes = new Map<string, number>();
   /** Temps avant le prochain coup d'outil (s). */
@@ -282,6 +328,9 @@ export class LocalSimulation {
     this.props = new PropSystem(this.phys);
     this.props.clock = () => this.time;
     this.phys.treeFelled = (cx, cz, i) => this.world.isFelled(treeKey(cx, cz, i), this.time);
+    this.build = new BuildState((x, z) => this.terrain.heightAt(x, z));
+    this.structPhys = new StructurePhysics(this.phys, this.build);
+    this.phys.onContactForce = (h1, h2, force) => this.onImpact(h1, h2, force);
     this.spawn = opts.spawnSeed !== undefined ? chooseSpawn(this.terrain, opts.spawnSeed) : findSpawn(this.terrain);
     this.vitals = makeVitals((opts.spawnSeed ?? this.terrain.seed) ^ 0x5eed);
     this.inventory = makeInventory(true);
@@ -291,6 +340,7 @@ export class LocalSimulation {
     this.state = makeState(start.x, start.y, start.z);
     this.prev = makeState(start.x, start.y, start.z);
     this.phys.ensureAround([this.state], PHYS_CHUNK_RADIUS, 0);
+    this.structPhys.sync(start.x, start.z);
     this.phys.refresh();
     this.collider = this.phys.createPlayerCollider(start.x, start.y, start.z);
   }
@@ -336,6 +386,7 @@ export class LocalSimulation {
     const v = this.vitals;
     copyState(this.prev, s);
     this.phys.ensureAround([s], PHYS_CHUNK_RADIUS, this.tick);
+    this.structPhys.sync(s.x, s.z);
     if (this.tick % 120 === 0) this.phys.unloadUnused(this.tick, 600);
     this.time += TICK_DT;
     this.yaw = q.yaw;
@@ -372,9 +423,19 @@ export class LocalSimulation {
     } else if ((pressed & BTN_INTERACT) !== 0 && !this.props.held) {
       // Petits objets rangés directement ; sacs et corps s'ouvrent (affichage).
       const t = this.props.target(s, c.yaw, c.pitch);
-      if (t && QUICK_PICK.has(t.kind)) {
+      const bt = this.buildTarget();
+      if (bt && (!t || bt.dist < t.distance)) {
+        // Pièce de construction ou chantier : porte qui s'ouvre, sinon son panneau.
+        propPressed &= ~BTN_INTERACT;
+        this.interactBuild(bt);
+      } else if (t && t.kind === 'puits') {
+        propPressed &= ~BTN_INTERACT;
+        const pot = this.findPot();
+        const r = pot ? this.fillPot(pot) : fail('Il faut un pot pour puiser l’eau.');
+        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+      } else if (t && QUICK_PICK.has(t.kind)) {
         if (this.pickUp(t.id)) propPressed &= ~BTN_INTERACT;
-      } else if (t && (t.kind === 'sac' || t.kind === 'corps' || t.kind === 'foyer')) {
+      } else if (t && (t.kind === 'sac' || t.kind === 'corps' || t.kind === 'foyer' || t.kind === 'coffre' || t.kind === 'forge' || t.kind === 'fourneau' || t.kind === 'etabli')) {
         propPressed &= ~BTN_INTERACT;
         this.push({ type: 'ouvrir', prop: t.id, tick: this.tick });
       } else if (t && t.kind === 'touffe_herbe') {
@@ -395,6 +456,7 @@ export class LocalSimulation {
     }
     stepMovement(this.phys, this.collider, s, c, TICK_DT);
     this.phys.step(TICK_DT);
+    this.applyImpacts();
     if (this.tick % 30 === 0) this.props.rescueFallen();
 
     if (s.impactSeverity > 0) {
@@ -432,7 +494,12 @@ export class LocalSimulation {
       return;
     }
     this.stepGesture();
-    if (this.tick % 30 === 0) this.stepFires(30 * TICK_DT);
+    if (this.tick % 15 === 0) this.stepCollapse();
+    if (this.tick % 30 === 0) {
+      this.stepFires(30 * TICK_DT);
+      this.stepFurnaces(30 * TICK_DT);
+      this.stepBuildFire(30 * TICK_DT);
+    }
     if (this.tick % 600 === 0) {
       this.cleanupBodies();
       for (const c of this.world.regrow(this.time)) this.phys.rebuildChunk(c.cx, c.cz);
@@ -562,6 +629,10 @@ export class LocalSimulation {
     const item = ITEM_OF_PROP[def.kind];
     if (!item) return null;
     const st: ItemStack = { item, count: 1, ...(def.meta ?? {}) };
+    if (item === 'torche' && def.fire) {
+      st.d = Math.max(1, Math.round(def.fire.fuel));
+      st.dm = Math.max(st.dm ?? 0, st.d);
+    }
     if (MASS_ITEMS.has(item)) {
       const m = this.props.massOf(id);
       if (m > 0) st.mass = m;
@@ -584,6 +655,7 @@ export class LocalSimulation {
     this.props.remove(id);
     this.msg(`Vous ramassez ${itemName(st.item)}.`, 'info');
     this.noteHints(hintFrom(this.knowledge, st.item));
+    this.notePlans(st.item);
     return true;
   }
 
@@ -661,6 +733,15 @@ export class LocalSimulation {
         return;
       }
     }
+    if (g.kind === 'soufflet') {
+      // Le soufflet aussi.
+      this.exert(6 * TICK_DT);
+      if (this.state.stamina <= 0) {
+        this.gesture = null;
+        this.msg('Épuisé, vous lâchez le soufflet.', 'alerte');
+        return;
+      }
+    }
     if (g.left > 0) return;
     this.gesture = null;
     if (g.kind === 'manger' && g.food) this.finishEating(g.food.item, g.food.from);
@@ -670,6 +751,11 @@ export class LocalSimulation {
     else if (g.kind === 'amelioration' && g.from && g.improve) this.finishImprove(g.from, g.improve);
     else if (g.kind === 'demontage' && g.from) this.finishDismantle(g.from);
     else if (g.kind === 'allumage' && g.prop) this.finishLighting(g.prop);
+    else if (g.kind === 'soufflet' && g.prop) this.finishBellows(g.prop);
+    else if (g.kind === 'construction' && g.build) {
+      if (g.buildOp === 'etape' || !g.buildOp) this.finishBuildStep(g.build);
+      else this.finishPieceOp(g.build, g.buildOp);
+    }
   }
 
   private startEating(from: HandOrSlot): ActionResult {
@@ -966,6 +1052,7 @@ export class LocalSimulation {
         if (tool) return tool;
         const h = this.heldItem();
         if (!h) return fail('Vous ne tenez rien à utiliser.');
+        if (h.item === 'torche') return a.repeat ? fail() : this.lightTorch(h);
         if (ITEMS[h.item].food) return this.startEating({ zone: 'main' });
         const best = this.bestTreatmentFor(h.item);
         if (best) return this.startTreatment(best.injury, best.treatment);
@@ -997,6 +1084,16 @@ export class LocalSimulation {
         return this.putOnFire(a.prop, a.from);
       case 'reprendre_feu':
         return this.takeFromFire(a.prop);
+      case 'planifier':
+        return this.planify(a.plan, a.aim, a.turn, a.on);
+      case 'chantier':
+        return this.startBuildStep(a.target);
+      case 'annuler_chantier':
+        return this.cancelSite(a.target);
+      case 'piece':
+        return this.pieceOp(a.s, a.p, a.op);
+      case 'fourneau':
+        return this.furnaceOp(a.prop, a.op);
       default:
         return fail();
     }
@@ -1137,10 +1234,17 @@ export class LocalSimulation {
     const s = this.state;
     if (s.mode === MODE_CLIMB || this.vitals.state !== 'eveille') return null;
     const h = this.heldItem();
-    if (h?.item === 'pot' && this.inWater()) return { action: 'remplir le pot d’eau', ready: true, interact: false };
+    if (h?.item === 'pot' && (this.inWater() || this.nearInstall('puits', 2.6))) return { action: 'remplir le pot d’eau', ready: true, interact: false };
     const t = this.props.target(s, this.yaw, this.pitch);
     const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
     const tree = this.props.targetTree(s, this.yaw, this.pitch);
+    const bt = this.buildTarget();
+    if (bt && (!t || bt.dist <= t.distance) && (!tree || bt.dist <= tree.distance)) {
+      const bh = this.buildHint(bt, h);
+      if (bh) return bh;
+    }
+    if (t && this.litTorchInHand() && (t.kind === 'foyer' || t.kind === 'forge' || t.kind === 'fourneau')) return { action: 'allumer avec la torche', ready: true, interact: false };
+    if (h?.item === 'torche' && !h.def.fire?.lit) return { action: 'allumer la torche (près d’un feu)', ready: true, interact: false };
     if (node && (!tree || node.distance <= tree.distance)) {
       const kind = node.kind as NodeKind;
       const spec = NODE_SPECS[kind];
@@ -1167,15 +1271,48 @@ export class LocalSimulation {
     return { action: resin === 'coule' ? 'la résine coule : revenez plus tard' : 'cet arbre n’a plus rien à donner pour l’instant', ready: false, interact: false };
   }
 
+  /** Indication pour une pièce ou un chantier visé. */
+  private buildHint(bt: BuildTarget, h: { id: string; def: PropDef; item: ItemId } | null): { action: string; ready: boolean; interact: boolean } | null {
+    const ref = this.refOf(bt);
+    const info = this.stepInfo(ref);
+    if (info) {
+      const step = info.steps[info.index]!;
+      const fix = this.chooseFixing(step, info.center);
+      const where = `${PLANS[info.plan].label.toLowerCase()}, étape ${info.index + 1}/${info.steps.length}`;
+      const miss = this.missingNeed(fix.needs, info.center);
+      if (miss) return { action: `${fix.label.toLowerCase()} (${where}) : il manque ${needLabel(miss)}`, ready: false, interact: false };
+      if (fix.tool && !this.findTool(fix.tool)) return { action: `${fix.label.toLowerCase()} (${where}) : il faut ${TOOL_NEEDS[fix.tool]}`, ready: false, interact: false };
+      const what = fix.needs.length ? ` (${fix.needs.map(needLabel).join(', ')})` : '';
+      return { action: `${fix.label.toLowerCase()}${what} · ${where}`, ready: true, interact: false };
+    }
+    if (bt.kind !== 'piece') return null;
+    const p = this.build.piece(bt.s, bt.p);
+    if (!p) return null;
+    const label = PLANS[p.plan].label;
+    if (PLANS[p.plan].piece === 'porte') return { action: p.open ? 'fermer la porte' : 'ouvrir la porte', ready: true, interact: true };
+    if (h?.item === 'torche' && h.def.fire?.lit && combustible(p.mat) && p.burning <= 0) return { action: `mettre le feu : ${label.toLowerCase()}`, ready: true, interact: false };
+    if (h?.item === 'pot' && p.burning > 0) return { action: 'éteindre le feu avec l’eau du pot', ready: (this.findWaterPot() !== null), interact: false };
+    const state = `stabilité ${Math.round(p.support * 100)} % · état ${Math.round((p.hp / maxHp(p)) * 100)} %${p.burning > 0 ? ' · EN FEU' : ''}`;
+    if (h && ITEMS[h.item].tool) return { action: `frapper : ${label.toLowerCase()} (${state})`, ready: true, interact: false };
+    return { action: `${label} (${state}) : options`, ready: true, interact: true };
+  }
+
   /** « Utiliser » avec un outil sur un gisement ou un arbre ; null si aucune cible à travailler. */
   private useTool(): ActionResult | null {
     const s = this.state;
     if (s.mode === MODE_CLIMB) return null;
     const h = this.heldItem();
-    if (h?.item === 'pot' && this.inWater()) return this.fillPot({ zone: 'main' });
+    if (h?.item === 'pot' && (this.inWater() || this.nearInstall('puits', 2.6))) return this.fillPot({ zone: 'main' });
     const t = this.props.target(s, this.yaw, this.pitch);
     const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
     const tree = this.props.targetTree(s, this.yaw, this.pitch);
+    const bt = this.buildTarget();
+    if (bt && (!t || bt.dist <= t.distance) && (!tree || bt.dist <= tree.distance)) {
+      const r = this.useOnBuild(bt, h);
+      if (r) return r;
+    }
+    // Torche allumée : allumer un foyer, une forge ou un fourneau visé.
+    if (t && this.litTorchInHand() && (t.kind === 'foyer' || t.kind === 'forge' || t.kind === 'fourneau')) return this.startLighting(t.id);
     if (!node && !tree) return null;
     if (this.useCooldown > 0) return fail();
     if (node && (!tree || node.distance <= tree.distance)) return this.harvestNode(node, h);
@@ -1372,11 +1509,13 @@ export class LocalSimulation {
     const step = r.steps[this.craft.step]!;
     const intro = discovered ? `Nouvelle recette découverte : ${r.label} ! ` : '';
     if (r.boiledWater && !this.findBoiledPot()) return discovered ? ok(`${intro}Il faut un pot d’eau bouillante.`) : fail('Il faut un pot d’eau bouillante (rempli au fleuve, chauffé sur un feu allumé).');
+    if (r.station === 'forge' && !this.nearInstall('forge', 3, true)) return discovered ? ok(`${intro}Il faut une forge allumée à côté.`) : fail('Il faut une forge allumée à moins de 3 m.');
     if (!stepToolOk(step, this.toolStacks())) {
       const need = `Il faut ${TOOL_NEEDS[step.tool!]} pour : ${step.label.toLowerCase()}.`;
       return discovered ? ok(`${intro}${need}`) : fail(need);
     }
-    const seconds = step.seconds * (1 - 0.04 * skillLevel(this.knowledge.xp));
+    // À côté d'un établi : gestes plus rapides.
+    const seconds = step.seconds * (1 - 0.04 * skillLevel(this.knowledge.xp)) * (this.nearInstall('etabli', 3) ? 0.8 : 1);
     this.gesture = { kind: 'fabrication', label: `${step.label}… (${this.craft.step + 1}/${r.steps.length})`, total: seconds, left: seconds, recipe: r.id, step: this.craft.step };
     return discovered ? ok(intro.trim()) : ok();
   }
@@ -1406,7 +1545,8 @@ export class LocalSimulation {
         if (st.count <= 0) b.splice(i, 1);
       }
     }
-    const level = skillLevel(this.knowledge.xp);
+    // À côté d'un établi : meilleure qualité.
+    const level = skillLevel(this.knowledge.xp) + (this.nearInstall('etabli', 3) ? 2 : 0);
     this.knowledge.xp += 10 * r.steps.length;
     if ('place' in r.output) {
       this.placeFire();
@@ -1425,6 +1565,10 @@ export class LocalSimulation {
       const label = q < 40 ? 'médiocre' : q < 70 ? 'correcte' : q < 85 ? 'bonne' : 'excellente';
       detail = ` : qualité ${label}${fx & FX_LIGATURE_LACHE ? ', ligature un peu lâche' : fx & FX_MANCHE_FENDU ? ', manche fendu' : ''}`;
     } else if (out.item === 'pot_cru') out.q = Math.round(Math.max(20, Math.min(100, 50 + level * 4 + rand(this.vitals) * 25)));
+    if (r.burn) {
+      out.d = r.burn;
+      out.dm = r.burn;
+    }
     if (r.boiledWater) {
       const pot = this.findBoiledPot();
       if (pot) {
@@ -1436,6 +1580,7 @@ export class LocalSimulation {
     if (left > 0) this.dropOnGround({ ...out, count: left });
     this.msg(`Vous avez fabriqué ${itemName(out.item, out.count)}${detail}.`, 'info');
     this.noteHints(hintFrom(this.knowledge, out.item));
+    this.notePlans(out.item);
   }
 
   // Réparer, améliorer, démonter.
@@ -1538,19 +1683,39 @@ export class LocalSimulation {
     const x = s.x + dir.x * 1.3;
     const z = s.z + dir.z * 1.3;
     const fire: FireState = { lit: false, fuel: 0, pot: null, cook: 0 };
-    this.props.spawnDynamic({ kind: 'foyer', x, y: this.terrain.heightAt(x, z) + 0.12, z, rot: 0, ...itemShape('foyer'), fixed: true, fire });
+    // Sur un plancher, le foyer repose sur le plancher (attention : le bois peut prendre feu).
+    const floor = floorUnder(this.build, x, s.y + 0.3, z);
+    const y = floor ? floor.top : this.terrain.heightAt(x, z);
+    const on = floor ? { s: floor.s, p: floor.p } : undefined;
+    this.props.spawnDynamic({ kind: 'foyer', x, y: y + 0.12, z, rot: 0, ...itemShape('foyer'), fixed: true, fire, ...(on ? { on } : {}) });
+    if (floor && combustible(this.build.piece(floor.s, floor.p)?.mat ?? 'pierre')) this.msg('Attention : un feu sur un plancher de bois peut l’enflammer. Un dallage de pierre est plus sûr.', 'alerte');
   }
 
   private fireDef(prop: string): PropDef | null {
     const def = this.reachable(prop);
-    return def?.kind === 'foyer' && def.fire ? def : null;
+    return (def?.kind === 'foyer' || def?.kind === 'forge') && def.fire ? def : null;
   }
 
   private startLighting(prop: string): ActionResult {
-    const def = this.fireDef(prop);
+    const fdef = this.reachable(prop);
+    const furnace = fdef?.kind === 'fourneau' ? fdef.furnace : undefined;
+    const def = furnace ? fdef : this.fireDef(prop);
     if (!def) return fail('Trop loin du foyer.');
-    if (def.fire!.lit) return fail('Le feu brûle déjà.');
-    if (!this.findTool('feu')) return fail('Il faut un archet à feu.');
+    if (furnace) {
+      if (furnace.lit) return fail('Le fourneau brûle déjà.');
+      if (furnace.fuel <= 0) return fail('Chargez d’abord du bois dans le fourneau.');
+    } else if (def.fire!.lit) return fail('Le feu brûle déjà.');
+    if (this.litTorchInHand()) {
+      if (furnace) {
+        furnace.lit = true;
+        furnace.heat = Math.max(furnace.heat, 20);
+        return ok('Le bois du fourneau s’embrase. Actionnez le soufflet pour faire monter la chaleur.');
+      }
+      def.fire!.lit = true;
+      def.fire!.fuel = Math.max(def.fire!.fuel, FIRE_START);
+      return ok('Vous allumez le feu avec la torche.');
+    }
+    if (!this.findTool('feu')) return fail('Il faut un archet à feu (ou une torche allumée).');
     if (this.available('herbe') < 1) return fail('Il faut des herbes sèches comme amadou.');
     if (this.state.stamina < 20) return fail('Trop fatigué pour faire tourner l’archet.');
     const seconds = 6 * (1 - 0.04 * skillLevel(this.knowledge.xp));
@@ -1559,6 +1724,18 @@ export class LocalSimulation {
   }
 
   private finishLighting(prop: string): void {
+    const fdef = this.reachable(prop);
+    if (fdef?.kind === 'fourneau' && fdef.furnace) {
+      if (fdef.furnace.lit) return;
+      if (this.available('herbe') < 1) return this.msg('Il manque des herbes sèches.', 'alerte');
+      this.use('herbe', 1);
+      this.wearTool('feu', 1);
+      fdef.furnace.lit = true;
+      fdef.furnace.heat = Math.max(fdef.furnace.heat, 20);
+      this.knowledge.xp += 5;
+      this.msg('Le bois du fourneau s’embrase. Actionnez le soufflet pour faire monter la chaleur.', 'info');
+      return;
+    }
     const def = this.fireDef(prop);
     if (!def || def.fire!.lit) return;
     if (this.available('herbe') < 1) return this.msg('Il manque des herbes sèches.', 'alerte');
@@ -1614,7 +1791,7 @@ export class LocalSimulation {
   }
 
   private fillPot(from: HandOrSlot): ActionResult {
-    if (!this.inWater()) return fail('Il faut être dans l’eau (fleuve, lac) pour remplir le pot.');
+    if (!this.inWater() && !this.nearInstall('puits', 2.6)) return fail('Il faut être dans l’eau (fleuve, lac) ou à côté d’un puits pour remplir le pot.');
     const ref = this.stackRef(from);
     if (!ref || ref.st.item !== 'pot') return fail('Il faut un pot en terre cuite.');
     ensureToolMeta(ref.st);
@@ -1631,6 +1808,13 @@ export class LocalSimulation {
       fire.fuel -= dt;
       const pos = this.props.position(def.id);
       const near = pos ? Math.hypot(pos.x - s.x, pos.z - s.z) < 12 : false;
+      if (def.kind === 'torche') {
+        if (fire.fuel <= 0) {
+          this.props.remove(def.id);
+          if (near) this.msg('La torche s’est consumée.', 'info');
+        }
+        continue;
+      }
       if (fire.fuel <= 0) {
         fire.fuel = 0;
         fire.lit = false;
@@ -1651,6 +1835,663 @@ export class LocalSimulation {
         this.noteHints(hintFrom(this.knowledge, 'pot'));
       }
     }
+  }
+
+  // ——— Phase 5 : construction ———
+
+  private eye(): { x: number; y: number; z: number } {
+    const s = this.state;
+    return { x: s.x, y: s.y + (s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT), z: s.z };
+  }
+
+  /** Pièce, chantier ou installation en chantier visé (le terrain peut cacher la cible). */
+  buildTarget(): BuildTarget | null {
+    const o = this.eye();
+    const d = lookDirection(this.yaw, this.pitch);
+    const bt = rayBuild(this.build, o, d, BUILD_REACH);
+    if (!bt) return null;
+    const hit = this.phys.world.castRay(new RAPIER.Ray(o, d), bt.dist, true, undefined, QUERY_TERRAIN);
+    if (hit && hit.timeOfImpact < bt.dist - 0.05 && !this.structPhys.pieceOf(hit.collider.handle)) return null;
+    return bt;
+  }
+
+  /** Point visé pour tracer un plan (sol ou pièce), et le plancher visé s'il y en a un. */
+  aimPoint(): { aim: { x: number; y: number; z: number }; on: { s: string; p: number } | null } {
+    const o = this.eye();
+    const d = lookDirection(this.yaw, this.pitch);
+    const hit = this.phys.world.castRayAndGetNormal(new RAPIER.Ray(o, d), PLACE_REACH, true, undefined, QUERY_BUILD);
+    if (hit) {
+      const t = hit.timeOfImpact;
+      const aim = { x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
+      const piece = this.structPhys.pieceOf(hit.collider.handle);
+      let on: { s: string; p: number } | null = null;
+      if (piece && hit.normal.y > 0.7) {
+        const p = this.build.piece(piece.s, piece.p);
+        const kind = p ? PLANS[p.plan].piece : null;
+        if (kind === 'sol' || kind === 'dallage') on = piece;
+      }
+      return { aim, on };
+    }
+    const x = o.x + d.x * PLACE_REACH;
+    const z = o.z + d.z * PLACE_REACH;
+    return { aim: { x, y: this.terrain.heightAt(x, z), z }, on: null };
+  }
+
+  /** Aperçu d'un plan à l'endroit visé (fantôme), sans rien modifier. */
+  previewPlan(plan: PlanId, turn: number): ReturnType<BuildState['placement']> {
+    const { aim, on } = this.aimPoint();
+    const s = this.state;
+    return this.build.placement({ plan, aim, yaw: this.yaw, turn, onPiece: on, player: { x: s.x, y: s.y, z: s.z } });
+  }
+
+  private refOf(bt: BuildTarget): BuildRef {
+    return bt.kind === 'piece' ? { kind: 'piece', s: bt.s, p: bt.p } : { kind: 'site', id: bt.id };
+  }
+
+  /** Étape suivante d'un chantier, avec ce qu'il faut (fixation en fer si on en a). */
+  private stepInfo(ref: BuildRef): { steps: PlanStep[]; index: number; plan: PlanId; center: { x: number; y: number; z: number } } | null {
+    if (ref.kind === 'piece') {
+      const s = this.build.structure(ref.s);
+      const p = s?.pieces.find((q) => q.id === ref.p);
+      if (!s || !p || isDone(p)) return null;
+      const t = pieceTransform(s, p.slot);
+      return { steps: stepsOf(p.plan, p.stilts), index: p.step, plan: p.plan, center: { x: t.x, y: t.y, z: t.z } };
+    }
+    const site = this.build.site(ref.id);
+    if (!site) return null;
+    return { steps: PLANS[site.plan].steps, index: site.step, plan: site.plan, center: { x: site.x, y: site.y, z: site.z } };
+  }
+
+  private chooseFixing(step: PlanStep, c: { x: number; y: number; z: number }): { needs: Need[]; tool: ToolTag | null; label: string; iron: boolean } {
+    const iron = step.iron;
+    if (iron && !this.missingNeed(iron.needs, c) && (!iron.tool || this.findTool(iron.tool))) return { needs: iron.needs, tool: iron.tool, label: iron.label, iron: true };
+    return { needs: step.needs, tool: step.tool, label: step.label, iron: false };
+  }
+
+  /** Objets posés au sol près d'un chantier (ils comptent comme matériaux). */
+  private looseNear(c: { x: number; y: number; z: number }, item: ItemId): Array<{ id: string; mass: number; d: number }> {
+    const out: Array<{ id: string; mass: number; d: number }> = [];
+    const held = this.props.held?.id;
+    for (const id of this.props.liveIds()) {
+      if (id === held) continue;
+      const def = this.props.defOf(id);
+      if (!def || def.fixed || def.kind !== item) continue;
+      const pos = this.props.position(id);
+      if (!pos) continue;
+      const d = Math.hypot(pos.x - c.x, pos.z - c.z);
+      if (d > SITE_RADIUS || Math.abs(pos.y - c.y) > 3) continue;
+      out.push({ id, mass: this.props.massOf(id), d });
+    }
+    return out.sort((a, b) => a.d - b.d);
+  }
+
+  /** Masse de pierres disponible : posées près du chantier, dans le sac et en main. */
+  private stoneKg(c: { x: number; y: number; z: number }): number {
+    let kg = this.looseNear(c, 'pierre').reduce((a, x) => a + x.mass, 0);
+    for (const st of [...this.inventory.pockets, ...(this.inventory.bag ?? [])]) if (st?.item === 'pierre') kg += (st.mass ?? ITEMS.pierre.mass) * st.count;
+    const h = this.heldItem();
+    if (h?.item === 'pierre') kg += this.props.massOf(h.id);
+    return kg;
+  }
+
+  /** Premier besoin non couvert (avec ce qui manque), ou null. */
+  private missingNeed(needs: Need[], c: { x: number; y: number; z: number }): Need | null {
+    for (const [item, n] of needs) {
+      if (item === 'pierre') {
+        const kg = this.stoneKg(c);
+        if (kg < n - 1e-6) return ['pierre', Math.ceil(n - kg)];
+        continue;
+      }
+      const have = this.available(item) + this.looseNear(c, item).length;
+      if (have < n) return [item, n - have];
+    }
+    return null;
+  }
+
+  /** Consomme les matériaux : d'abord ceux posés près du chantier, puis la main et l'inventaire. */
+  private consumeNeeds(needs: Need[], c: { x: number; y: number; z: number }): void {
+    for (const [item, n] of needs) {
+      if (item === 'pierre') {
+        // Les pierres s'utilisent entières : on choisit celles qui gaspillent le moins.
+        type Cand = { mass: number; take: () => void; zone?: 'sac' | 'poche'; index?: number };
+        const cands: Cand[] = this.looseNear(c, 'pierre').map((l) => ({ mass: l.mass, take: () => this.props.remove(l.id) }));
+        const inv = this.inventory;
+        for (const zone of ['sac', 'poche'] as const) {
+          const list = zone === 'sac' ? (inv.bag ?? []) : inv.pockets;
+          list.forEach((st, index) => {
+            if (st?.item === 'pierre') cands.push({ mass: st.mass ?? ITEMS.pierre.mass, take: () => undefined, zone, index });
+          });
+        }
+        const h = this.heldItem();
+        if (h?.item === 'pierre') cands.push({ mass: this.props.massOf(h.id), take: () => this.props.remove(h.id) });
+        const chosen: Cand[] = [];
+        let left = n;
+        const pool = [...cands].sort((a, b) => a.mass - b.mass);
+        while (left > 1e-6 && pool.length) {
+          // La plus petite qui suffit à finir, sinon la plus grosse.
+          const fit = pool.findIndex((x) => x.mass >= left - 1e-6);
+          const k = fit >= 0 ? fit : pool.length - 1;
+          const [x] = pool.splice(k, 1);
+          chosen.push(x!);
+          left -= x!.mass;
+        }
+        for (const x of chosen) if (!x.zone) x.take();
+        // Retirer les pierres de l'inventaire en partant de la fin (les index restent valables).
+        for (const x of chosen.filter((y) => y.zone).sort((a, b) => b.index! - a.index!)) takeAt(inv, { zone: x.zone!, index: x.index! }, 1);
+        continue;
+      }
+      let left = n;
+      for (const l of this.looseNear(c, item)) {
+        if (left <= 0) break;
+        this.props.remove(l.id);
+        left--;
+      }
+      if (left > 0) this.use(item, left);
+    }
+  }
+
+  /** Tracer un plan. */
+  private planify(plan: PlanId, aim: { x: number; y: number; z: number }, turn: number, on: { s: string; p: number } | null): ActionResult {
+    if (!this.knowledge.plans.includes(plan)) return fail('Vous ne connaissez pas encore ce plan.');
+    const s = this.state;
+    if (s.mode !== MODE_WALK || !s.grounded) return fail('Il faut avoir les pieds au sol pour tracer un plan.');
+    const pl = this.build.placement({ plan, aim, yaw: this.yaw, turn, onPiece: on, player: { x: s.x, y: s.y, z: s.z } });
+    if (!pl.ok) return fail(pl.reason ?? 'Impossible ici.');
+    this.build.apply(pl);
+    return ok(`Plan tracé : ${PLANS[plan].label.toLowerCase()}. Apportez les matériaux (sur vous ou posés à côté), puis « Utiliser » sur le chantier.`);
+  }
+
+  private nearCenter(c: { x: number; y: number; z: number }, r = BUILD_REACH + 0.6): boolean {
+    const s = this.state;
+    return Math.hypot(c.x - s.x, c.z - s.z) <= r && Math.abs(c.y - (s.y + 1)) < 4;
+  }
+
+  private startBuildStep(ref: BuildRef): ActionResult {
+    const info = this.stepInfo(ref);
+    if (!info) return fail('Ce chantier est terminé.');
+    if (!this.nearCenter(info.center)) return fail('Trop loin du chantier.');
+    const step = info.steps[info.index]!;
+    const fix = this.chooseFixing(step, info.center);
+    if (fix.tool && !this.findTool(fix.tool)) return fail(`Il faut ${TOOL_NEEDS[fix.tool]} pour : ${fix.label.toLowerCase()}.`);
+    const miss = this.missingNeed(fix.needs, info.center);
+    if (miss) return fail(`Il manque ${needLabel(miss)} (sur vous ou posé à côté du chantier).`);
+    if (this.state.stamina < 8) return fail('Trop fatigué : reprenez votre souffle.');
+    const seconds = step.seconds * (1 - 0.04 * skillLevel(this.knowledge.xp));
+    this.gesture = { kind: 'construction', label: `${fix.label}… (${info.index + 1}/${info.steps.length})`, total: seconds, left: seconds, build: ref, buildOp: 'etape' };
+    return ok();
+  }
+
+  private finishBuildStep(ref: BuildRef): void {
+    const info = this.stepInfo(ref);
+    if (!info) return;
+    const step = info.steps[info.index]!;
+    const fix = this.chooseFixing(step, info.center);
+    if (fix.tool && !this.findTool(fix.tool)) return this.msg(`Il faut ${TOOL_NEEDS[fix.tool]}.`, 'alerte');
+    const miss = this.missingNeed(fix.needs, info.center);
+    if (miss) return this.msg(`Il manque ${needLabel(miss)}.`, 'alerte');
+    this.consumeNeeds(fix.needs, info.center);
+    if (fix.tool) this.wearTool(fix.tool, 1);
+    this.exert(4);
+    this.knowledge.xp += 4;
+    const label = PLANS[info.plan].label;
+    if (ref.kind === 'piece') {
+      const done = this.build.advance(ref.s, ref.p, fix.iron);
+      if (done) this.msg(`${label} : terminé${fix.iron ? ', fixé au fer' : ''}.`, 'info');
+      else this.msg(`Étape faite. Suivante : ${info.steps[info.index + 1]!.label.toLowerCase()}.`, 'info');
+      return;
+    }
+    const site = this.build.site(ref.id)!;
+    site.step++;
+    this.build.touch();
+    if (site.step >= info.steps.length) this.completeSite(site);
+    else this.msg(`Étape faite. Suivante : ${info.steps[site.step]!.label.toLowerCase()}.`, 'info');
+  }
+
+  /** Un chantier d'installation terminé devient un objet fixe (coffre, établi, puits, fourneau, forge). */
+  private completeSite(site: InstallSite): void {
+    const def = PLANS[site.plan];
+    const kind = def.install!;
+    const prop: Omit<PropDef, 'id'> = {
+      kind,
+      x: site.x,
+      y: site.y + INSTALL_HALF[kind],
+      z: site.z,
+      rot: (((site.yaw / (Math.PI * 2)) % 1) + 1) % 1,
+      ...itemShape(kind),
+      fixed: true,
+      ...(site.on ? { on: { ...site.on } } : {}),
+    };
+    if (kind === 'coffre') prop.container = { pockets: [], bag: [] };
+    if (kind === 'forge') prop.fire = { lit: false, fuel: 0, pot: null, cook: 0 };
+    if (kind === 'fourneau') prop.furnace = { ore: 0, fuel: 0, lit: false, heat: 0, work: 0, blooms: 0 };
+    this.build.removeSite(site.id);
+    this.props.spawnDynamic(prop);
+    this.msg(`${def.label} : terminé.`, 'info');
+  }
+
+  /** E sur une pièce : ouvrir ou fermer une porte ; sinon afficher la pièce (réparer, démonter…). */
+  private interactBuild(bt: BuildTarget): void {
+    if (bt.kind === 'piece') {
+      const p = this.build.piece(bt.s, bt.p);
+      if (p && PLANS[p.plan].piece === 'porte' && isDone(p)) {
+        const r = this.toggleDoor(bt.s, bt.p);
+        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+        return;
+      }
+    }
+    this.push({ type: 'ouvrir', prop: '', build: this.refOf(bt), tick: this.tick });
+  }
+
+  private toggleDoor(sid: string, pid: number): ActionResult {
+    const s = this.build.structure(sid);
+    const p = s?.pieces.find((q) => q.id === pid);
+    if (!s || !p || PLANS[p.plan].piece !== 'porte' || !isDone(p)) return fail();
+    if (!this.nearCenter(pieceTransform(s, p.slot))) return fail('Trop loin de la porte.');
+    if (p.open) {
+      // Ne pas refermer le battant sur soi.
+      const leaf = pieceBoxes(s, { ...p, open: false }, true).at(-1)!;
+      const st = this.state;
+      const c = Math.cos(leaf.yaw);
+      const n = Math.sin(leaf.yaw);
+      const dx = st.x - leaf.x;
+      const dz = st.z - leaf.z;
+      const lx = dx * c - dz * n;
+      const lz = dx * n + dz * c;
+      if (Math.abs(lx) < leaf.hx + 0.35 && Math.abs(lz) < leaf.hz + 0.35 && st.y < leaf.y + leaf.hy && st.y + 1.8 > leaf.y - leaf.hy) return fail('Vous êtes dans le passage.');
+    }
+    this.build.toggleDoor(sid, pid);
+    return ok();
+  }
+
+  /** « Utiliser » visant une construction ; null : laisser « Utiliser » faire autre chose (manger…). */
+  private useOnBuild(bt: BuildTarget, h: { id: string; def: PropDef; item: ItemId } | null): ActionResult | null {
+    const ref = this.refOf(bt);
+    if (bt.kind === 'site') return this.startBuildStep(ref);
+    const s = this.build.structure(bt.s)!;
+    const p = s.pieces.find((q) => q.id === bt.p)!;
+    if (!isDone(p)) return this.startBuildStep(ref);
+    if (h?.item === 'torche' && h.def.fire?.lit) {
+      if (!combustible(p.mat)) return fail(`${PLANS[p.plan].label} : ${p.mat === 'torchis' ? 'le torchis' : 'la pierre'} ne brûle pas.`);
+      if (p.burning > 0) return fail('Cela brûle déjà.');
+      p.burning = 0.01;
+      this.build.touch();
+      return ok('Le feu prend !');
+    }
+    if (h?.item === 'pot' && p.burning > 0) return this.pieceOp(bt.s, bt.p, 'eteindre');
+    if (!h || !ITEMS[h.item].tool) return null;
+    return this.strikePiece(bt.s, bt.p, h);
+  }
+
+  /** Frapper une pièce avec l'outil tenu : dégâts selon le matériau et l'outil. */
+  private strikePiece(sid: string, pid: number, h: { id: string; def: PropDef; item: ItemId }): ActionResult {
+    if (this.useCooldown > 0) return fail();
+    const p = this.build.piece(sid, pid)!;
+    const spec = ITEMS[h.item].tool!;
+    let tag: ToolTag | null = null;
+    let best = 0;
+    for (const t of spec.tags) {
+      const dmg = damageFor(p.mat, t, 1);
+      if (dmg > best) {
+        best = dmg;
+        tag = t;
+      }
+    }
+    if (!tag || best <= 0) return fail(p.mat === 'pierre' ? 'Il faudrait un galet (percuteur) pour entamer la pierre.' : 'Cet outil n’y fait rien.');
+    const cost = STRIKE_COST[tag] ?? 4;
+    if (this.state.stamina < cost) return fail('Trop fatigué : reprenez votre souffle.');
+    this.exert(cost);
+    this.useCooldown = STRIKE_TIME;
+    const ref = this.stackRef({ zone: 'main' })!;
+    const power = toolPower(ref.st);
+    this.wearRef(ref, 1);
+    const dmg = damageFor(p.mat, tag, power);
+    if (this.build.damage(sid, pid, dmg)) {
+      this.breakPiece(sid, pid, 0.5, `${PLANS[p.plan].label} : détruit.`);
+      return ok();
+    }
+    return ok();
+  }
+
+  /** Actions sur une pièce terminée (panneau de la pièce). */
+  private pieceOp(sid: string, pid: number, op: PieceOp): ActionResult {
+    const s = this.build.structure(sid);
+    const p = s?.pieces.find((q) => q.id === pid);
+    if (!s || !p) return fail('Cette pièce n’existe plus.');
+    const c = pieceTransform(s, p.slot);
+    if (!this.nearCenter(c)) return fail('Trop loin.');
+    if (op === 'porte') return this.toggleDoor(sid, pid);
+    if (!isDone(p)) return fail('Ce chantier n’est pas terminé.');
+    if (op === 'eteindre') {
+      if (p.burning <= 0) return fail('Cela ne brûle pas.');
+      const pot = this.findWaterPot();
+      if (!pot) return fail('Il faut un pot plein d’eau.');
+      pot.st.w = 0;
+      pot.commit();
+      p.burning = 0;
+      this.build.touch();
+      return ok('Vous versez l’eau : le feu s’éteint.');
+    }
+    if (op === 'reparer') {
+      if (p.hp >= maxHp(p)) return fail('Cette pièce est en bon état.');
+      const miss = this.missingNeed(repairNeeds(p), c);
+      if (miss) return fail(`Il manque ${needLabel(miss)} pour réparer.`);
+      this.gesture = { kind: 'construction', label: 'Vous réparez…', total: 4, left: 4, build: { kind: 'piece', s: sid, p: pid }, buildOp: 'reparer' };
+      return ok();
+    }
+    if (op === 'torchis') {
+      if (p.plan !== 'mur_clayonnage' || p.mat !== 'bois') return fail('Seul un mur de clayonnage s’enduit de torchis.');
+      const miss = this.missingNeed([['argile', 3]], c);
+      if (miss) return fail(`Il manque ${needLabel(miss)} pour le torchis.`);
+      this.gesture = { kind: 'construction', label: 'Vous enduisez le mur de torchis…', total: 6, left: 6, build: { kind: 'piece', s: sid, p: pid }, buildOp: 'torchis' };
+      return ok();
+    }
+    this.gesture = { kind: 'construction', label: `Vous démontez : ${PLANS[p.plan].label.toLowerCase()}…`, total: 5, left: 5, build: { kind: 'piece', s: sid, p: pid }, buildOp: 'demonter' };
+    return ok();
+  }
+
+  private finishPieceOp(ref: BuildRef, op: 'reparer' | 'torchis' | 'demonter'): void {
+    if (ref.kind !== 'piece') return;
+    const s = this.build.structure(ref.s);
+    const p = s?.pieces.find((q) => q.id === ref.p);
+    if (!s || !p || !isDone(p)) return;
+    const c = pieceTransform(s, p.slot);
+    if (op === 'reparer') {
+      const needs = repairNeeds(p);
+      const miss = this.missingNeed(needs, c);
+      if (miss) return this.msg(`Il manque ${needLabel(miss)}.`, 'alerte');
+      this.consumeNeeds(needs, c);
+      this.build.repair(ref.s, ref.p);
+      this.msg(`Réparé (${p.hp}/${maxHp(p)}).`, 'info');
+    } else if (op === 'torchis') {
+      const miss = this.missingNeed([['argile', 3]], c);
+      if (miss) return this.msg(`Il manque ${needLabel(miss)}.`, 'alerte');
+      this.consumeNeeds([['argile', 3]], c);
+      this.build.plaster(ref.s, ref.p);
+      this.msg('Mur enduit de torchis : plus solide, et il ne brûle plus.', 'info');
+    } else {
+      this.breakPiece(ref.s, ref.p, 0.75 * (p.hp / maxHp(p)), `${PLANS[p.plan].label} : démonté.`);
+    }
+  }
+
+  /** Abandonner un chantier : une partie des matériaux posés est rendue. */
+  private cancelSite(ref: BuildRef): ActionResult {
+    if (ref.kind === 'piece') {
+      const s = this.build.structure(ref.s);
+      const p = s?.pieces.find((q) => q.id === ref.p);
+      if (!s || !p || isDone(p)) return fail('Ce n’est pas un chantier.');
+      if (!this.nearCenter(pieceTransform(s, p.slot))) return fail('Trop loin.');
+      this.breakPiece(ref.s, ref.p, 0.8, 'Chantier abandonné.');
+      return ok();
+    }
+    const site = this.build.site(ref.id);
+    if (!site) return fail('Ce chantier n’existe plus.');
+    if (!this.nearCenter(site)) return fail('Trop loin.');
+    const parts = salvage({ plan: site.plan, stilts: 0, step: site.step, mat: PLANS[site.plan].material }, 0.8);
+    this.build.removeSite(site.id);
+    this.spawnDebris(parts, { x: site.x, y: site.y + 0.4, z: site.z });
+    return ok('Chantier abandonné.');
+  }
+
+  /** Une pièce disparaît (effondrement, destruction, démontage) : ses débris tombent. */
+  private breakPiece(sid: string, pid: number, keep: number, message: string | null): void {
+    const s = this.build.structure(sid);
+    const p = s?.pieces.find((q) => q.id === pid);
+    if (!s || !p) return;
+    const t = pieceTransform(s, p.slot);
+    const center = { x: t.x, y: t.y + (p.slot.t === 'f' ? 0.1 : p.slot.t === 'r' ? 0.4 : 1.1), z: t.z };
+    const parts = salvage(p, keep);
+    this.build.remove(sid, pid);
+    this.spawnDebris(parts, center);
+    const st = this.state;
+    if (message && Math.hypot(t.x - st.x, t.z - st.z) < 30) this.msg(message, 'alerte');
+  }
+
+  /** Débris physiques (au plus 10 objets) : ils tombent et se ramassent. */
+  private spawnDebris(parts: Need[], c: { x: number; y: number; z: number }): void {
+    let n = 0;
+    const put = (kind: PropKind, shape: { radius: number; length: number }): void => {
+      const a = rand(this.vitals) * Math.PI * 2;
+      const r = 0.2 + rand(this.vitals) * 0.6;
+      this.props.spawnDynamic(
+        { kind, x: c.x + Math.cos(a) * r, y: c.y + n * 0.05, z: c.z + Math.sin(a) * r, rot: rand(this.vitals), ...shape },
+        { x: Math.cos(a) * 0.8, y: 0.5, z: Math.sin(a) * 0.8 },
+      );
+      n++;
+    };
+    for (const [item, count] of parts) {
+      if (item === 'pierre') {
+        let kg = count;
+        while (kg > 0.5 && n < 10) {
+          const m = Math.min(kg, 3 + rand(this.vitals) * 3);
+          kg -= m;
+          put('pierre', { radius: Math.cbrt((3 * m) / (4 * Math.PI * 2600)), length: 0 });
+        }
+      } else {
+        const shape = item === 'buche' ? { radius: 0.07, length: 0.6 } : itemShape(item as PropKind);
+        for (let k = 0; k < count && n < 10; k++) put(item as PropKind, shape);
+      }
+    }
+  }
+
+  /** Choc violent sur une pièce (pierre lancée, débris qui tombe) : dégâts selon la force. */
+  private onImpact(h1: number, h2: number, force: number): void {
+    const a = this.structPhys.pieceOf(h1) ?? this.structPhys.pieceOf(h2);
+    if (!a) return;
+    const key = `${a.s}:${a.p}`;
+    this.impacts.set(key, Math.min(80, (this.impacts.get(key) ?? 0) + (force - IMPACT_THRESHOLD) / 400));
+  }
+
+  private applyImpacts(): void {
+    if (this.impacts.size === 0) return;
+    for (const [key, amount] of this.impacts) {
+      const i = key.lastIndexOf(':');
+      const sid = key.slice(0, i);
+      const pid = Number(key.slice(i + 1));
+      const p = this.build.piece(sid, pid);
+      if (!p) continue;
+      if (this.build.damage(sid, pid, damageFor(p.mat, 'choc', amount))) this.breakPiece(sid, pid, 0.4, `${PLANS[p.plan].label} : brisé par le choc.`);
+    }
+    this.impacts.clear();
+  }
+
+  /**
+   * Effondrements (par vagues : une toutes les 0,25 s), installations et chantiers qui perdent
+   * leur plancher.
+   */
+  private stepCollapse(): void {
+    for (const { s, p } of this.build.unstable()) this.breakPiece(s.id, p.id, isDone(p) ? 0.4 : 0.6, isDone(p) ? `${PLANS[p.plan].label} : s’effondre !` : null);
+    for (const site of [...this.build.sites]) if (site.on && !this.build.piece(site.on.s, site.on.p)) this.build.removeSite(site.id);
+    const orphans: Array<{ def: PropDef; pos: { x: number; y: number; z: number } }> = [];
+    this.props.forEachDynamic((def, pos) => {
+      if (def.on && !this.build.piece(def.on.s, def.on.p)) orphans.push({ def, pos: { x: pos.x, y: pos.y, z: pos.z } });
+    });
+    for (const { def, pos } of orphans) {
+      const plan = INSTALL_PLANS_BY_KIND[def.kind as keyof typeof INSTALL_HALF];
+      this.props.remove(def.id);
+      const parts = plan ? salvage({ plan, stilts: 0, step: PLANS[plan].steps.length, mat: PLANS[plan].material }, 0.4) : [];
+      this.spawnDebris(parts, pos);
+      // Le contenu d'un coffre tombe aussi.
+      for (const st of def.container?.bag ?? []) this.dropNear(st, pos.x, pos.z, 1);
+      this.msg(`${PROP_NAMES[def.kind] ?? 'L’installation'} tombe avec le plancher !`, 'alerte');
+    }
+  }
+
+  /** Incendies : le bois et le chaume brûlent et propagent le feu ; un feu posé sur un plancher de bois peut l'enflammer. */
+  private stepBuildFire(dt: number): void {
+    const st = this.state;
+    for (const s of [...this.build.structures]) {
+      for (const p of [...s.pieces]) {
+        if (p.burning <= 0) continue;
+        if (!combustible(p.mat)) {
+          p.burning = 0;
+          continue;
+        }
+        p.burning += dt;
+        for (const q of this.build.neighbors(s, p)) {
+          if (q.burning <= 0 && isDone(q) && combustible(q.mat) && rand(this.vitals) < 0.06 * dt * 2) q.burning = 0.01;
+        }
+        if (this.build.damage(s.id, p.id, damageFor(p.mat, 'feu', dt))) this.breakPiece(s.id, p.id, 0.1, Math.hypot(s.x - st.x, s.z - st.z) < 30 ? `${PLANS[p.plan].label} : réduit en cendres.` : null);
+      }
+    }
+    for (const { def, fire } of this.props.fires()) {
+      if (!fire.lit || (def.kind !== 'foyer' && def.kind !== 'forge')) continue;
+      const pos = this.props.position(def.id);
+      if (!pos) continue;
+      const f = floorUnder(this.build, pos.x, pos.y, pos.z);
+      const piece = f ? this.build.piece(f.s, f.p) : undefined;
+      if (piece && combustible(piece.mat) && piece.burning <= 0 && rand(this.vitals) < 0.01 * dt * 2) {
+        piece.burning = 0.01;
+        this.build.touch();
+        this.msg('Le plancher de bois prend feu sous le foyer !', 'danger');
+      }
+    }
+  }
+
+  /** Une installation de ce type à portée. */
+  private nearInstall(kind: PropKind, r: number, lit = false): PropDef | null {
+    const s = this.state;
+    for (const id of this.props.liveIds()) {
+      const def = this.props.defOf(id);
+      if (!def || def.kind !== kind) continue;
+      if (lit && !(def.fire?.lit || def.furnace?.lit)) continue;
+      const pos = this.props.position(id);
+      if (pos && Math.hypot(pos.x - s.x, pos.z - s.z) <= r && Math.abs(pos.y - s.y) < 3) return def;
+    }
+    return null;
+  }
+
+  /** Un pot (main d'abord, puis inventaire). */
+  private findPot(): HandOrSlot | null {
+    if (this.heldItem()?.item === 'pot') return { zone: 'main' };
+    const inv = this.inventory;
+    const i = inv.pockets.findIndex((p) => p?.item === 'pot');
+    if (i >= 0) return { zone: 'poche', index: i };
+    const j = inv.bag?.findIndex((p) => p.item === 'pot') ?? -1;
+    return j >= 0 ? { zone: 'sac', index: j } : null;
+  }
+
+  /** Pot plein d'eau (main d'abord, puis inventaire). */
+  private findWaterPot(): { st: ItemStack; commit: () => void; remove: () => void } | null {
+    const h = this.heldItem();
+    if (h?.item === 'pot') {
+      const ref = this.stackRef({ zone: 'main' });
+      if (ref && (ref.st.w ?? 0) >= 1) return ref;
+    }
+    const inv = this.inventory;
+    for (let i = 0; i < inv.pockets.length; i++) if (inv.pockets[i]?.item === 'pot' && (inv.pockets[i]!.w ?? 0) >= 1) return this.stackRef({ zone: 'poche', index: i });
+    if (inv.bag) for (let i = 0; i < inv.bag.length; i++) if (inv.bag[i]!.item === 'pot' && (inv.bag[i]!.w ?? 0) >= 1) return this.stackRef({ zone: 'sac', index: i });
+    return null;
+  }
+
+  /** Allumer la torche tenue à un feu (foyer, forge, fourneau, autre torche, incendie). */
+  private lightTorch(h: { id: string; def: PropDef; item: ItemId }): ActionResult {
+    if (h.def.fire?.lit) return fail('La torche brûle déjà.');
+    const s = this.state;
+    let source = false;
+    for (const { def, fire } of this.props.fires()) {
+      if (!fire.lit || def.id === h.id) continue;
+      const pos = this.props.position(def.id);
+      if (pos && Math.hypot(pos.x - s.x, pos.z - s.z) < 2.6) source = true;
+    }
+    if (!source) for (const { def, furnace } of this.props.furnaces()) {
+      const pos = this.props.position(def.id);
+      if (furnace.lit && pos && Math.hypot(pos.x - s.x, pos.z - s.z) < 2.6) source = true;
+    }
+    if (!source)
+      for (const st of this.build.structures)
+        for (const p of st.pieces) {
+          if (p.burning <= 0) continue;
+          const t = pieceTransform(st, p.slot);
+          if (Math.hypot(t.x - s.x, t.z - s.z) < 3.5) source = true;
+        }
+    if (!source) return fail('Approchez la torche d’un feu allumé pour l’allumer.');
+    h.def.fire = { lit: true, fuel: h.def.meta?.d ?? 600, pot: null, cook: 0 };
+    return ok('La torche s’allume.');
+  }
+
+  private litTorchInHand(): boolean {
+    const h = this.heldItem();
+    return h?.item === 'torche' && h.def.fire?.lit === true;
+  }
+
+  // Bas fourneau.
+
+  private furnaceOp(prop: string, op: FurnaceOp): ActionResult {
+    const def = this.reachable(prop);
+    const f = def?.kind === 'fourneau' ? def.furnace : undefined;
+    if (!def || !f) return fail('Trop loin du fourneau.');
+    switch (op) {
+      case 'minerai':
+        if (f.ore >= 4) return fail('Le fourneau est plein de minerai (4 au plus).');
+        if (this.available('minerai_fer') < 1) return fail('Il faut du minerai de fer.');
+        this.use('minerai_fer', 1);
+        f.ore++;
+        return ok(`Minerai chargé (${f.ore}/4). Deux morceaux donnent une loupe de fer.`);
+      case 'bois':
+        if (f.fuel >= 1200) return fail('Le fourneau est plein de bois.');
+        if (this.available('buche') > 0) {
+          this.use('buche', 1);
+          f.fuel += FUEL_LOG;
+        } else if (this.available('baton') > 0) {
+          this.use('baton', 1);
+          f.fuel += FUEL_STICK;
+        } else return fail('Il faut du bois : une bûche ou un bâton.');
+        return ok(f.lit ? 'Vous rechargez le fourneau.' : 'Bois chargé. Allumez le fourneau (torche, ou archet et herbes sèches).');
+      case 'souffler':
+        if (!f.lit) return fail('Allumez d’abord le fourneau.');
+        if (f.ore < 2) return fail('Chargez au moins deux morceaux de minerai.');
+        if (this.state.stamina < 15) return fail('Trop fatigué pour actionner le soufflet.');
+        this.gesture = { kind: 'soufflet', label: 'Vous actionnez le soufflet…', total: 4, left: 4, prop };
+        return ok();
+      case 'loupe': {
+        if (f.blooms <= 0) return fail('Aucune loupe de fer n’est prête.');
+        f.blooms--;
+        const st: ItemStack = { item: 'loupe_fer', count: 1 };
+        if (store(this.inventory, st) > 0) this.dropOnGround(st);
+        this.noteHints(hintFrom(this.knowledge, 'loupe_fer'));
+        this.notePlans('loupe_fer');
+        return ok('Vous retirez une loupe de fer, encore pleine de scories.');
+      }
+    }
+  }
+
+  private finishBellows(prop: string): void {
+    const def = this.reachable(prop);
+    const f = def?.furnace;
+    if (!f || !f.lit) return;
+    f.heat = Math.min(100, f.heat + 30);
+    if (f.heat < 60 || f.ore < 2) {
+      this.msg(`La chaleur monte (${Math.round(f.heat)} %) : continuez à souffler.`, 'info');
+      return;
+    }
+    f.work += 4;
+    if (f.work >= 24) {
+      f.work -= 24;
+      f.ore -= 2;
+      f.blooms++;
+      this.msg('Une loupe de fer s’est formée au fond de la cuve : retirez-la.', 'info');
+    } else this.msg(`Le fourneau ronfle (chaleur ${Math.round(f.heat)} %, fer ${Math.round((f.work / 24) * 100)} %).`, 'info');
+  }
+
+  private stepFurnaces(dt: number): void {
+    const s = this.state;
+    for (const { def, furnace: f } of this.props.furnaces()) {
+      if (f.lit) {
+        f.fuel -= dt;
+        f.heat = Math.max(20, f.heat - 2 * dt);
+        if (f.fuel <= 0) {
+          f.fuel = 0;
+          f.lit = false;
+          const pos = this.props.position(def.id);
+          if (pos && Math.hypot(pos.x - s.x, pos.z - s.z) < 12) this.msg('Le fourneau s’est éteint : plus de bois.', 'info');
+        }
+      } else f.heat = Math.max(0, f.heat - 4 * dt);
+    }
+  }
+
+  private notePlans(item: ItemId): void {
+    const plans = plansFrom(this.knowledge.plans, item);
+    if (plans.length) this.msg(`Nouvelle idée de construction : ${plans.map((p) => PLANS[p].label).join(', ')}.`, 'info');
   }
 
   // ——— Sauvegarde ———
@@ -1674,6 +2515,7 @@ export class LocalSimulation {
       player: { ...pos, vitals, inventory: this.inventory, respawn: this.respawnPoint, lastBody: this.lastBody, knowledge: this.knowledge },
       props: this.props.serialize(),
       world: this.world.serialize(),
+      build: this.build.serialize(),
     };
   }
 
@@ -1684,6 +2526,7 @@ export class LocalSimulation {
     if (typeof r.time === 'number' && Number.isFinite(r.time) && r.time >= 0) this.time = r.time;
     this.props.restore(r.props);
     this.world.restore(r.world);
+    this.build.restore(r.build);
     const p = r.player as Record<string, unknown> | undefined;
     if (!p || typeof p !== 'object') return null;
     this.vitals = readVitals(p.vitals, this.vitals.rng);

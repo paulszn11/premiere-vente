@@ -88,6 +88,9 @@ export class PhysicsWorld {
   private readonly trees = new Map<number, TreeHit>();
   /** Arbre abattu (ignoré : ni tronc, ni collision). */
   treeFelled: ((cx: number, cz: number, index: number) => boolean) | null = null;
+  /** Chocs violents (force de contact au-delà du seuil d'un collisionneur) : poignées et force. */
+  onContactForce: ((h1: number, h2: number, force: number) => void) | null = null;
+  private readonly events = new RAPIER.EventQueue(true);
 
   constructor(readonly terrain: Terrain) {
     this.world = new RAPIER.World({ x: 0, y: -MOVE.gravity, z: 0 });
@@ -186,8 +189,16 @@ export class PhysicsWorld {
   /** Fait avancer la physique d'un pas (objets dynamiques) et met à jour les requêtes. */
   step(dt: number): void {
     this.world.timestep = dt;
-    this.world.step();
+    this.world.step(this.events);
     this.needsRefresh = false;
+    const cb = this.onContactForce;
+    this.events.drainContactForceEvents((e) => cb?.(e.collider1(), e.collider2(), e.totalForceMagnitude()));
+    this.events.clear();
+  }
+
+  /** Des collisionneurs ont été ajoutés ou retirés : mettre à jour les requêtes au prochain refresh. */
+  markDirty(): void {
+    this.needsRefresh = true;
   }
 
   createPlayerCollider(x: number, y: number, z: number): RAPIER.Collider {
@@ -209,6 +220,7 @@ export class PhysicsWorld {
   }
 
   dispose(): void {
+    this.events.free();
     this.world.free();
     this.chunks.clear();
   }

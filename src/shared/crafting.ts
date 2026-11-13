@@ -2,10 +2,31 @@
 // recettes connues, pressenties et découvertes, compétence « Fabrication », qualité et défauts,
 // usure, réparation, améliorations et démontage. Données simples, sérialisables, déterministes.
 
+import { type PlanId, readPlans, startingPlans } from './building';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type ItemStack, unitMass } from './inventory';
 import { ITEMS, type ItemId, type ToolTag } from './items';
 
-export type RecipeId = 'fibres' | 'corde' | 'corde_ilala' | 'couteau' | 'hache' | 'baton_fouir' | 'lance' | 'archet' | 'pot_cru' | 'batee' | 'foyer' | 'pansement';
+export type RecipeId =
+  | 'fibres'
+  | 'corde'
+  | 'corde_ilala'
+  | 'couteau'
+  | 'hache'
+  | 'baton_fouir'
+  | 'lance'
+  | 'archet'
+  | 'pot_cru'
+  | 'batee'
+  | 'foyer'
+  | 'pansement'
+  // Phase 5 : éclairage et forge
+  | 'torche'
+  | 'torche_resine'
+  | 'barre_fer'
+  | 'boulons'
+  | 'clous'
+  | 'hache_fer'
+  | 'couteau_fer';
 
 export interface RecipeStep {
   label: string;
@@ -32,6 +53,10 @@ export interface Recipe {
   hint: string;
   /** Il faut de l'eau bouillie dans un pot (pansements). */
   boiledWater?: boolean;
+  /** Il faut une forge allumée à moins de 3 m. */
+  station?: 'forge';
+  /** Torche : secondes de combustion. */
+  burn?: number;
 }
 
 export const RECIPES: Record<RecipeId, Recipe> = {
@@ -196,6 +221,111 @@ export const RECIPES: Record<RecipeId, Recipe> = {
     hint: 'Un pot d’eau bouillante… y faire bouillir des chiffons les rendrait propres.',
     boiledWater: true,
   },
+  torche: {
+    id: 'torche',
+    label: 'Torche d’herbes',
+    inputs: [
+      ['baton', 1],
+      ['herbe', 1],
+    ],
+    steps: [{ label: 'Lier les herbes au bâton', tool: null, seconds: 3 }],
+    output: { item: 'torche', count: 1 },
+    known: true,
+    hintedBy: [],
+    hint: '',
+    burn: 600,
+  },
+  torche_resine: {
+    id: 'torche_resine',
+    label: 'Torche à la résine',
+    inputs: [
+      ['baton', 1],
+      ['resine', 1],
+    ],
+    steps: [{ label: 'Enduire le bout de résine', tool: null, seconds: 3 }],
+    output: { item: 'torche', count: 1 },
+    known: false,
+    hintedBy: ['resine'],
+    hint: 'La résine brûle longtemps… sur un bâton, elle ferait une torche durable.',
+    burn: 1200,
+  },
+  barre_fer: {
+    id: 'barre_fer',
+    label: 'Barre de fer',
+    inputs: [['loupe_fer', 1]],
+    steps: [
+      { label: 'Chauffer la loupe au rouge', tool: null, seconds: 6 },
+      { label: 'Battre pour chasser les scories', tool: 'percuteur', seconds: 8 },
+    ],
+    output: { item: 'barre_fer', count: 1 },
+    known: false,
+    hintedBy: ['loupe_fer'],
+    hint: 'La loupe est pleine de scories : chauffée à la forge et battue, elle donnerait une barre de fer.',
+    station: 'forge',
+  },
+  boulons: {
+    id: 'boulons',
+    label: 'Boulons (deux barres)',
+    inputs: [['barre_fer', 2]],
+    steps: [
+      { label: 'Forger les tiges', tool: 'percuteur', seconds: 6 },
+      { label: 'Refouler les têtes', tool: 'percuteur', seconds: 5 },
+    ],
+    output: { item: 'boulons', count: 8 },
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Deux barres de fer : de quoi forger des boulons pour les planchers et les poteaux.',
+    station: 'forge',
+  },
+  clous: {
+    id: 'clous',
+    label: 'Clous (une barre)',
+    inputs: [['barre_fer', 1]],
+    steps: [
+      { label: 'Étirer le fer', tool: 'percuteur', seconds: 6 },
+      { label: 'Couper et appointer', tool: 'tranchant', seconds: 4 },
+    ],
+    output: { item: 'clous', count: 12 },
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Une barre de fer étirée et coupée : des clous.',
+    station: 'forge',
+  },
+  hache_fer: {
+    id: 'hache_fer',
+    label: 'Hache en fer',
+    inputs: [
+      ['barre_fer', 2],
+      ['manche', 1],
+    ],
+    steps: [
+      { label: 'Souder les deux barres à la forge', tool: 'percuteur', seconds: 8 },
+      { label: 'Forger le tranchant et l’œil', tool: 'percuteur', seconds: 8 },
+      { label: 'Emmancher', tool: null, seconds: 3 },
+    ],
+    output: { item: 'hache_fer', count: 1 },
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Deux barres soudées à la forge, un manche : une hache en fer.',
+    station: 'forge',
+  },
+  couteau_fer: {
+    id: 'couteau_fer',
+    label: 'Couteau en fer',
+    inputs: [
+      ['barre_fer', 1],
+      ['manche', 1],
+    ],
+    steps: [
+      { label: 'Forger la lame', tool: 'percuteur', seconds: 8 },
+      { label: 'Emmancher', tool: null, seconds: 3 },
+    ],
+    output: { item: 'couteau_fer', count: 1 },
+    known: false,
+    hintedBy: ['barre_fer'],
+    hint: 'Une barre de fer forgée en lame, un manche : un couteau en fer.',
+    station: 'forge',
+  },
 };
 
 export const RECIPE_IDS = Object.keys(RECIPES) as RecipeId[];
@@ -208,12 +338,14 @@ const BOUND = new Set<ItemId>(['couteau', 'hache', 'lance']);
 export interface Knowledge {
   known: RecipeId[];
   hinted: RecipeId[];
-  /** Expérience de fabrication. */
+  /** Expérience de fabrication (et de construction). */
   xp: number;
+  /** Plans de construction connus (phase 5). */
+  plans: PlanId[];
 }
 
 export function makeKnowledge(): Knowledge {
-  return { known: RECIPE_IDS.filter((id) => RECIPES[id].known), hinted: [], xp: 0 };
+  return { known: RECIPE_IDS.filter((id) => RECIPES[id].known), hinted: [], xp: 0, plans: startingPlans() };
 }
 
 /** Niveau de 0 à 10 : 10, 40, 90, 160… points d'expérience. */
@@ -255,6 +387,7 @@ export function readKnowledge(raw: unknown): Knowledge {
   for (const id of ids(r.known)) if (!k.known.includes(id)) k.known.push(id);
   for (const id of ids(r.hinted)) if (!k.known.includes(id) && !k.hinted.includes(id)) k.hinted.push(id);
   if (typeof r.xp === 'number' && Number.isFinite(r.xp)) k.xp = Math.max(0, Math.min(1e6, r.xp));
+  k.plans = readPlans(r.plans);
   return k;
 }
 
@@ -397,7 +530,7 @@ export function repairOptions(st: ItemStack): RepairOption[] {
   if (st.d === undefined || !st.dm || st.d >= st.dm) return [];
   const out: RepairOption[] = [];
   if (BOUND.has(st.item)) out.push({ kind: 'religaturer', label: 'Refaire la ligature', needs: [['corde', 1]], tool: null, seconds: 4 });
-  if (st.item === 'couteau' || st.item === 'hache') out.push({ kind: 'affuter', label: 'Affûter sur une pierre', needs: [], tool: 'percuteur', seconds: 5 });
+  if (st.item === 'couteau' || st.item === 'hache' || st.item === 'couteau_fer' || st.item === 'hache_fer') out.push({ kind: 'affuter', label: 'Affûter sur une pierre', needs: [], tool: 'percuteur', seconds: 5 });
   if (st.item === 'baton_fouir' || st.item === 'lance') out.push({ kind: 'retailler', label: 'Retailler la pointe', needs: [], tool: 'tranchant', seconds: 3 });
   if (st.item === 'archet') out.push({ kind: 'recorder', label: 'Changer la corde', needs: [['corde', 1]], tool: null, seconds: 2 });
   return out;
@@ -475,6 +608,14 @@ export function dismantle(st: ItemStack, r: () => number): ItemStack[] {
     case 'corde':
       add('fibres', ratio > 0.5 ? 2 : 1);
       break;
+    case 'hache_fer':
+      if (r() < 0.8) add('manche');
+      if (ratio > 0.3) add('barre_fer');
+      break;
+    case 'couteau_fer':
+      if (r() < 0.9) add('manche');
+      if (ratio > 0.5) add('barre_fer');
+      break;
     default:
       break;
   }
@@ -482,5 +623,5 @@ export function dismantle(st: ItemStack, r: () => number): ItemStack[] {
 }
 
 export function canDismantle(item: ItemId): boolean {
-  return ['couteau', 'hache', 'lance', 'archet', 'baton_fouir', 'corde'].includes(item);
+  return ['couteau', 'hache', 'lance', 'archet', 'baton_fouir', 'corde', 'hache_fer', 'couteau_fer'].includes(item);
 }
