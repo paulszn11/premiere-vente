@@ -1680,7 +1680,7 @@ async function phase4Scenario(browser) {
   const infoBox = await tPage.locator('.bag-info').boundingBox();
   const tabs = await tPage.evaluate(() => [...document.querySelectorAll('.bag-tabs button')].filter((x) => x.offsetParent).map((x) => x.textContent));
   writeFileSync(`${OUT}phase4-telephone-sac.png`, await tPage.screenshot());
-  check('Téléphone à l’horizontale : le sac en 3D à gauche, les actions à droite ; onglets Sac, Corps, Fabriquer, Carnet', pickBox.width > 330 && pickBox.height > 250 && infoBox.x >= pickBox.x + pickBox.width - 2 && tabs.join(',') === 'Sac,Corps,Fabriquer,Carnet', `sac ${Math.round(pickBox.width)}×${Math.round(pickBox.height)} · actions à x=${Math.round(infoBox.x)} · ${tabs.join(', ')}`);
+  check('Téléphone à l’horizontale : le sac en 3D à gauche, les actions à droite ; onglets Sac, Corps, Fabriquer, Construire, Carnet', pickBox.width > 330 && pickBox.height > 250 && infoBox.x >= pickBox.x + pickBox.width - 2 && tabs.join(',') === 'Sac,Corps,Fabriquer,Construire,Carnet', `sac ${Math.round(pickBox.width)}×${Math.round(pickBox.height)} · actions à x=${Math.round(infoBox.x)} · ${tabs.join(', ')}`);
   let tb = await tPage.evaluate(() => window.__game.bag());
   const barkCell = tb.cells.find((cl) => cl.kind === 'ecorce');
   await tapAt(barkCell.x, barkCell.y);
