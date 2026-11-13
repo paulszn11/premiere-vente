@@ -56,6 +56,8 @@ import {
   toolPower,
   wear,
 } from './crafting';
+import { type BodyPart, PART_LABELS, SPECIES, type SpeciesId, speciesName } from './creatures';
+import { Fauna, type FaunaEnv, type FaunaEvent, type FaunaPlayer, type FaunaSave, type SoundKind } from './fauna';
 import { PropSystem, type PropTarget, REACH, type TreeTarget, lookDirection } from './interaction';
 import {
   CLOTHING_LABELS,
@@ -105,10 +107,10 @@ import {
 } from './movement';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PhysicsWorld, QUERY_TERRAIN, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
-import { type FireState, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, itemShape } from './props';
+import { type FireState, type InstallPropKind, ITEM_OF_PROP, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
-import { Terrain } from './terrain';
+import { Terrain, chunkCoord } from './terrain';
 import {
   type DeathCause,
   type InjuryKind,
@@ -119,11 +121,15 @@ import {
   type Vitals,
   ZONE_LABELS,
   type Zone,
+  addInjury,
   applyFall,
   applyTreatment,
   bleedRate,
   canTreatSelf,
+  damage,
   die,
+  isLeg,
+  knockOut,
   eat,
   fallAsleep,
   limits,
@@ -133,6 +139,7 @@ import {
   sitDown,
   standUp,
   tickVitals,
+  totalBleeding,
   treatmentOptions,
 } from './vitals';
 
@@ -154,11 +161,17 @@ export type SimEvent =
   /** Le joueur veut ouvrir un sac posé, un coffre, un foyer, fouiller un corps, ou voir une pièce de construction. */
   | { type: 'ouvrir'; prop: string; tick: number; build?: BuildRef }
   | { type: 'mort'; cause: DeathCause; tick: number }
-  | { type: 'reapparition'; tick: number; place: 'sommeil' | 'arrivee' | 'secours'; body: { distance: number; direction: string } | null };
+  | { type: 'reapparition'; tick: number; place: 'sommeil' | 'arrivee' | 'secours'; body: { distance: number; direction: string } | null }
+  /** Phase 6 : son d'une créature ou d'un combat (spatialisé par l'affichage). */
+  | { type: 'son'; kind: SoundKind; x: number; y: number; z: number; tick: number }
+  /** Une créature blesse le joueur (secousse, bord rouge). */
+  | { type: 'attaque'; sp: SpeciesId; zone: Zone; tick: number }
+  /** Le joueur touche une créature (sang, retour visuel). */
+  | { type: 'touche'; sp: SpeciesId; part: BodyPart; killed: boolean; x: number; y: number; z: number; tick: number };
 
 /** Geste en cours (manger, soigner) : il prend du temps et bouger l'interrompt. */
 export interface Gesture {
-  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage' | 'construction' | 'soufflet';
+  kind: 'manger' | 'soin' | 'fabrication' | 'reparation' | 'amelioration' | 'demontage' | 'allumage' | 'construction' | 'soufflet' | 'depecage' | 'piege';
   label: string;
   total: number;
   left: number;
@@ -174,17 +187,21 @@ export interface Gesture {
   /** Construction : chantier ou pièce visée, et ce qu'on y fait. */
   build?: BuildRef;
   buildOp?: 'etape' | 'reparer' | 'torchis' | 'demonter';
+  /** Phase 6 : carcasse dépecée ; piège à réarmer ou dont on se dégage. */
+  carcass?: string;
+  trap?: string;
+  trapOp?: 'liberer' | 'rearmer';
 }
 
 /** Requête de visée pour tracer un plan : le sol et les obstacles (pièces, troncs), pas les objets. */
 const QUERY_BUILD = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
 /** Plan de chaque installation (pour ses débris). */
-const INSTALL_PLANS_BY_KIND: Record<'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge', PlanId> = { coffre: 'coffre', etabli: 'etabli', puits: 'puits', fourneau: 'fourneau', forge: 'forge' };
-const PROP_NAMES: Partial<Record<PropKind, string>> = { coffre: 'Le coffre', etabli: 'L’établi', puits: 'Le puits', fourneau: 'Le fourneau', forge: 'La forge' };
+const INSTALL_PLANS_BY_KIND: Record<InstallPropKind, PlanId> = { coffre: 'coffre', etabli: 'etabli', puits: 'puits', fourneau: 'fourneau', forge: 'forge', collet: 'collet', assommoir: 'assommoir', fosse: 'fosse' };
+const PROP_NAMES: Partial<Record<PropKind, string>> = { coffre: 'Le coffre', etabli: 'L’établi', puits: 'Le puits', fourneau: 'Le fourneau', forge: 'La forge', collet: 'Le collet', assommoir: 'L’assommoir', fosse: 'La fosse' };
 /** Portée des gestes de construction (m). */
 const BUILD_REACH = 3.4;
 /** Demi-hauteur des installations (le centre de leur volume est à cette hauteur au-dessus du sol). */
-const INSTALL_HALF: Record<'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge', number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4 };
+const INSTALL_HALF: Record<InstallPropKind, number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4, collet: 0.05, assommoir: 0.3, fosse: 0.05 };
 
 /** Outils nécessaires, pour les messages. */
 export const TOOL_NEEDS: Record<ToolTag, string> = {
@@ -217,6 +234,25 @@ const FUEL_LOG = 240;
 const FIRE_START = 300;
 const BOIL_TIME = 30;
 const FIRING_TIME = 90;
+/** Viande : cuisson sur le foyer (s), carcasse avariée puis disparue (s). */
+const MEAT_COOK = 45;
+const CARCASS_ROT = 3600;
+const CARCASS_GONE = 10800;
+const CARCASS_KINDS = new Set<PropKind>(['carcasse']);
+const FOOD_KINDS = new Set<PropKind>(['fruit_baobab', 'figue', 'muhacha', 'viande_crue', 'viande_cuite', 'sac']);
+const FOOD_ITEMS = new Set<ItemId>(['fruit_baobab', 'figue', 'muhacha', 'viande_crue', 'viande_cuite']);
+/** Requête des sens des créatures : le relief, les rochers, les troncs et les murs. */
+const QUERY_SIGHT = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
+const ZONE_AT: Record<Zone, string> = { tete: 'à la tête', torse: 'au torse', bras_g: 'au bras gauche', bras_d: 'au bras droit', jambe_g: 'à la jambe gauche', jambe_d: 'à la jambe droite' };
+const ATTACK_VERB: Partial<Record<SpeciesId, string>> = {
+  hyene: 'vous mord',
+  phacochere: 'vous blesse de ses défenses',
+  babouin: 'vous mord',
+  elephant: 'vous charge et vous projette',
+  leopard: 'vous saute dessus et vous lacère',
+  crocodile: 'vous happe',
+  ombre: 'vous saisit',
+};
 
 /** Sauvegarde de la partie (solo pour l'instant ; l'hôte en phase 8). */
 export interface SimSave {
@@ -236,6 +272,8 @@ export interface SimSave {
   world: ReturnType<WorldState['serialize']>;
   /** Constructions (phase 5) ; absentes des anciennes sauvegardes. */
   build?: ReturnType<BuildState['serialize']>;
+  /** Faune (phase 6) : populations, individus suivis, évolution ; absente des anciennes sauvegardes. */
+  fauna?: FaunaSave;
 }
 
 export interface SimulationOptions {
@@ -247,6 +285,10 @@ export interface SimulationOptions {
   heightProvider?: HeightProvider;
   /** Sauvegarde à reprendre (joueur et objets du monde). */
   save?: unknown;
+  /** Créatures réelles au plus autour du joueur (téléphone : 24). */
+  creatureCap?: number;
+  /** Faune active (par défaut : seulement dans un vrai monde, pas sur les terrains de test). */
+  fauna?: boolean;
 }
 
 /** Secondes entre la mort et la réapparition. */
@@ -264,6 +306,7 @@ export function compassDirection(dx: number, dz: number): string {
 }
 
 const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+const PROP_ARTICLE = (kind: PropKind): string => propWithArticle(kind);
 const ok = (message?: string): ActionResult => (message ? { ok: true, message } : { ok: true });
 const fail = (message?: string): ActionResult => (message ? { ok: false, message } : { ok: false });
 
@@ -309,6 +352,13 @@ export class LocalSimulation {
   private useCooldown = 0;
   /** Endurance dépensée hors déplacement (coups d'outil), pour l'énergie et la fatigue. */
   private extraSpent = 0;
+  /** Faune (phase 6). */
+  readonly fauna: Fauna;
+  private readonly faunaEnv: FaunaEnv;
+  /** Objets lancés suivis (dégâts aux créatures) ; pierre d'un assommoir (peut toucher le joueur). */
+  private readonly projectiles = new Map<string, { left: number; age: number; trap: boolean }>();
+  /** Piège qui retient le joueur (collet, fosse). */
+  trappedIn: string | null = null;
   private readonly collider: RAPIER.Collider;
   private lastDrownEvent = -1e9;
   private yaw = 0;
@@ -331,6 +381,22 @@ export class LocalSimulation {
     this.build = new BuildState((x, z) => this.terrain.heightAt(x, z));
     this.structPhys = new StructurePhysics(this.phys, this.build);
     this.phys.onContactForce = (h1, h2, force) => this.onImpact(h1, h2, force);
+    this.fauna = new Fauna(this.terrain.seed, this.terrain, opts.creatureCap ?? 40);
+    this.fauna.enabled = opts.fauna ?? this.terrain.floraEnabled;
+    this.faunaEnv = {
+      terrain: this.terrain,
+      physicsAt: (x, z) => this.phys.hasChunk(chunkCoord(x), chunkCoord(z)),
+      ray: (x, y, z, dx, dy, dz, len) => {
+        const hit = this.phys.world.castRay(new RAPIER.Ray({ x, y, z }, { x: dx, y: dy, z: dz }), len, true, undefined, QUERY_SIGHT);
+        return hit ? hit.timeOfImpact : null;
+      },
+      ground: (x, z) => this.terrain.heightAt(x, z),
+      fires: [],
+      carcasses: [],
+      food: [],
+      pieceAt: (x, y, z, r) => this.pieceNear(x, y, z, r),
+      traps: [],
+    };
     this.spawn = opts.spawnSeed !== undefined ? chooseSpawn(this.terrain, opts.spawnSeed) : findSpawn(this.terrain);
     this.vitals = makeVitals((opts.spawnSeed ?? this.terrain.seed) ^ 0x5eed);
     this.inventory = makeInventory(true);
@@ -401,8 +467,11 @@ export class LocalSimulation {
     }
 
     this.applyLimits();
+    // Tenu par une créature ou pris dans un piège : on ne se déplace plus ; on se débat.
+    const held = this.fauna.grab !== null || this.trappedIn !== null;
+    if (this.fauna.grab && v.state === 'eveille' && (q.buttons & ~s.prevButtons & (BTN_INTERACT | BTN_JUMP)) !== 0) this.fauna.struggle();
     // Bouger interrompt un geste, fait se lever ou réveille.
-    const wantsMove = q.wx * q.wx + q.wz * q.wz > 0.01 || (q.buttons & BTN_JUMP) !== 0;
+    const wantsMove = !held && (q.wx * q.wx + q.wz * q.wz > 0.01 || (q.buttons & BTN_JUMP) !== 0);
     if (wantsMove && v.state === 'eveille') {
       if (this.gesture) this.cancelGesture();
       if (v.posture !== 'debout') {
@@ -413,6 +482,8 @@ export class LocalSimulation {
     }
     let c = q;
     if (v.state !== 'eveille' || v.posture !== 'debout') c = { ...q, wx: 0, wz: 0, buttons: BTN_CROUCH };
+    else if (this.fauna.grab) c = { ...q, wx: 0, wz: 0, buttons: 0 };
+    else if (this.trappedIn) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_INTERACT };
     else if (this.gesture) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_CROUCH };
 
     const pressed = c.buttons & ~s.prevButtons;
@@ -429,6 +500,10 @@ export class LocalSimulation {
         const r = this.toggleDoor(bt.s, bt.p);
         if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
       }
+    } else if ((pressed & BTN_INTERACT) !== 0 && this.trappedIn) {
+      // Pris dans un piège : E pour se dégager.
+      propPressed &= ~BTN_INTERACT;
+      if (!this.gesture) this.startTrapGesture(this.trappedIn, 'liberer');
     } else if ((pressed & BTN_INTERACT) !== 0 && !this.props.held) {
       // Petits objets rangés directement ; sacs et corps s'ouvrent (affichage).
       const t = this.props.target(s, c.yaw, c.pitch);
@@ -437,6 +512,15 @@ export class LocalSimulation {
         // Pièce de construction ou chantier : porte qui s'ouvre, sinon son panneau.
         propPressed &= ~BTN_INTERACT;
         this.interactBuild(bt);
+      } else if (t && TRAP_KINDS.has(t.kind)) {
+        propPressed &= ~BTN_INTERACT;
+        const r = this.interactTrap(t.id);
+        if (r.message) this.msg(r.message, r.ok ? 'info' : 'alerte');
+      } else if (t && t.kind === 'carcasse') {
+        propPressed &= ~BTN_INTERACT;
+        const def = this.props.defOf(t.id);
+        const k = def?.carcass;
+        if (k) this.msg(k.meat > 0 && this.time - k.at < CARCASS_ROT ? `Carcasse ${SPECIES[k.sp].feminine ? 'd’une' : 'd’un'} ${SPECIES[k.sp].label} : une lame en main (Utiliser) pour la dépecer.` : 'Il n’y a plus rien de bon à prendre.', 'info');
       } else if (t && t.kind === 'puits') {
         propPressed &= ~BTN_INTERACT;
         const pot = this.findPot();
@@ -459,6 +543,10 @@ export class LocalSimulation {
       }
     }
     this.props.update(s, c, propPressed);
+    if (this.props.thrown) {
+      this.projectiles.set(this.props.thrown, { left: 3, age: 0, trap: false });
+      this.props.thrown = null;
+    }
     if (this.props.refusal) {
       this.msg(this.props.refusal, 'alerte');
       this.props.refusal = null;
@@ -466,6 +554,11 @@ export class LocalSimulation {
     stepMovement(this.phys, this.collider, s, c, TICK_DT);
     this.phys.step(TICK_DT);
     this.applyImpacts();
+    this.stepFauna();
+    if (this.dead) {
+      this.tick++;
+      return;
+    }
     if (this.tick % 30 === 0) this.props.rescueFallen();
 
     if (s.impactSeverity > 0) {
@@ -764,7 +857,8 @@ export class LocalSimulation {
     else if (g.kind === 'construction' && g.build) {
       if (g.buildOp === 'etape' || !g.buildOp) this.finishBuildStep(g.build);
       else this.finishPieceOp(g.build, g.buildOp);
-    }
+    } else if (g.kind === 'depecage' && g.carcass) this.finishButcher(g.carcass);
+    else if (g.kind === 'piege' && g.trap && g.trapOp) this.finishTrapGesture(g.trap, g.trapOp);
   }
 
   private startEating(from: HandOrSlot): ActionResult {
@@ -1313,6 +1407,9 @@ export class LocalSimulation {
     const s = this.state;
     if (s.mode === MODE_CLIMB) return null;
     const h = this.heldItem();
+    // Phase 6 : une créature visée (ou celle qui vous tient) passe avant tout.
+    const fight = this.attackCreature(h);
+    if (fight) return fight;
     if (h?.item === 'pot' && (this.inWater() || this.nearInstall('puits', 2.6))) return this.fillPot({ zone: 'main' });
     const t = this.props.target(s, this.yaw, this.pitch);
     const node = t && t.fixed && t.kind in NODE_SPECS ? t : null;
@@ -1324,6 +1421,8 @@ export class LocalSimulation {
     }
     // Torche allumée : allumer un foyer, une forge ou un fourneau visé.
     if (t && this.litTorchInHand() && (t.kind === 'foyer' || t.kind === 'forge' || t.kind === 'fourneau')) return this.startLighting(t.id);
+    // Carcasse : la dépecer avec une lame.
+    if (t && t.kind === 'carcasse') return this.startButcher(t.id, h);
     if (!node && !tree) return null;
     if (this.useCooldown > 0) return fail();
     if (node && (!tree || node.distance <= tree.distance)) return this.harvestNode(node, h);
@@ -1343,6 +1442,7 @@ export class LocalSimulation {
     if (s.stamina < cost) return fail('Trop fatigué : reprenez votre souffle.');
     this.exert(cost);
     this.useCooldown = STRIKE_TIME;
+    this.fauna.noise(s.x, s.z, spec.tool === 'percuteur' || spec.tool === 'fouir' ? 30 : 12);
     const ref = h && spec.tool ? this.stackRef({ zone: 'main' }) : null;
     const power = ref ? toolPower(ref.st) : 1;
     if (ref) this.wearRef(ref, 1);
@@ -1375,6 +1475,7 @@ export class LocalSimulation {
       this.exert(cost);
       this.useCooldown = STRIKE_TIME;
       this.wearRef(ref, 1);
+      this.fauna.noise(s.x, s.z, 40);
       const r = this.world.fellStrike(tree.key, spec, power, this.time);
       if (r.felled) {
         this.onTreeFelled(tree, spec.logs);
@@ -1423,6 +1524,8 @@ export class LocalSimulation {
 
   private onTreeFelled(tree: TreeTarget, logs: number): void {
     this.phys.rebuildChunk(tree.cx, tree.cz);
+    // Un arbre qui tombe s'entend de très loin.
+    this.fauna.noise(tree.x, tree.z, 120);
     const s = this.state;
     // L'arbre tombe à l'opposé du joueur : les bûches s'alignent le long du tronc.
     let dx = tree.x - s.x;
@@ -1780,7 +1883,19 @@ export class LocalSimulation {
     if (f.pot) return fail('Il y a déjà un pot sur le feu.');
     const ref = this.stackRef(from);
     if (!ref) return fail();
-    if (ref.st.item !== 'pot' && ref.st.item !== 'pot_cru') return fail('Seul un pot se pose sur le feu.');
+    if (ref.st.item === 'viande_crue') {
+      // Jusqu'à 4 morceaux à la fois, sur les pierres du foyer.
+      const n = Math.min(4, ref.st.count);
+      f.pot = { item: 'viande_crue', count: n };
+      f.cook = 0;
+      if (n >= ref.st.count) ref.remove();
+      else {
+        ref.st.count -= n;
+        ref.commit();
+      }
+      return ok(`La viande grille sur le feu (${n} ${n > 1 ? 'morceaux' : 'morceau'}) : trois quarts de minute, feu allumé.`);
+    }
+    if (ref.st.item !== 'pot' && ref.st.item !== 'pot_cru') return fail('Seuls un pot ou de la viande crue se posent sur le feu.');
     f.pot = { ...ref.st, count: 1 };
     f.cook = 0;
     ref.remove();
@@ -1837,6 +1952,10 @@ export class LocalSimulation {
       if (fire.pot.item === 'pot' && fire.pot.w === 1 && fire.cook >= BOIL_TIME) {
         fire.pot.w = 2;
         if (near) this.msg('L’eau bout dans le pot.', 'info');
+      } else if (fire.pot.item === 'viande_crue' && fire.cook >= MEAT_COOK) {
+        fire.pot = { item: 'viande_cuite', count: fire.pot.count };
+        fire.cook = 0;
+        if (near) this.msg('La viande est cuite : reprenez-la sur le foyer.', 'info');
       } else if (fire.pot.item === 'pot_cru' && fire.cook >= FIRING_TIME) {
         const q = fire.pot.q ?? 60;
         const dm = maxDurability('pot', q, 0);
@@ -2075,6 +2194,7 @@ export class LocalSimulation {
     if (kind === 'coffre') prop.container = { pockets: [], bag: [] };
     if (kind === 'forge') prop.fire = { lit: false, fuel: 0, pot: null, cook: 0 };
     if (kind === 'fourneau') prop.furnace = { ore: 0, fuel: 0, lit: false, heat: 0, work: 0, blooms: 0 };
+    if (TRAP_KINDS.has(kind)) prop.trap = { armed: true, caught: null };
     this.build.removeSite(site.id);
     this.props.spawnDynamic(prop);
     this.msg(`${def.label} : terminé.`, 'info');
@@ -2508,6 +2628,609 @@ export class LocalSimulation {
   // ——— Sauvegarde ———
 
   /** État à sauvegarder. Mort, le joueur est sauvegardé comme déjà réapparu. */
+  // ——— Phase 6 : faune, combats, carcasses, pièges ———
+
+  /** Ce que les créatures savent du joueur à ce pas. */
+  private faunaPlayer(): FaunaPlayer {
+    const s = this.state;
+    const v = this.vitals;
+    const speed = Math.hypot(s.vx, s.vz);
+    let noise = 0;
+    if (s.mode === MODE_SWIM) noise = speed > 1.4 ? 30 : speed > 0.2 ? 14 : 4;
+    else if (s.mode === MODE_CLIMB) noise = 6;
+    else if (speed > 4) noise = 28;
+    else if (speed > 0.5) noise = s.crouched ? 3 : 10;
+    const h = this.heldItem();
+    const tool = h ? ITEMS[h.item].tool : undefined;
+    const weapon = tool && (tool.tags.includes('pointe') || tool.tags.includes('hache') || (tool.tags.includes('tranchant') && tool.reach >= 0.3)) ? Math.min(1, 0.5 + tool.power * 0.3) : 0;
+    const meat = countOf(this.inventory, 'viande_crue') + countOf(this.inventory, 'viande_cuite') > 0 || h?.item === 'viande_crue' || h?.item === 'viande_cuite';
+    return {
+      x: s.x,
+      y: s.y,
+      z: s.z,
+      vx: s.vx,
+      vz: s.vz,
+      crouched: s.crouched,
+      swimming: s.mode === MODE_SWIM,
+      underwater: s.y + (s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT) < WATER_LEVEL,
+      climbing: s.mode === MODE_CLIMB,
+      waterDepth: Math.max(0, WATER_LEVEL - this.terrain.heightAt(s.x, s.z)),
+      yaw: this.yaw,
+      state: v.state,
+      health: v.health,
+      bleeding: totalBleeding(v),
+      injuredLegs: v.injuries.some((i) => isLeg(i.zone) && (i.kind === 'fracture' || i.kind === 'entorse')),
+      weapon,
+      torch: this.litTorchInHand(),
+      meat,
+      noise,
+    };
+  }
+
+  /** Feux, carcasses, nourriture et pièges autour du joueur (deux fois par seconde). */
+  private refreshFaunaEnv(): void {
+    const env = this.faunaEnv;
+    env.fires = [];
+    for (const { def, fire } of this.props.fires()) {
+      if (!fire.lit) continue;
+      const pos = this.props.position(def.id);
+      if (pos) env.fires.push({ x: pos.x, z: pos.z, r: def.kind === 'torche' ? 1 : 2 });
+    }
+    for (const { def, furnace } of this.props.furnaces()) {
+      if (!furnace.lit) continue;
+      const pos = this.props.position(def.id);
+      if (pos) env.fires.push({ x: pos.x, z: pos.z, r: 2 });
+    }
+    for (const st of this.build.structures) {
+      for (const p of st.pieces) {
+        if ((p.burning ?? 0) <= 0) continue;
+        const c = pieceTransform(st, p.slot);
+        env.fires.push({ x: c.x, z: c.z, r: 3 });
+      }
+    }
+    env.carcasses = [];
+    for (const def of this.props.liveOfKind(CARCASS_KINDS)) {
+      const pos = this.props.position(def.id);
+      if (pos && def.carcass) env.carcasses.push({ id: def.id, x: pos.x, y: pos.y, z: pos.z, meat: this.time - def.carcass.at < CARCASS_ROT * 2 ? def.carcass.meat : 0 });
+    }
+    env.traps = [];
+    for (const def of this.props.liveOfKind(TRAP_KINDS)) {
+      if (!def.trap) continue;
+      env.traps.push({ id: def.id, x: def.x, z: def.z, kind: def.kind as 'collet' | 'assommoir' | 'fosse', armed: def.trap.armed });
+    }
+    if (this.tick % 60 === 0) {
+      env.food = [];
+      const heldId = this.props.held?.id;
+      for (const def of this.props.liveOfKind(FOOD_KINDS)) {
+        if (def.id === heldId) continue;
+        if (def.kind === 'sac' && !(def.container && [...def.container.pockets, ...(def.container.bag ?? [])].some((st) => st && FOOD_ITEMS.has(st.item)))) continue;
+        const pos = this.props.position(def.id);
+        if (pos) env.food.push({ id: def.id, x: pos.x, z: pos.z });
+      }
+    }
+  }
+
+  private stepFauna(): void {
+    if (!this.fauna.enabled) return;
+    if (this.tick % 30 === 0) this.refreshFaunaEnv();
+    this.stepProjectiles();
+    this.fauna.step(TICK_DT, this.time, this.faunaPlayer(), this.faunaEnv);
+    for (const e of this.fauna.takeEvents()) {
+      this.onFaunaEvent(e);
+      if (this.dead) return;
+    }
+    this.applyGrab();
+    this.separateFromCreatures();
+    if (this.tick % 6 === 0) this.stepPlayerTraps();
+    if (this.tick % 60 === 0) this.stepCarcasses();
+    if (this.tick % 60 === 30) this.stepTrappedCreatures();
+  }
+
+  private onFaunaEvent(e: FaunaEvent): void {
+    const s = this.state;
+    const v = this.vitals;
+    switch (e.type) {
+      case 'son':
+        this.push({ type: 'son', kind: e.kind, x: e.x, y: e.y, z: e.z, tick: this.tick });
+        break;
+      case 'attaque': {
+        const c = this.fauna.creatures.get(e.id);
+        const d = SPECIES[e.sp];
+        const atk = d.attack;
+        if (!atk || !c) break;
+        const zones: Array<[Zone, number]> = e.downed ? [['torse', 3], ['tete', 1], ['bras_g', 1], ['bras_d', 1]] : atk.zones;
+        let total = 0;
+        for (const [, w] of zones) total += w;
+        let r = rand(v) * total;
+        let zone: Zone = zones[0]![0];
+        for (const [z, w] of zones) {
+          r -= w;
+          if (r <= 0) {
+            zone = z;
+            break;
+          }
+        }
+        const dmg = atk.damage * c.scale * (e.behind ? 1.4 : 1) * (0.85 + 0.3 * rand(v));
+        damage(v, dmg);
+        if (atk.injury === 'coupure') addInjury(v, zone, 'coupure', rand(v) < atk.grave);
+        else addInjury(v, zone, atk.injury);
+        if (rand(v) < atk.fracture && zone !== 'torse') addInjury(v, zone, 'fracture');
+        if (zone === 'tete' && dmg > 18 && rand(v) < 0.35) {
+          addInjury(v, 'tete', 'commotion');
+          knockOut(v, VITALS.concussionUnconsciousSeconds);
+        }
+        // Le choc projette, interrompt le geste et fait lâcher ce qu'on tient.
+        if (atk.knock > 0) {
+          const dx = s.x - c.x;
+          const dz = s.z - c.z;
+          const l = Math.hypot(dx, dz) || 1;
+          s.vx += (dx / l) * atk.knock;
+          s.vz += (dz / l) * atk.knock;
+          if (atk.knock > 5) s.vy = Math.max(s.vy, atk.knock * 0.35);
+        }
+        if (this.gesture) this.gesture = null;
+        if (this.props.held && (atk.knock >= 3 || dmg > 20)) this.props.drop(s);
+        this.push({ type: 'attaque', sp: e.sp, zone, tick: this.tick });
+        this.msg(`${cap(speciesName(e.sp))} ${ATTACK_VERB[e.sp] ?? 'vous attaque'} ${ZONE_AT[zone]} !`, 'danger');
+        // À terre, un prédateur achève sa proie.
+        const predator = d.archetype === 'meute' || d.archetype === 'embuscade' || d.archetype === 'aquatique';
+        if (e.downed && predator && rand(v) < 0.35) {
+          die(v, 'attaque');
+          this.onDeath();
+        }
+        break;
+      }
+      case 'saisie':
+        this.props.held && this.props.drop(s);
+        this.gesture = null;
+        this.msg(e.sp === 'ombre' ? 'Quelque chose d’énorme vous a saisi et vous tire vers le fond ! Frappez-le (Utiliser) ou débattez-vous (E) !' : 'Le crocodile vous entraîne dans l’eau ! Frappez-le à la tête (Utiliser) ou débattez-vous (E) !', 'danger');
+        break;
+      case 'lache':
+        if (e.reason === 'coups') this.msg(e.sp === 'ombre' ? 'Touchée, la chose vous lâche ! Remontez !' : 'Frappé, le crocodile vous lâche !', 'alerte');
+        else if (e.reason === 'debattu') this.msg('Vous vous dégagez !', 'alerte');
+        else if (e.reason === 'temps' && !this.dead) this.msg(e.sp === 'ombre' ? 'L’étreinte se relâche… Remontez vite !' : 'Le crocodile vous lâche.', 'alerte');
+        break;
+      case 'mort':
+        if (e.sp !== 'vautour' && e.sp !== 'ombre') this.spawnCarcass(e.sp, e.x, e.z, e.yaw, e.scale);
+        break;
+      case 'piece': {
+        const p = this.build.piece(e.s, e.p);
+        if (!p) break;
+        if (this.build.damage(e.s, e.p, damageFor(p.mat, 'creature', e.damage))) {
+          const near = Math.hypot(p ? (this.build.structure(e.s)?.x ?? s.x) - s.x : 0, (this.build.structure(e.s)?.z ?? s.z) - s.z) < 80;
+          this.breakPiece(e.s, e.p, 0.4, near ? `${cap(speciesName(e.sp, 'un'))} a renversé : ${PLANS[p.plan].label.toLowerCase()}.` : null);
+        }
+        break;
+      }
+      case 'manger': {
+        const def = this.props.defOf(e.carcass);
+        if (def?.carcass) def.carcass.meat = Math.max(0, def.carcass.meat - e.amount);
+        break;
+      }
+      case 'vol': {
+        const def = this.props.defOf(e.prop);
+        if (!def) break;
+        const pos = this.props.position(e.prop);
+        if (def.kind === 'sac' && def.container) {
+          const all = [...def.container.pockets, ...(def.container.bag ?? [])];
+          const st = all.find((x) => x && FOOD_ITEMS.has(x.item));
+          if (st) {
+            st.count--;
+            def.container.pockets = def.container.pockets.map((x) => (x && x.count <= 0 ? null : x));
+            if (def.container.bag) def.container.bag = def.container.bag.filter((x) => x.count > 0);
+            this.props.refreshMass(def.id);
+          }
+        } else this.props.remove(e.prop);
+        if (pos && Math.hypot(pos.x - s.x, pos.z - s.z) < 70) this.msg('Un babouin file avec votre nourriture !', 'alerte');
+        this.refreshFaunaEnv();
+        break;
+      }
+      case 'piege':
+        this.onTrapTriggered(e.trap, e.id, e.sp);
+        break;
+      case 'disparait':
+        break;
+    }
+  }
+
+  /** Le joueur tenu suit la gueule de la créature ; il perd son souffle et sa santé. */
+  private applyGrab(): void {
+    const gr = this.fauna.grab;
+    if (!gr) return;
+    const pt = this.fauna.grabPoint();
+    const c = this.fauna.creatures.get(gr.id);
+    if (!pt || !c) return;
+    const s = this.state;
+    const v = this.vitals;
+    let y = pt.y;
+    if (c.sp === 'crocodile') y = WATER_LEVEL - 1.2 - 0.8 * Math.abs(Math.sin(gr.t * 2.5));
+    y = Math.max(this.terrain.heightAt(pt.x, pt.z) + 0.05, y);
+    s.x = pt.x;
+    s.y = y;
+    s.z = pt.z;
+    s.vx = 0;
+    s.vy = 0;
+    s.vz = 0;
+    if (c.sp === 'ombre') {
+      // Tiré vers le fond : le souffle part trois fois plus vite.
+      s.breath = Math.max(0, s.breath - 7 * TICK_DT);
+      damage(v, 2 * TICK_DT);
+    } else {
+      damage(v, 4 * TICK_DT);
+      if (Math.floor((gr.t - TICK_DT) / 2.5) !== Math.floor(gr.t / 2.5)) addInjury(v, rand(v) < 0.5 ? 'jambe_g' : 'jambe_d', rand(v) < 0.3 ? 'fracture' : 'coupure', rand(v) < 0.4);
+    }
+  }
+
+  /** On ne traverse pas une créature : elle repousse le joueur. */
+  private separateFromCreatures(): void {
+    const s = this.state;
+    if (this.fauna.grab) return;
+    const nb = this.fauna.nearestBody(s.x, s.y + 0.9, s.z);
+    if (!nb || nb.d >= 0.3) return;
+    const c = this.fauna.creatures.get(nb.id);
+    if (!c) return;
+    const dx = s.x - c.x;
+    const dz = s.z - c.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const push = Math.min(3, (0.3 - nb.d) * 12);
+    s.vx += (dx / l) * push;
+    s.vz += (dz / l) * push;
+  }
+
+  /** Les objets lancés (et la pierre d'un assommoir) blessent les créatures qu'ils touchent. */
+  private stepProjectiles(): void {
+    const s = this.state;
+    for (const [id, pr] of this.projectiles) {
+      const pos = this.props.position(id);
+      const vel = this.props.velocityOf(id);
+      const def = this.props.defOf(id);
+      pr.left -= TICK_DT;
+      pr.age += TICK_DT;
+      if (!pos || !vel || !def || pr.left <= 0) {
+        this.projectiles.delete(id);
+        continue;
+      }
+      const speed = Math.hypot(vel.x, vel.y, vel.z);
+      if (speed < 3) {
+        // Encore lent au départ (pierre qui commence à tomber) ; arrêté ensuite : on cesse de le suivre.
+        if (pr.age > 0.6) this.projectiles.delete(id);
+        continue;
+      }
+      const q = { x: pos.x + vel.x * TICK_DT, y: pos.y + vel.y * TICK_DT, z: pos.z + vel.z * TICK_DT };
+      const mass = this.props.massOf(id);
+      const pointe = def.kind === 'lance';
+      const hit = this.fauna.sweepHit(pos, q, Math.max(0.05, def.radius));
+      if (hit) {
+        const c = this.fauna.creatures.get(hit.id);
+        const ke = 0.5 * mass * speed * speed;
+        const dmg = Math.min(160, ke * (pointe ? 0.6 : 0.22));
+        const res = this.fauna.hurt(hit.id, dmg, hit.part, { bleed: pointe, by: pr.trap ? 'piege' : 'joueur', x: s.x, z: s.z });
+        this.props.setVelocity(id, { x: -vel.x * 0.2, y: Math.max(1, -vel.y * 0.2), z: -vel.z * 0.2 });
+        this.projectiles.delete(id);
+        this.fauna.noise(pos.x, pos.z, 18);
+        if (c && res) {
+          this.push({ type: 'touche', sp: c.sp, part: hit.part, killed: res.killed, x: pos.x, y: pos.y, z: pos.z, tick: this.tick });
+          if (res.killed) this.msg(`${cap(speciesName(c.sp, 'le'))} s’effondre.`, 'info');
+          else if (!pr.trap) this.msg(`${cap(PROP_ARTICLE(def.kind))} touche ${speciesName(c.sp, 'le')} ${PART_LABELS[hit.part]}.`, 'info');
+        }
+        continue;
+      }
+      // La pierre d'un assommoir peut aussi tomber sur le joueur.
+      if (pr.trap && vel.y < -2) {
+        const dx = q.x - s.x;
+        const dz = q.z - s.z;
+        if (Math.hypot(dx, dz) < 0.45 + def.radius && q.y < s.y + 1.9 && q.y > s.y - 0.2) {
+          const v = this.vitals;
+          damage(v, Math.min(60, 0.5 * mass * speed * speed * 0.12));
+          addInjury(v, rand(v) < 0.5 ? 'tete' : 'torse', 'contusion');
+          if (rand(v) < 0.4) addInjury(v, rand(v) < 0.5 ? 'bras_g' : 'bras_d', 'fracture');
+          this.push({ type: 'attaque', sp: 'impala', zone: 'torse', tick: this.tick });
+          this.msg('La pierre de l’assommoir vous tombe dessus !', 'danger');
+          this.props.setVelocity(id, { x: 0.5, y: 0, z: 0.5 });
+          this.projectiles.delete(id);
+        }
+      }
+    }
+  }
+
+  /** Coup porté à une créature visée avec ce qu'on tient (ou à mains nues). */
+  private attackCreature(h: { id: string; def: PropDef; item: ItemId } | null): ActionResult | null {
+    if (!this.fauna.enabled) return null;
+    const s = this.state;
+    const eye = this.eye();
+    const dir = lookDirection(this.yaw, this.pitch);
+    const spec = h ? ITEMS[h.item].tool : undefined;
+    const reach = 1.1 + (spec?.reach ?? 0.1);
+    let hit = this.fauna.rayHit(eye, dir, reach);
+    if (hit) {
+      const wall = this.phys.world.castRay(new RAPIER.Ray(eye, dir), hit.t, true, undefined, QUERY_SIGHT);
+      if (wall && wall.timeOfImpact < hit.t - 0.15) hit = null;
+    }
+    // Tenu par une créature : on frappe celle-ci, même sans bien viser.
+    const gr = this.fauna.grab;
+    if (!hit && gr) {
+      const c = this.fauna.creatures.get(gr.id);
+      if (c) hit = { id: c.id, t: 1, part: rand(this.vitals) < 0.4 ? 'tete' : 'corps', x: c.x, y: c.y, z: c.z };
+    }
+    if (!hit) return null;
+    const c = this.fauna.creatures.get(hit.id);
+    if (!c) return null;
+    if (this.useCooldown > 0) return fail();
+    const mass = h ? this.props.massOf(h.id) : 0;
+    const balance = spec?.balance ?? 0.5;
+    const cost = 3 + mass * 2.5;
+    if (s.stamina < cost) return fail('Trop fatigué pour frapper : reprenez votre souffle.');
+    this.exert(cost);
+    this.useCooldown = Math.max(0.35, Math.min(1.3, 0.45 + mass * 0.12 - balance * 0.15));
+    const ref = h && spec && spec.durability > 0 ? this.stackRef({ zone: 'main' }) : null;
+    const power = ref ? toolPower(ref.st) : spec ? spec.power : 0.4;
+    const tags = spec?.tags ?? [];
+    const sharp = tags.includes('pointe') ? 1.6 : tags.includes('hache') ? 1.4 : tags.includes('tranchant') ? 1.3 : 1;
+    const v = this.vitals;
+    const brokenArm = v.injuries.some((i) => (i.zone === 'bras_d' || i.zone === 'bras_g') && i.kind === 'fracture' && !i.splinted);
+    const base = h ? (6 + 9 * power) * Math.sqrt(Math.max(0.3, mass + 0.3)) * sharp : 3;
+    const dmg = base * (0.85 + 0.3 * rand(v)) * (brokenArm ? 0.5 : 1);
+    const bleed = tags.includes('tranchant') || tags.includes('pointe');
+    const res = this.fauna.hurt(hit.id, dmg, hit.part, { bleed, by: 'joueur', x: s.x, z: s.z });
+    if (ref) this.wearRef(ref, 1);
+    this.fauna.noise(s.x, s.z, 20);
+    this.push({ type: 'son', kind: h ? 'coup' : 'coup', x: hit.x, y: hit.y, z: hit.z, tick: this.tick });
+    this.push({ type: 'touche', sp: c.sp, part: hit.part, killed: !!res?.killed, x: hit.x, y: hit.y, z: hit.z, tick: this.tick });
+    if (res?.killed) return ok(`${cap(speciesName(c.sp, 'le'))} s’effondre.`);
+    return ok(`Vous frappez ${speciesName(c.sp, 'le')} ${PART_LABELS[hit.part]}.`);
+  }
+
+  private spawnCarcass(sp: SpeciesId, x: number, z: number, yaw: number, scale: number): string {
+    const d = SPECIES[sp];
+    const y = this.terrain.heightAt(x, z);
+    const water = WATER_LEVEL - y;
+    return this.props.spawnDynamic({
+      kind: 'carcasse',
+      x,
+      y: Math.max(y, water > 0 ? WATER_LEVEL - 0.3 : y) + d.radius * scale * 0.6,
+      z,
+      rot: ((((Math.PI / 2 - yaw) / (Math.PI * 2)) % 1) + 1) % 1,
+      radius: Math.max(0.15, d.radius * scale),
+      length: Math.max(0.4, d.halfLength * 2 * scale),
+      fixed: true,
+      carcass: { sp, meat: Math.max(1, Math.round(d.meat * scale)), at: this.time, scale },
+    });
+  }
+
+  /** Les carcasses attirent les vautours, pourrissent, puis disparaissent. */
+  private stepCarcasses(): void {
+    const s = this.state;
+    const gone: string[] = [];
+    this.props.forEachDynamic((def, pos) => {
+      const k = def.carcass;
+      if (!k) return;
+      const age = this.time - k.at;
+      if (age > CARCASS_GONE || (k.meat <= 0 && age > 600)) {
+        gone.push(def.id);
+        return;
+      }
+      if (!k.vultures && age > 60 && k.meat > 0 && Math.hypot(pos.x - s.x, pos.z - s.z) < 400) {
+        k.vultures = true;
+        this.fauna.vulturesFor(def.id, pos.x, pos.z);
+      }
+    });
+    for (const id of gone) this.props.remove(id);
+  }
+
+  private startButcher(id: string, h: { id: string; def: PropDef; item: ItemId } | null): ActionResult {
+    const def = this.props.defOf(id);
+    const k = def?.carcass;
+    if (!def || !k) return fail();
+    if (!h || !hasTag(h.item, 'tranchant')) return fail('Il faut une lame en main pour dépecer : éclat de quartz, couteau ou hache.');
+    if (k.meat <= 0) return fail('Il ne reste que les os.');
+    if (this.time - k.at > CARCASS_ROT) return fail('La viande est avariée : elle vous rendrait malade.');
+    const seconds = Math.min(16, 5 + SPECIES[k.sp].mass / 60);
+    this.gesture = { kind: 'depecage', label: `Vous dépecez la carcasse ${SPECIES[k.sp].feminine ? 'de la' : 'du'} ${SPECIES[k.sp].label}…`, total: seconds, left: seconds, carcass: id };
+    return ok();
+  }
+
+  private finishButcher(id: string): void {
+    const def = this.props.defOf(id);
+    const k = def?.carcass;
+    const pos = this.props.position(id);
+    if (!def || !k || !pos) return;
+    const n = Math.min(2, k.meat);
+    if (n <= 0) return;
+    k.meat -= n;
+    this.wearTool('tranchant', 1);
+    const left = store(this.inventory, { item: 'viande_crue', count: n });
+    if (left > 0) this.dropNear({ item: 'viande_crue', count: left }, pos.x, pos.z, 0);
+    this.fauna.noise(pos.x, pos.z, 8);
+    this.msg(k.meat > 0 ? `Vous prélevez ${itemName('viande_crue', n)}. Il en reste sur la carcasse.` : `Vous prélevez ${itemName('viande_crue', n)}. Il ne reste que les os.`, 'info');
+  }
+
+  /** Piège déclenché par une créature. */
+  private onTrapTriggered(trapId: string, creature: string, sp: SpeciesId): void {
+    const def = this.props.defOf(trapId);
+    const t = def?.trap;
+    if (!def || !t) return;
+    const s = this.state;
+    const near = Math.hypot(def.x - s.x, def.z - s.z) < 60;
+    const d = SPECIES[sp];
+    t.armed = false;
+    if (def.kind === 'collet') {
+      if (d.mass <= 130) {
+        t.caught = creature;
+        this.fauna.setCaught(creature, trapId);
+        if (near) this.msg(`${cap(speciesName(sp))} se débat, pris dans votre collet !`, 'info');
+      } else {
+        t.broken = true;
+        if (near) this.msg(`${cap(speciesName(sp))} a arraché votre collet.`, 'alerte');
+      }
+    } else if (def.kind === 'fosse') {
+      const res = this.fauna.hurt(creature, d.mass > 1000 ? 140 : 75, 'pattes', { bleed: true, by: 'piege', x: def.x, z: def.z });
+      if (res && !res.killed && d.mass <= 1000) {
+        t.caught = creature;
+        this.fauna.setCaught(creature, trapId);
+      }
+      if (near) this.msg(`${cap(speciesName(sp))} tombe dans la fosse à pieux !`, 'info');
+    } else if (def.kind === 'assommoir') {
+      this.dropTrapStone(def);
+    }
+    this.refreshFaunaEnv();
+  }
+
+  /** La pierre de l'assommoir tombe (vraie pièce physique). */
+  private dropTrapStone(def: PropDef): void {
+    const mass = 20;
+    const r = Math.cbrt(mass / ((4 / 3) * Math.PI * 2600));
+    const id = this.props.spawnDynamic({ kind: 'pierre', x: def.x + 0.05, y: def.y + 1.1, z: def.z, rot: 0.2, radius: r, length: 0 }, { x: 0, y: -1.5, z: 0 });
+    this.projectiles.set(id, { left: 2, age: 0, trap: true });
+    this.push({ type: 'son', kind: 'piege', x: def.x, y: def.y, z: def.z, tick: this.tick });
+  }
+
+  /** Le joueur marche sur un piège armé. */
+  private stepPlayerTraps(): void {
+    if (this.trappedIn || this.vitals.state !== 'eveille' || this.state.mode !== MODE_WALK) return;
+    const s = this.state;
+    const v = this.vitals;
+    for (const def of this.props.liveOfKind(TRAP_KINDS)) {
+      const t = def.trap;
+      if (!t?.armed) continue;
+      const r = def.kind === 'fosse' ? 0.9 : def.kind === 'collet' ? 0.35 : 0.45;
+      if (Math.hypot(def.x - s.x, def.z - s.z) > r) continue;
+      t.armed = false;
+      if (def.kind === 'collet') {
+        t.caught = 'joueur';
+        this.trappedIn = def.id;
+        if (rand(v) < 0.2) addInjury(v, rand(v) < 0.5 ? 'jambe_g' : 'jambe_d', 'entorse');
+        this.push({ type: 'son', kind: 'piege', x: def.x, y: def.y, z: def.z, tick: this.tick });
+        this.msg('Votre pied se prend dans le collet ! E pour vous dégager.', 'alerte');
+      } else if (def.kind === 'fosse') {
+        t.caught = 'joueur';
+        this.trappedIn = def.id;
+        damage(v, 20 + rand(v) * 15);
+        const leg: Zone = rand(v) < 0.5 ? 'jambe_g' : 'jambe_d';
+        addInjury(v, leg, rand(v) < 0.35 ? 'fracture' : 'entorse');
+        if (rand(v) < 0.7) addInjury(v, rand(v) < 0.5 ? 'jambe_g' : 'jambe_d', 'coupure', rand(v) < 0.3);
+        this.push({ type: 'attaque', sp: 'impala', zone: leg, tick: this.tick });
+        this.msg('Vous tombez dans la fosse à pieux ! E pour en sortir.', 'danger');
+      } else {
+        this.dropTrapStone(def);
+      }
+      this.refreshFaunaEnv();
+      return;
+    }
+  }
+
+  /** Une créature prise se débat : elle peut casser le collet ou sortir de la fosse. */
+  private stepTrappedCreatures(): void {
+    for (const def of this.props.liveOfKind(TRAP_KINDS)) {
+      const t = def.trap;
+      if (!t?.caught || t.caught === 'joueur') continue;
+      const c = this.fauna.creatures.get(t.caught);
+      if (!c || c.dead) {
+        t.caught = null;
+        continue;
+      }
+      if (this.fauna.struggleFree(t.caught, def.kind === 'collet' ? 0.05 : 0.02)) {
+        t.caught = null;
+        if (def.kind === 'collet') t.broken = true;
+        const s = this.state;
+        if (Math.hypot(def.x - s.x, def.z - s.z) < 60) this.msg(def.kind === 'collet' ? `${cap(speciesName(c.sp, 'le'))} casse le collet et s’enfuit.` : `${cap(speciesName(c.sp, 'le'))} parvient à sortir de la fosse.`, 'alerte');
+      }
+    }
+  }
+
+  /** E sur un piège : le réarmer, ou dire ce qu'il retient. */
+  private interactTrap(id: string): ActionResult {
+    const def = this.props.defOf(id);
+    const t = def?.trap;
+    if (!def || !t) return fail();
+    if (t.caught && t.caught !== 'joueur') {
+      const c = this.fauna.creatures.get(t.caught);
+      if (c && !c.dead) return ok(`${cap(speciesName(c.sp, 'un'))} est pris : achevez-le (Utiliser avec une arme).`);
+      t.caught = null;
+    }
+    if (t.armed) return ok(def.kind === 'fosse' ? 'La fosse est couverte et prête.' : def.kind === 'collet' ? 'Le collet est tendu.' : 'L’assommoir est tendu.');
+    return this.startTrapGesture(id, 'rearmer');
+  }
+
+  private trapNeeds(def: PropDef): Need[] {
+    if (def.kind === 'collet') return def.trap?.broken ? [['corde', 1]] : [];
+    if (def.kind === 'fosse') return [['herbe', 2]];
+    return [['pierre', 15]];
+  }
+
+  private startTrapGesture(id: string, op: 'liberer' | 'rearmer'): ActionResult {
+    const def = this.props.defOf(id);
+    if (!def?.trap) return fail();
+    if (op === 'rearmer') {
+      const c = { x: def.x, y: def.y, z: def.z };
+      const missing = this.missingNeed(this.trapNeeds(def), c);
+      if (missing) return fail(`Pour réarmer : ${needLabel(missing)}${def.kind === 'assommoir' ? ' (posée à côté)' : ''}.`);
+    }
+    const seconds = op === 'liberer' ? (def.kind === 'fosse' ? 4 : 2) : def.kind === 'assommoir' ? 6 : 4;
+    const label = op === 'liberer' ? (def.kind === 'fosse' ? 'Vous sortez de la fosse…' : 'Vous dégagez votre pied du collet…') : `Vous réarmez ${PROP_ARTICLE(def.kind)}…`;
+    this.gesture = { kind: 'piege', label, total: seconds, left: seconds, trap: id, trapOp: op };
+    return ok();
+  }
+
+  private finishTrapGesture(id: string, op: 'liberer' | 'rearmer'): void {
+    const def = this.props.defOf(id);
+    const t = def?.trap;
+    if (!def || !t) {
+      if (op === 'liberer') this.trappedIn = null;
+      return;
+    }
+    if (op === 'liberer') {
+      this.trappedIn = null;
+      t.caught = null;
+      if (def.kind === 'collet') t.broken = true;
+      this.msg(def.kind === 'fosse' ? 'Vous êtes sorti de la fosse.' : 'Vous êtes libre.', 'info');
+      return;
+    }
+    const c = { x: def.x, y: def.y, z: def.z };
+    const needs = this.trapNeeds(def);
+    if (this.missingNeed(needs, c)) return;
+    this.consumeNeeds(needs, c);
+    t.armed = true;
+    t.caught = null;
+    t.broken = false;
+    this.refreshFaunaEnv();
+    this.msg(`${cap(PROP_ARTICLE(def.kind))} est de nouveau ${def.kind === 'fosse' ? 'prête' : 'tendu'}.`, 'info');
+  }
+
+  /** Pièce de construction qui barre le passage en ce point (clôtures, murs, portes fermées). */
+  private pieceNear(x: number, y: number, z: number, r: number): { s: string; p: number; wood: boolean } | null {
+    for (const st of this.build.structures) {
+      if (Math.hypot(st.x - x, st.z - z) > 40) continue;
+      for (const p of st.pieces) {
+        if (!isDone(p)) continue;
+        const kind = PLANS[p.plan].piece;
+        if (kind === 'sol' || kind === 'dallage' || kind === 'toit' || kind === 'echelle') continue;
+        for (const b of pieceBoxes(st, p, true)) {
+          const c = Math.cos(-b.yaw);
+          const sn = Math.sin(-b.yaw);
+          const lx = (x - b.x) * c - (z - b.z) * sn;
+          const lz = (x - b.x) * sn + (z - b.z) * c;
+          const ly = y - b.y;
+          const dx = Math.max(0, Math.abs(lx) - b.hx);
+          const dy = Math.max(0, Math.abs(ly) - b.hy);
+          const dz = Math.max(0, Math.abs(lz) - b.hz);
+          if (dx * dx + dy * dy + dz * dz <= r * r) return { s: st.id, p: p.id, wood: p.mat === 'bois' || p.mat === 'chaume' };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Créatures autour du joueur (affichage). */
+  creatureViews(): ReturnType<Fauna['views']> {
+    return this.fauna.views();
+  }
+
+  /** Fait apparaître des créatures (outils de test, tests automatiques). */
+  spawnCreatures(sp: SpeciesId, x: number, z: number, n?: number): string[] {
+    const g = this.fauna.spawnGroup(sp, x, z, n);
+    return [...g.members];
+  }
+
   serialize(): SimSave {
     const s = this.state;
     let pos = { x: s.x, y: s.y, z: s.z };
@@ -2527,6 +3250,7 @@ export class LocalSimulation {
       props: this.props.serialize(),
       world: this.world.serialize(),
       build: this.build.serialize(),
+      fauna: this.fauna.serialize(),
     };
   }
 
@@ -2538,6 +3262,7 @@ export class LocalSimulation {
     this.props.restore(r.props);
     this.world.restore(r.world);
     this.build.restore(r.build);
+    this.fauna.restore(r.fauna);
     const p = r.player as Record<string, unknown> | undefined;
     if (!p || typeof p !== 'object') return null;
     this.vitals = readVitals(p.vitals, this.vitals.rng);

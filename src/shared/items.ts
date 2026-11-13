@@ -41,7 +41,10 @@ export type ItemId =
   | 'clous'
   | 'boulons'
   | 'hache_fer'
-  | 'couteau_fer';
+  | 'couteau_fer'
+  // Phase 6 : chasse
+  | 'viande_crue'
+  | 'viande_cuite';
 
 /** Usages d'un outil. */
 export type ToolTag = 'tranchant' | 'hache' | 'percuteur' | 'fouir' | 'batee' | 'feu' | 'recipient' | 'pointe';
@@ -500,6 +503,30 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     stack: 1,
     tool: { tags: ['tranchant'], durability: 400, reach: 0.3, balance: 0.75, power: 1.5 },
     description: 'Lame forgée : coupe, taille et écorce longtemps.',
+  },
+  viande_crue: {
+    id: 'viande_crue',
+    label: 'morceau de viande crue',
+    plural: 'morceaux de viande crue',
+    feminine: false,
+    mass: 0.5,
+    volume: 0.5,
+    pocket: false,
+    stack: 6,
+    food: { heal: 6, seconds: 30 },
+    description: 'Prélevée sur une carcasse. Crue, elle nourrit peu ; cuite sur un foyer, elle rend bien plus de santé. Son odeur attire les hyènes et les babouins.',
+  },
+  viande_cuite: {
+    id: 'viande_cuite',
+    label: 'morceau de viande cuite',
+    plural: 'morceaux de viande cuite',
+    feminine: false,
+    mass: 0.4,
+    volume: 0.45,
+    pocket: false,
+    stack: 6,
+    food: { heal: 30, seconds: 60 },
+    description: 'Cuite au feu : nourrissante. Son odeur attire les hyènes et les babouins.',
   },
 };
 

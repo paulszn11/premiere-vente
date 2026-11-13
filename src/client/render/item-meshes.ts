@@ -275,6 +275,42 @@ export function itemParts(kind: PropKind): Part[] {
       parts.push([rod(0.5, 0.06, 6, 0, -0.03, 0, -0.5), 0.3, 0.22, 0.15]);
       return parts;
     }
+    // Phase 6 : viande, pièges (le centre est au niveau du sol + demi-hauteur).
+    case 'viande_crue':
+      return [
+        [ball(0.16, 0.07, 0.11, 4), 0.62, 0.16, 0.14],
+        [ball(0.06, 0.05, 0.05, 3, 0.06, 0.01, 0), 0.86, 0.82, 0.74],
+      ];
+    case 'viande_cuite':
+      return [
+        [ball(0.15, 0.065, 0.1, 4), 0.42, 0.24, 0.13],
+        [ball(0.06, 0.05, 0.05, 3, 0.06, 0.01, 0), 0.8, 0.74, 0.62],
+      ];
+    case 'collet':
+      return [
+        [can(0.5, 0.04, 5, 0.2), ...WOOD],
+        [box(0.3, 0.01, 0.3, 0, -0.04, 0, 0.7), ...TWINE],
+        [rod(0.32, 0.012, 4, 0.15, 0.25, 0, 0), ...TWINE],
+      ];
+    case 'assommoir': {
+      const parts: Part[] = [
+        [rod(0.55, 0.035, 5, 0, -0.1, 0, 0), ...WOOD],
+        [can(0.5, 0.035, 5, 0, 0.035), ...WOOD],
+        [rod(0.6, 0.03, 5, 0.05, 0.12, 0, 0.6), ...WOOD],
+      ];
+      parts[1]![0].transform(Matrix.RotationZ(0.35));
+      // La pierre calée, inclinée au-dessus de l'appât.
+      parts.push([ball(0.62, 0.36, 0.55, 3, 0.05, 0.36, 0), 0.5, 0.49, 0.46]);
+      return parts;
+    }
+    case 'fosse': {
+      // Couverture d'herbes sèches sur un cadre de branches.
+      const parts: Part[] = [[box(1.9, 0.04, 1.9, 0, 0), 0.62, 0.55, 0.32]];
+      for (let k = 0; k < 4; k++) parts.push([rod(2, 0.04, 4, 0, 0.03, -0.75 + k * 0.5, 0), ...WOOD]);
+      return parts;
+    }
+    case 'carcasse':
+      return [[ball(1, 0.5, 0.5, 4), 0.5, 0.36, 0.26]];
   }
 }
 

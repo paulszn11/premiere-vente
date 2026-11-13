@@ -10,7 +10,7 @@ export type InjuryKind = 'contusion' | 'entorse' | 'fracture' | 'coupure' | 'com
 export type Treatment = 'bander' | 'attelle' | 'aloes';
 export type Consciousness = 'eveille' | 'inconscient' | 'critique' | 'mort';
 export type Posture = 'debout' | 'assis' | 'endormi';
-export type DeathCause = 'chute' | 'noyade' | 'hemorragie' | 'infection' | 'abandon';
+export type DeathCause = 'chute' | 'noyade' | 'hemorragie' | 'infection' | 'abandon' | 'attaque';
 
 export const ZONES: Zone[] = ['tete', 'torse', 'bras_g', 'bras_d', 'jambe_g', 'jambe_d'];
 export const ZONE_LABELS: Record<Zone, string> = {
@@ -35,6 +35,7 @@ export const DEATH_LABELS: Record<DeathCause, string> = {
   hemorragie: 'une hémorragie',
   infection: 'une infection',
   abandon: 'vos blessures',
+  attaque: 'l’attaque d’un animal',
 };
 
 export interface Injury {

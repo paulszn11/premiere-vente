@@ -4,11 +4,12 @@
 // et sauvegardés.
 
 import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, MOVE } from './constants';
+import { type SpeciesId, isSpeciesId } from './creatures';
 import { type Container, type ItemMeta, readContainer } from './inventory';
 import { BTN_INTERACT, BTN_THROW, type InputCmd, MODE_CLIMB, MODE_SWIM, type MoveState, ONE_HAND_CARRY_KG, R_NO_HEAVY, R_NO_THROW } from './movement';
 import { DRAGGED_GROUPS, GROUP_OBSTACLE, GROUP_TERRAIN, HELD_GROUPS, NODE_GROUPS, PROP_GROUPS, type PhysicsWorld, QUERY_TARGETS, RAPIER, type TreeHit, interactionGroups } from './physics';
 import { ITEMS } from './items';
-import { BODY_MASS, DENSITY, type FireState, type FurnaceState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay } from './props';
+import { BODY_MASS, DENSITY, type FireState, type FurnaceState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay, TRAP_KINDS } from './props';
 import { nodesInChunk } from './resources';
 import { chunkCoord } from './terrain';
 
@@ -48,6 +49,11 @@ export interface PropView {
   size?: number;
   lit?: boolean;
   pot?: string | null;
+  /** Carcasse : espèce, viande restante, taille. Piège : armé. */
+  sp?: SpeciesId;
+  meat?: number;
+  scale?: number;
+  armed?: boolean;
 }
 
 export interface PropTarget {
@@ -158,6 +164,18 @@ function colliderFor(def: PropDef): RAPIER.ColliderDesc {
       return RAPIER.ColliderDesc.cylinder(0.7, 0.5);
     case 'forge':
       return RAPIER.ColliderDesc.cuboid(0.6, 0.4, 0.4);
+    // Pièges (fixes, plats : on marche dessus) et carcasses.
+    case 'collet':
+      return RAPIER.ColliderDesc.cylinder(0.05, 0.35);
+    case 'assommoir':
+      return RAPIER.ColliderDesc.cuboid(0.4, 0.3, 0.4);
+    case 'fosse':
+      return RAPIER.ColliderDesc.cuboid(1, 0.05, 1);
+    case 'carcasse':
+      return RAPIER.ColliderDesc.cuboid(Math.max(0.3, def.length / 2), Math.max(0.15, r * 0.6), Math.max(0.2, r));
+    case 'viande_crue':
+    case 'viande_cuite':
+      return RAPIER.ColliderDesc.roundCuboid(def.length / 2, r * 0.4, r * 0.6, r * 0.2).setMass(m);
     case 'pot_cru':
     case 'pot':
     case 'batee':
@@ -193,6 +211,8 @@ export class PropSystem {
   held: { id: string; mode: 'carry' | 'drag' } | null = null;
   /** Raison du dernier refus de prise (bras cassé…), lue puis effacée par la simulation. */
   refusal: string | null = null;
+  /** Objet lancé pendant ce pas (lu puis effacé par la simulation : projectiles). */
+  thrown: string | null = null;
 
   constructor(private readonly phys: PhysicsWorld) {
     phys.onChunkLoaded = (cx, cz) => this.loadChunk(cx, cz);
@@ -451,6 +471,7 @@ export class PropSystem {
         if ((s.restrict & R_NO_THROW) !== 0) this.refusal = 'Impossible de lancer avec un bras cassé.';
         else {
           s.stamina = Math.max(0, s.stamina - 4);
+          this.thrown = this.held.id;
           this.release(s, PropSystem.throwSpeed(heldLp.mass), dir);
         }
       } else if (s.mode === MODE_CLIMB || (s.mode === MODE_SWIM && heldLp.mass > ONE_HAND_CARRY_KG)) {
@@ -527,6 +548,12 @@ export class PropSystem {
         v.pot = lp.def.fire.pot?.item ?? null;
       }
       if (lp.def.furnace) v.lit = lp.def.furnace.lit;
+      if (lp.def.carcass) {
+        v.sp = lp.def.carcass.sp;
+        v.meat = lp.def.carcass.meat;
+        v.scale = lp.def.carcass.scale;
+      }
+      if (lp.def.trap) v.armed = lp.def.trap.armed;
       out.push(v);
     }
     return out;
@@ -550,6 +577,25 @@ export class PropSystem {
 
   massOf(id: string): number {
     return this.live.get(id)?.mass ?? 0;
+  }
+
+  /** Vitesse d'un objet simulé (objets lancés, pierre d'un assommoir). */
+  velocityOf(id: string): { x: number; y: number; z: number } | null {
+    const lp = this.live.get(id);
+    if (!lp) return null;
+    const v = lp.body.linvel();
+    return { x: v.x, y: v.y, z: v.z };
+  }
+
+  setVelocity(id: string, v: { x: number; y: number; z: number }): void {
+    this.live.get(id)?.body.setLinvel(v, true);
+  }
+
+  /** Objets simulés d'un type (carcasses, pièges). */
+  liveOfKind(kinds: ReadonlySet<PropKind>): PropDef[] {
+    const out: PropDef[] = [];
+    for (const lp of this.live.values()) if (kinds.has(lp.def.kind)) out.push(lp.def);
+    return out;
   }
 
   /** Parcourt tous les objets créés ou déplacés (simulés ou mémorisés). */
@@ -646,6 +692,16 @@ function readStored(raw: unknown): StoredProp | null {
     const f = d.furnace as Record<string, unknown>;
     const clamp = (v: unknown, max: number) => (fin(v) ? Math.max(0, Math.min(max, v)) : 0);
     def.furnace = { ore: Math.round(clamp(f.ore, 4)), fuel: clamp(f.fuel, 3600), lit: f.lit === true, heat: clamp(f.heat, 100), work: clamp(f.work, 100), blooms: Math.round(clamp(f.blooms, 4)) };
+  }
+  if (def.kind === 'carcasse' && typeof d.carcass === 'object' && d.carcass !== null) {
+    const c = d.carcass as Record<string, unknown>;
+    if (isSpeciesId(c.sp)) def.carcass = { sp: c.sp, meat: fin(c.meat) ? Math.max(0, Math.min(40, Math.round(c.meat))) : 0, at: fin(c.at) ? c.at : 0, scale: fin(c.scale) ? Math.max(0.5, Math.min(1.6, c.scale)) : 1, vultures: c.vultures === true };
+    else return null;
+  }
+  if (TRAP_KINDS.has(def.kind) && typeof d.trap === 'object' && d.trap !== null) {
+    const t = d.trap as Record<string, unknown>;
+    // Une créature retenue n'est pas sauvegardée : le piège se relit vide (armé ou non).
+    def.trap = { armed: t.armed === true, caught: null, ...(t.broken === true ? { broken: true } : {}) };
   }
   if (fin(d.emptiedAt)) def.emptiedAt = d.emptiedAt;
   if (fin(d.size) && d.size > 0 && d.size < 5) def.size = d.size;

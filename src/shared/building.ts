@@ -22,7 +22,7 @@ export const PLACE_REACH = 6;
 export const SITE_RADIUS = 2.5;
 
 export type PieceKind = 'sol' | 'dallage' | 'poteau' | 'mur' | 'porte' | 'toit' | 'echelle' | 'cloture';
-export type InstallKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge';
+export type InstallKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | 'collet' | 'assommoir' | 'fosse';
 export type Material = 'bois' | 'torchis' | 'pierre' | 'chaume';
 export type PlanId =
   | 'sol_rondins'
@@ -38,7 +38,10 @@ export type PlanId =
   | 'etabli'
   | 'puits'
   | 'fourneau'
-  | 'forge';
+  | 'forge'
+  | 'collet'
+  | 'assommoir'
+  | 'fosse';
 
 /** Emplacement sur la grille : case (sol, toit), bord (mur, porte, échelle, clôture), coin (poteau). */
 export type SlotType = 'f' | 'e' | 'c' | 'r';
@@ -322,6 +325,62 @@ export const PLANS: Record<PlanId, PlanDef> = {
     hintedBy: ['loupe_fer'],
     hint: 'Une loupe de fer brut… Il faudrait la chauffer et la battre sur une enclume : une forge.',
     description: 'Allumée, elle permet de forger barres, clous, boulons et outils en fer sur le plan de travail.',
+  },
+  // Phase 6 : pièges (chasse, défense des bases).
+  collet: {
+    id: 'collet',
+    label: 'Collet',
+    piece: null,
+    install: 'collet',
+    slot: 'libre',
+    material: 'bois',
+    hp: 40,
+    steps: [
+      { label: 'Tailler les piquets', needs: [['baton', 2]], tool: 'tranchant', seconds: 4 },
+      { label: 'Nouer le nœud coulant', needs: [['corde', 1]], tool: null, seconds: 4 },
+    ],
+    known: true,
+    hintedBy: [],
+    hint: '',
+    description: 'Nœud coulant tendu entre deux piquets : retient la patte d’un animal moyen (impala, phacochère, babouin, hyène), qui se débat et peut le casser. Attention où vous marchez.',
+    groundOnly: true,
+  },
+  assommoir: {
+    id: 'assommoir',
+    label: 'Assommoir',
+    piece: null,
+    install: 'assommoir',
+    slot: 'libre',
+    material: 'bois',
+    hp: 60,
+    steps: [
+      { label: 'Tailler le déclencheur en 4', needs: [['baton', 3]], tool: 'tranchant', seconds: 6 },
+      { label: 'Caler la pierre', needs: [['pierre', 20], ['corde', 1]], tool: null, seconds: 6 },
+    ],
+    known: true,
+    hintedBy: [],
+    hint: '',
+    description: 'Une lourde pierre calée sur trois bâtons : elle tombe quand on touche le déclencheur et blesse selon son poids.',
+    groundOnly: true,
+  },
+  fosse: {
+    id: 'fosse',
+    label: 'Fosse à pieux',
+    piece: null,
+    install: 'fosse',
+    slot: 'libre',
+    material: 'bois',
+    hp: 100,
+    steps: [
+      { label: 'Creuser la fosse', needs: [], tool: 'fouir', seconds: 20 },
+      { label: 'Planter les pieux', needs: [['baton', 6]], tool: 'tranchant', seconds: 10 },
+      { label: 'Couvrir d’herbes', needs: [['herbe', 4]], tool: null, seconds: 5 },
+    ],
+    known: true,
+    hintedBy: [],
+    hint: '',
+    description: 'Fosse garnie de pieux, couverte d’herbes : la créature (ou le joueur) qui marche dessus tombe et reste prise.',
+    groundOnly: true,
   },
 };
 
@@ -904,7 +963,7 @@ export class BuildState {
       const p = this.piece(inp.onPiece.s, inp.onPiece.p);
       const kind = p ? PLANS[p.plan].piece : null;
       if (!p || !isDone(p) || (kind !== 'sol' && kind !== 'dallage')) return fail('Une installation se pose sur le sol ou sur un plancher terminé.');
-      if (def.groundOnly) return fail('Un puits se creuse dans la terre, pas sur un plancher.');
+      if (def.groundOnly) return fail(inp.plan === 'puits' ? 'Un puits se creuse dans la terre, pas sur un plancher.' : 'Un piège se pose sur la terre, pas sur un plancher.');
       on = inp.onPiece;
       const s = this.structure(on.s)!;
       y = pieceTransform(s, p.slot).y;

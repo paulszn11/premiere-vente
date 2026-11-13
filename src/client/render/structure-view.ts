@@ -154,7 +154,7 @@ function keysFor(plan: PlanId, mat: Piece['mat']): TemplateKey[] {
   }
 }
 
-const INSTALL_HALF: Record<InstallPropKind, number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4 };
+const INSTALL_HALF: Record<InstallPropKind, number> = { coffre: 0.3, etabli: 0.45, puits: 0.4, fourneau: 0.7, forge: 0.4, collet: 0.05, assommoir: 0.3, fosse: 0.05 };
 
 const tmpM = new Matrix();
 const tmpQ = new Quaternion();

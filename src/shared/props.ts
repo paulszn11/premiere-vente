@@ -4,6 +4,7 @@
 // leur nouvel état est mémorisé par la simulation (et sauvegardé).
 
 import { CHUNK_SIZE, WATER_LEVEL } from './constants';
+import type { SpeciesId } from './creatures';
 import type { BiomeId } from './geography';
 import { type Container, type ItemMeta, type ItemStack, bagTotalMass } from './inventory';
 import { ITEMS, type ItemId } from './items';
@@ -14,11 +15,33 @@ import { floraInChunk } from './vegetation';
 
 /** Objets transportables : leur type est aussi leur identifiant dans le catalogue. */
 export type ItemPropKind = Exclude<ItemId, never>;
-export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer' | InstallPropKind;
+export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer' | InstallPropKind | 'carcasse';
 
-/** Installations construites (phase 5) : objets fixes. */
-export type InstallPropKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge';
-export const INSTALL_PROP_KINDS = new Set<PropKind>(['coffre', 'etabli', 'puits', 'fourneau', 'forge']);
+/** Installations construites (phase 5) et pièges (phase 6) : objets fixes. */
+export type InstallPropKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | TrapKind;
+export type TrapKind = 'collet' | 'assommoir' | 'fosse';
+export const INSTALL_PROP_KINDS = new Set<PropKind>(['coffre', 'etabli', 'puits', 'fourneau', 'forge', 'collet', 'assommoir', 'fosse']);
+export const TRAP_KINDS = new Set<PropKind>(['collet', 'assommoir', 'fosse']);
+
+/** Carcasse d'un animal (phase 6) : viande restante, moment de la mort. */
+export interface CarcassState {
+  sp: SpeciesId;
+  meat: number;
+  /** Temps du monde de la mort (elle pourrit, puis disparaît). */
+  at: number;
+  scale: number;
+  /** Les vautours ont été signalés. */
+  vultures?: boolean;
+}
+
+/** État d'un piège (phase 6). */
+export interface TrapState {
+  armed: boolean;
+  /** Créature retenue (identifiant), 'joueur', ou null. */
+  caught: string | null;
+  /** Collet cassé (il faut une corde pour le réarmer). */
+  broken?: boolean;
+}
 
 /** État d'un bas fourneau (phase 5). */
 export interface FurnaceState {
@@ -74,6 +97,8 @@ export interface PropDef {
   furnace?: FurnaceState;
   /** Installation posée sur un plancher : la pièce qui la porte. */
   on?: { s: string; p: number };
+  carcass?: CarcassState;
+  trap?: TrapState;
 }
 
 const OTHER_LABELS = {
@@ -91,6 +116,10 @@ const OTHER_LABELS = {
   puits: 'puits',
   fourneau: 'bas fourneau',
   forge: 'forge',
+  collet: 'collet',
+  assommoir: 'assommoir',
+  fosse: 'fosse à pieux',
+  carcasse: 'carcasse',
 } as const;
 
 export const PROP_LABELS: Record<PropKind, string> = {
@@ -99,7 +128,7 @@ export const PROP_LABELS: Record<PropKind, string> = {
   ...OTHER_LABELS,
 };
 
-const FEMININE = new Set<string>(['tronc_', 'touffe_herbe', 'forge']);
+const FEMININE = new Set<string>(['tronc_', 'touffe_herbe', 'forge', 'fosse', 'carcasse']);
 
 /** « la pierre », « le bâton », « l'aloès ». */
 export function propWithArticle(kind: PropKind): string {
@@ -161,6 +190,10 @@ export function propMass(p: Pick<PropDef, 'kind' | 'radius' | 'length' | 'contai
     case 'puits':
     case 'fourneau':
     case 'forge':
+    case 'collet':
+    case 'assommoir':
+    case 'fosse':
+    case 'carcasse':
       return 0;
     case 'sac':
       return bagTotalMass(p.container?.bag ?? []);
@@ -261,6 +294,15 @@ export function itemShape(kind: PropKind): { radius: number; length: number } {
       return { radius: 0.5, length: 0.7 };
     case 'forge':
       return { radius: 0.6, length: 0.4 };
+    case 'collet':
+      return { radius: 0.35, length: 0.1 };
+    case 'assommoir':
+      return { radius: 0.45, length: 0.6 };
+    case 'fosse':
+      return { radius: 1, length: 0.1 };
+    case 'viande_crue':
+    case 'viande_cuite':
+      return { radius: 0.08, length: 0.16 };
     default:
       return { radius: 0.1, length: 0 };
   }
