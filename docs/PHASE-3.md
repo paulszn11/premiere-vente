@@ -1,6 +1,6 @@
 # Phase 3 — Survie et inventaire
 
-**Statut : terminée le 13/11/2026 et vérifiée par les tests automatiques ({UNIT} tests unitaires, {E2E} vérifications dans le navigateur). Elle reste à essayer sur vos appareils.**
+**Statut : terminée le 13/11/2026 et vérifiée par les tests automatiques (119 tests unitaires, 122 vérifications dans le navigateur). Elle reste à essayer sur vos appareils.**
 
 ## Ce que demande le cahier des charges
 
@@ -136,8 +136,8 @@ Sur petit écran, le sac a deux onglets, « Sac » et « Corps ».
 
 | Suite | Résultat |
 | --- | --- |
-| `npm test` (Vitest) : inventaire (poches, sac, volume, pierres, vêtements, lecture des sauvegardes), objets du monde, énergie, fatigue, sommeil, nourriture, saignements, caillots, fractures, attelles, choc, bras cassé, infections, chutes, perte de connaissance, état critique, secours, noyade ; simulation complète : ramasser, ranger, poches, déchirer, charge, manger, bander, attelle, repos, sommeil, mort, corps, réapparition, fouille, corps vidé qui disparaît, chute et noyade mortelles, sauvegarde | **{UNIT} / {UNIT}** (dont 50 pour la phase 3) |
-| `npm run test:e2e -- --webgpu` (Chromium) : phases 1 et 2, et la phase 3 sur ordinateur, téléphone et manette (35 vérifications) | **{E2E} / {E2E}** |
+| `npm test` (Vitest) : inventaire (poches, sac, volume, pierres, vêtements, lecture des sauvegardes), objets du monde, énergie, fatigue, sommeil, nourriture, saignements, caillots, fractures, attelles, choc, bras cassé, infections, chutes, perte de connaissance, état critique, secours, noyade ; simulation complète : ramasser, ranger, poches, déchirer, charge, manger, bander, attelle, repos, sommeil, mort, corps, réapparition, fouille, corps vidé qui disparaît, chute et noyade mortelles, sauvegarde | **119 / 119** (dont 50 pour la phase 3) |
+| `npm run test:e2e -- --webgpu` (Chromium) : phases 1 et 2, et la phase 3 sur ordinateur, téléphone et manette (35 vérifications) | **122 / 122** |
 
 Le scénario « phase 3 » joue dans le navigateur :
 - ramasser une figue, un bâton et un fruit ;

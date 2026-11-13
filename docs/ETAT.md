@@ -3,7 +3,7 @@
 Mis à jour le 13/11/2026, version 0.3.0.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
-- **Phase 3 :** terminée le 13/11/2026 ({UNIT} tests unitaires, {E2E} vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
+- **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
 
 Légende des tests :
 - **Auto** : vérifié par les tests automatiques (Node et Chromium sans carte graphique).

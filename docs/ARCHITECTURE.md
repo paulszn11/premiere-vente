@@ -81,7 +81,7 @@ La partie solo est sauvegardée dans le navigateur : position, corps, sac, objet
 
 | Fichier | Taille | Compressé (gzip) |
 | --- | --- | --- |
-| Code du jeu + Babylon.js | 1,29 Mo | 302 Ko |
+| Code du jeu + Babylon.js | 1,37 Mo | 330 Ko |
 | Fil de calcul du terrain | 12 Ko | — |
 | Moteur physique (WebAssembly) | 3,08 Mo | 1,19 Mo |
 
