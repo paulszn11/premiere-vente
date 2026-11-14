@@ -1,6 +1,6 @@
 # État des fonctionnalités
 
-Mis à jour le 13/11/2026, version 0.7.0.
+Mis à jour le 14/11/2026, version 0.7.1.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
 - **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
@@ -8,6 +8,7 @@ Mis à jour le 13/11/2026, version 0.7.0.
 - **Phase 5 :** terminée le 13/11/2026 (181 tests unitaires, 168 vérifications navigateur, dont 16 propres à la phase 5). Les éléments de la section 15 qui la concernent (matériaux de construction, leurs propriétés, les améliorations) sont des propositions signalées et modifiables, détaillées dans `docs/PHASE-5.md`. Reste à l'essayer sur vos appareils.
 - **Phase 6 :** terminée le 13/11/2026 (202 tests unitaires, 186 vérifications navigateur, dont 18 propres à la phase 6). Le catalogue des créatures (section 15) est une proposition signalée et modifiable, détaillée dans `docs/PHASE-6.md`. Reste à l'essayer sur vos appareils.
 - **Phase 7 :** terminée le 13/11/2026 (222 tests unitaires, 206 vérifications navigateur, dont 16 propres à la phase 7). Les types de véhicules, de composants et de machines (section 15) sont une proposition signalée et modifiable, détaillée dans `docs/PHASE-7.md`. Reste à l'essayer sur vos appareils.
+- **Phase 7, limites levées le 14/11/2026 (version 0.7.1) :** coffre des véhicules, créatures qui contournent et bousculent les véhicules, roue à eau calculée par la théorie des roues à impulsion (avec un bief), pirogue creusée dans un vrai tronc puis poussée jusqu'à l'eau, renversement à l'angle de stabilité statique, vent et vagues (flottaison, dérive, surface de l'eau qui ondule), joueur emporté par le véhicule où il se tient, sons des véhicules et des machines. 228 tests unitaires (26 pour la phase 7), 210 vérifications navigateur (20 pour la phase 7), toutes réussies.
 - **Correction (tactile), phase 7 :** le toucher qui ouvrait un panneau (véhicule, fourneau, coffre…) pouvait déclencher le bouton apparu sous le doigt ; les boutons ignorent maintenant les clics pendant 0,45 s après l'ouverture.
 - **Correction (manette), présente depuis la phase 3 :** maintenir Y ouvrait puis refermait le sac à chaque image (de même pour Start et la pause, et pour une touche du clavier maintenue plus d'une demi-seconde). Un bouton encore enfoncé à l'ouverture du sac ou à la pause est maintenant ignoré jusqu'à ce qu'on le relâche.
 
@@ -133,7 +134,13 @@ Légende des tests :
 | Chargement : bûches et pierres posées sur le plateau voyagent avec le chariot (ridelles) | 11 | Auto |
 | Machines et automatisation : roue à eau, machine à vapeur fixe, meule (affûtage sans perte), soufflet mécanique (fonte du fer sans le joueur), pompe (chaudières, pots) ; réseaux de transmission de 6 m | 10.3, 11 | Auto |
 | Panneaux du véhicule et des machines ; au clavier, au doigt et à la manette ; outils de test | 13.4, 2.2 | Auto |
-| Sauvegarde des véhicules et des machines | 3.3 | Auto |
+| Coffre du véhicule : petits objets, volume et charge maximaux, masse dans la physique, caisse visible | 11 | Auto |
+| Créatures et véhicules : contournement, repoussées hors d'un véhicule, l'éléphant bouscule, la hyène ronge | 5.2, 11 | Auto |
+| Pirogue creusée dans un vrai tronc couché ; bateau échoué poussé jusqu'à l'eau | 11 | Auto |
+| Vent qui change lentement, vagues sur l'eau profonde (flottaison et affichage), dérive des bateaux | 11, 13 | Auto |
+| Joueur debout sur un véhicule en mouvement : emporté avec lui, son poids le fait pencher | 11, 7 | Auto |
+| Sons des véhicules et des machines (piston, roues, pagaie, roue à aubes, roue à eau, meule, soufflet, pompe, chocs) | 13.5 | Auto (sons joués ; l'écoute reste à faire sur vos appareils) |
+| Sauvegarde des véhicules et des machines (coffre compris) | 3.3 | Auto |
 
 ## Préparé mais pas encore branché (phase 8)
 
@@ -161,7 +168,7 @@ La validation des phases 2, 3, 5, 6 et 7 sur vos appareils.
 | 4 (suivi) | Manipulation libre des pièces en 3D, animations des gestes (coups d'outil, chute des arbres) ; matériel de plongée (avec les phases 6 et 9) ; usage de l'or (commerce, section 15) |
 | 5 (suivi) | Électricité (phase 9) ; cases rondes et pièces de forme libre ; constructions dans les grottes (phase 9) ; attaques des bases (phases 6 et 8) |
 | 6 (suivi) | Armes à feu (avec les bâtiments abandonnés, phase 9) ; créatures souterraines (grottes, phase 9) ; chasses nocturnes (cycle jour/nuit, phase 9) ; peaux et os (équipement) ; animations des coups et des créatures |
-| 7 (suivi) | Coffre de véhicule pour les petits objets ; sons des véhicules et des machines ; créatures qui abîment les véhicules ; marcher sur un radeau en mouvement ; vagues et vent (météo, phase 9) ; voiles, moteurs à essence et électricité (phase 9) ; traction animale (à décider) |
+| 7 (suivi) | Voiles, moteurs à essence et électricité (phase 9) ; pluie et tempêtes (météo, phase 9) ; un arbre abattu qui laisse un tronc entier ; nageur soulevé par les vagues ; traction animale (à décider) |
 | 8 | Serveur chez l'hôte (navigateur et programme compagnon), code privé, connexion WebRTC, synchronisation, permissions, sauvegardes du monde et des joueurs, 10 joueurs |
 | 9 | Monde complet : grottes, bâtiments abandonnés, histoire, documents, événements, catastrophes, météo, cycle jour/nuit, carte révélée progressivement |
 | 10 | Optimisation, tests sur appareils, installation, documentation, programme compagnon |
@@ -176,6 +183,6 @@ La validation des phases 2, 3, 5, 6 et 7 sur vos appareils.
 - Pas d'animation des gestes : l'outil ne bouge pas à chaque coup et l'arbre abattu disparaît d'un coup en laissant sa souche.
 - Constructions : stabilité par coefficients (pas de calcul de forces ni de déformation), grille de 2 m et pièces droites, au plus deux lumières (aucune en qualité Basse).
 - Créatures : formes simples et animation procédurale, déplacements sans calcul d'itinéraire (évitement par rayons), pas encore de nuit ; sons seulement pour les créatures et les combats.
-- Véhicules : le renversement vient d'un couple ajouté au modèle de roues de Rapier (qui n'en produit pas) ; on charge un plateau en y posant les objets ; puissance des roues à eau selon une formule simplifiée ; pas encore de sons. Détail dans `docs/PHASE-7.md`.
+- Véhicules : le renversement vient d'un couple ajouté au modèle de roues de Rapier (qui n'en produit pas), réglé sur le calcul de stabilité statique ; vagues affichées dans un rayon de 70 m et pas en qualité Basse. Détail dans `docs/PHASE-7.md`.
 - Les menus se pilotent au clavier, à la souris ou au doigt, pas encore à la manette (sauf Start pour la pause).
 - La résolution adaptative peut baisser inutilement sur un écran limité à 30 images par seconde : désactivable dans les réglages.

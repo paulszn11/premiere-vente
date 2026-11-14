@@ -116,13 +116,15 @@ Côté client :
 | --- | --- |
 | `vehicles.ts` | Châssis et pièces (proposition, section 15) : emplacements, masses, usure, réparations, installation ; masse, centre de gravité et inertie ; machine à vapeur (bois, chaleur, pression, eau, surchauffe) ; usure et tirage des pannes ; ridelles ; sauvegarde contrôlée. Aucune dépendance au moteur physique |
 | `vehicle-physics.ts` | Corps Rapier des véhicules proches : contrôleur de roues (suspensions, adhérence, moteur, freins, direction), couple de renversement ajouté, flottaison point par point, traînée, courant, pagaie et roue à aubes ; position relue après chaque pas |
-| `machines.ts` | Sources (roue à eau, machine fixe) et machines entraînées (meule, soufflet, pompe) ; réseaux de transmission de proche en proche (6 m) et partage de la puissance |
-| `simulation.ts` | Chantiers qui deviennent des véhicules, panneau et actions (monter, pousser, pièces, chaudière, redresser), conduite (la commande lue dans le repère de la vue), effort et endurance, chocs, créatures percutées, bilans d'usure toutes les 0,5 s, machines et leurs effets |
+| `machines.ts` | Sources (roue à eau : théorie de la roue à impulsion, dans un bief ; machine fixe) et machines entraînées (meule, soufflet, pompe) ; réseaux de transmission de proche en proche (6 m) et partage de la puissance |
+| `wind.ts` | Vent qui change lentement et vagues (trois houles, dispersion en eau profonde) : les mêmes fonctions pour la simulation (flottaison, dérive des bateaux) et pour l'affichage (surface de l'eau) ; la météo de la phase 9 pourra piloter le vent |
+| `simulation.ts` | Chantiers qui deviennent des véhicules, panneau et actions (monter, pousser, pièces, chaudière, coffre, redresser), conduite (la commande lue dans le repère de la vue), effort et endurance, chocs, créatures percutées, créatures qui contournent, sont repoussées ou bousculent les véhicules, joueur emporté par le véhicule où il se tient, bilans d'usure toutes les 0,5 s, machines et leurs effets |
 
 Côté client :
 - `vehicle-view.ts` dessine les véhicules (formes simples, roues qui tournent, braquent et suivent la suspension, roue à aubes, fumée, cales), interpolés entre deux pas comme le joueur ;
 - `structure-view.ts` dessine les chantiers et les fantômes des châssis ;
-- `session.ts` fait tourner la vue avec le véhicule conduit et affiche le tableau de bord ; `bag-view.ts` montre le panneau du véhicule ou de la machine.
+- `session.ts` fait tourner la vue avec le véhicule conduit, affiche le tableau de bord et joue les sons des véhicules et des machines proches ; `bag-view.ts` montre le panneau du véhicule (avec son coffre) ou de la machine ;
+- `world-view.ts` dessine la surface de l'eau en anneaux autour de la caméra et la fait onduler selon le vent (pas en qualité Basse).
 
 ## 2. Technologies retenues
 

@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 7 terminée (222 tests unitaires et 206 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
+**État : phase 7 terminée, ses limites levées (228 tests unitaires et 210 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -34,6 +34,9 @@ Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le n
   - on trace un châssis (chariot à bras, chariot, radeau, pirogue *mukoro*), puis on y installe des pièces fabriquées : roues, essieux, machine à vapeur, roue à aubes, gouvernail ;
   - vraie physique : suspensions et adhérence, centre de gravité, renversement, flottaison et courant ; la machine à vapeur se nourrit de bois et d'eau ;
   - usure, pannes et réparations pièce par pièce ; chocs ; on pousse, on pagaie (endurance) ou on conduit ;
+  - un coffre dans chaque véhicule ; la pirogue se creuse dans un vrai tronc, puis on la pousse jusqu'à l'eau ;
+  - le vent lève des vagues qui font danser les bateaux et les pousse ; debout sur un radeau, on est emporté avec lui ;
+  - les animaux contournent les véhicules, l'éléphant les bouscule ; moteurs, roues, pagaies et machines s'entendent ;
   - machines entraînées par une roue à eau ou une machine à vapeur fixe : meule, soufflet mécanique (la fonte du fer se fait seule), pompe ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
@@ -105,7 +108,7 @@ Véhicules et machines :
 | Descendre, lâcher les brancards | E | X / Carré | « Prendre » |
 | Panneau du véhicule en conduisant (bois, eau, feu) | Tab ou I | Y / Triangle | « Sac » |
 
-Un châssis terminé reste calé tant qu'il lui manque des roues : ouvrez son panneau pour installer les pièces (en main, dans le sac ou posées à côté). La machine à vapeur demande du bois, de l'eau (un pot) et du feu (archet, torche ou foyer voisin), puis quelques dizaines de secondes de chauffe.
+Un châssis terminé reste calé tant qu'il lui manque des roues : ouvrez son panneau pour installer les pièces (en main, dans le sac ou posées à côté). La machine à vapeur demande du bois, de l'eau (un pot) et du feu (archet, torche ou foyer voisin), puis quelques dizaines de secondes de chauffe. Dans le panneau, « Ranger dans… » met l'objet choisi dans le coffre du véhicule. Une pirogue creusée sur la terre ferme se pousse jusqu'à l'eau (« Pousser jusqu'à l'eau »).
 
 Écoutez : les cris, les frôlements et les battements de cœur préviennent du danger. Un feu ou une torche tient la plupart des animaux à distance. Un casque aide à situer les sons ; le volume se règle dans « Réglages » → « Son ».
 
