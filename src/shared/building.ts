@@ -96,7 +96,12 @@ export interface PlanDef {
   vehicle?: FrameKind;
   /** Contrainte d'eau : dans l'eau peu profonde (bateaux), près de l'eau (pompe), près d'un courant (roue à eau). */
   water?: 'dans' | 'rive' | 'courant';
+  /** Véhicule posé sur la terre : différence de hauteur admise sous son emprise (m, 0,5 par défaut). */
+  slope?: number;
 }
+
+/** Un tronc couché (objet du monde, pas un objet d'inventaire) : matériau de la pirogue. */
+export const TRUNK = 'tronc' as ItemId;
 
 const tie = (n: number): PlanStep['iron'] => ({ label: 'Clouer', needs: [['clous', n]], tool: 'percuteur' });
 const bolt = (n: number): PlanStep['iron'] => ({ label: 'Boulonner', needs: [['boulons', n]], tool: 'percuteur' });
@@ -463,15 +468,15 @@ export const PLANS: Record<PlanId, PlanDef> = {
     material: 'bois',
     hp: 250,
     steps: [
-      { label: 'Équarrir le tronc', needs: [['buche', 4]], tool: 'hache', seconds: 14 },
+      { label: 'Écorcer et équarrir le tronc', needs: [[TRUNK, 1]], tool: 'hache', seconds: 16 },
       { label: 'Évider au feu', needs: [['baton', 4], ['herbe', 2]], tool: 'feu', seconds: 12 },
       { label: 'Creuser et lisser la coque', needs: [], tool: 'tranchant', seconds: 14 },
     ],
     known: false,
     hintedBy: ['hache', 'hache_fer'],
     hint: 'Avec une hache, on pourrait creuser un tronc comme les pêcheurs du Zambèze : une pirogue (mukoro).',
-    description: 'Creusée dans un tronc, au bord de l’eau : rapide et légère à la pagaie, mais étroite (un chargement haut la fait chavirer).',
-    water: 'dans',
+    description: 'Creusée là où gît un tronc (les forêts en ont, couchés au sol) ; on la pousse ensuite jusqu’à l’eau. Rapide et légère à la pagaie, mais étroite (un chargement haut la fait chavirer).',
+    slope: 0.9,
   },
   roue_eau: {
     id: 'roue_eau',
@@ -1176,7 +1181,7 @@ export class BuildState {
         y = WATER_LEVEL;
       } else {
         if (hmin < WATER_LEVEL + 0.1) return fail('Pas dans l’eau.');
-        if (hmax - hmin > 0.5) return fail('Le sol est trop en pente ici.');
+        if (hmax - hmin > (def.slope ?? 0.5)) return fail('Le sol est trop en pente ici.');
         y = hmin;
       }
     } else {
@@ -1497,6 +1502,7 @@ export function salvage(p: Pick<Piece, 'plan' | 'stilts' | 'step' | 'mat'>, keep
 /** Libellé d'un besoin (« 2 perches », « 20 kg de pierres »). */
 export function needLabel([item, n]: Need): string {
   if (item === 'pierre') return `${n} kg de pierres`;
+  if (item === TRUNK) return n > 1 ? `${n} troncs couchés, à côté du chantier` : 'un tronc couché, à côté du chantier';
   const d = ITEMS[item];
   return n > 1 ? `${n} ${d.plural}` : `${d.feminine ? 'une' : 'un'} ${d.label}`;
 }

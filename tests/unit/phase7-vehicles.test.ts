@@ -23,6 +23,7 @@ import {
   PART_KINDS,
   type VehicleEvent,
   type VehicleState,
+  isAfloat,
   makeVehicle,
   massProps,
   missingForRolling,
@@ -115,7 +116,7 @@ function bench(terrain: FnTerrain) {
   };
   return { phys, vp, run };
 }
-const drive = (throttle: number, steer = 0, extra: Partial<DriveInput> = {}): DriveInput => ({ throttle, steer, brake: false, sprint: false, effort: 1, ...extra });
+const drive = (throttle: number, steer = 0, extra: Partial<DriveInput> = {}): DriveInput => ({ throttle, steer, brake: false, sprint: false, effort: 1, seated: true, ...extra });
 
 describe('mécanique : pièces, masse, machine à vapeur, usure', () => {
   it('catalogue cohérent : chaque emplacement attend une pièce connue ; chaque pièce a son objet et sa recette', () => {
@@ -499,6 +500,57 @@ describe('simulation : construire, équiper, conduire', () => {
     h.run(30);
     expect(s.driving).toBeNull();
     expect(s.inWater()).toBe(true);
+    s.dispose();
+  });
+
+  it('pirogue : creusée dans un tronc couché sur la terre ferme, puis poussée jusqu’à l’eau où elle flotte', () => {
+    // Pente douce vers un lac : la rive à x = 6, 1 m de fond à x = 16.
+    const h = setup(new FnTerrain((x) => 0.6 - 0.1 * x));
+    const { s, act } = h;
+    s.teleport(-1, 0.75, 0);
+    h.run(30);
+    s.knowledge.plans.push('pirogue');
+    // Un tronc couché à côté du futur chantier (sans tronc, l'étape est impossible).
+    h.aim(2.5, 0.35, 0);
+    const { aim } = s.aimPoint();
+    const plan = act({ type: 'planifier', plan: 'pirogue', aim, turn: 0, on: null });
+    expect(plan.ok, plan.message).toBe(true);
+    s.inventory.bag!.push(tool('hache'), tool('archet'), tool('couteau'), { item: 'baton', count: 4 }, { item: 'herbe', count: 2 });
+    h.aim(aim.x, aim.y + 0.3, aim.z);
+    const noTrunk = act({ type: 'utiliser' });
+    expect(noTrunk.ok).toBe(false);
+    expect(noTrunk.message).toMatch(/tronc couché/);
+    // Couché dans le sens de la pente : il ne roule pas.
+    s.props.spawnDynamic({ kind: 'tronc', x: aim.x, y: aim.y + 0.4, z: aim.z + 1.4, rot: 0, radius: 0.2, length: 2.6 });
+    h.run(60);
+    h.aim(aim.x, aim.y + 0.3, aim.z);
+    const steps = h.work(3, 17);
+    expect(steps.every((x) => x.ok), steps.map((x) => x.message).join(' / ')).toBe(true);
+    expect(s.props.views().some((p) => p.kind === 'tronc')).toBe(false);
+    const v = s.vehicles.find((x) => x.frame === 'pirogue')!;
+    expect(v, `${JSON.stringify(s.build.sites)} · ${h.messages().slice(-4).join(' | ')}`).toBeDefined();
+    h.run(60);
+    expect(isAfloat(v)).toBe(false);
+    expect(act({ type: 'vehicule', v: v.id, op: 'monter' }).ok).toBe(true);
+    expect(act({ type: 'vehicule', v: v.id, op: 'descendre' }).ok).toBe(true);
+    h.run(30);
+    // On la pousse par la poupe, vers l'eau (la pirogue est dans l'axe de la pente).
+    const r = act({ type: 'vehicule', v: v.id, op: 'pousser' });
+    expect(r.ok, r.message).toBe(true);
+    expect(s.driving).toEqual({ v: v.id, mode: 'pousse' });
+    const yaw = yawOf(v);
+    h.look(yaw);
+    const trace: string[] = [];
+    for (let k = 0; k < 40 && s.driving && !isAfloat(v); k++) {
+      h.run(30, Math.sin(yaw), Math.cos(yaw));
+      trace.push(`${v.x.toFixed(1)},${v.y.toFixed(2)} ${s.lastDrive?.speed.toFixed(2)} ${Math.round(s.effortW)}W`);
+    }
+    expect(isAfloat(v), `yaw ${yaw.toFixed(2)} · ${trace.slice(0, 8).join(' | ')} · conduite ${JSON.stringify(s.driving)} · ${h.messages().slice(-2).join(' | ')}`).toBe(true);
+    h.run(60);
+    if (s.driving) h.run(1, 0, 0, BTN_INTERACT);
+    h.run(10);
+    expect(act({ type: 'vehicule', v: v.id, op: 'monter' }).ok).toBe(true);
+    expect(s.driving?.mode).toBe('siege');
     s.dispose();
   });
 

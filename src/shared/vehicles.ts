@@ -4,6 +4,7 @@
 // est dans vehicle-physics.ts ; tout l'état d'un véhicule tient dans des données sauvegardées.
 
 import type { Need } from './building';
+import { WATER_LEVEL } from './constants';
 import { type Container, bagContentMass, readContainer } from './inventory';
 import type { ItemId, ToolTag } from './items';
 
@@ -41,7 +42,7 @@ export interface FrameDef {
   cy: number;
   /** Hauteur des ridelles autour du plateau (0 : aucune) : le chargement ne glisse pas dehors. */
   rail: number;
-  /** Pieds du conducteur (local) ; joueur qui pousse, derrière (chariots). */
+  /** Pieds du conducteur (local) ; joueur qui pousse, derrière (chariots ; bateau échoué qu'on pousse à l'eau). */
   seat: Vec3 | null;
   push: { x: number; z: number } | null;
   cargo: { volume: number; maxKg: number; x: number; y: number; z: number };
@@ -138,7 +139,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     cy: 0,
     rail: 0,
     seat: { x: 0, y: 0.18, z: 0.55 },
-    push: null,
+    push: { x: 0, z: -2.1 },
     cargo: { volume: 400, maxKg: 500, x: 0, y: 0.4, z: 0.3 },
     slots: [
       { id: 'machine', part: 'machine_vapeur', x: 0, y: 0.75, z: -0.55 },
@@ -179,7 +180,7 @@ export const FRAMES: Record<FrameKind, FrameDef> = {
     cy: 0,
     rail: 0,
     seat: { x: 0, y: -0.08, z: -0.7 },
-    push: null,
+    push: { x: 0, z: -2.9 },
     cargo: { volume: 150, maxKg: 150, x: 0, y: 0.05, z: 0.9 },
     slots: [],
     hull: {
@@ -388,6 +389,13 @@ export function toWorld(v: Pick<VehicleState, 'x' | 'y' | 'z' | 'qx' | 'qy' | 'q
     y: v.y + iy * qw + iw * -qy + iz * -qx - ix * -qz,
     z: v.z + iz * qw + iw * -qz + ix * -qy - iy * -qx,
   };
+}
+
+/** Un bateau flotte (le fond de sa coque est dans l'eau) ; un véhicule terrestre, jamais. */
+export function isAfloat(v: VehicleState): boolean {
+  const f = FRAMES[v.frame];
+  if (f.medium !== 'eau') return false;
+  return WATER_LEVEL - toWorld(v, { x: 0, y: f.hull!.bottom, z: 0 }).y > 0.05;
 }
 
 /** Composante verticale de l'axe « haut » du véhicule (1 : droit, 0 : sur le flanc, < 0 : à l'envers). */

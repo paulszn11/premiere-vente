@@ -138,6 +138,7 @@ import {
   stepBoiler,
   stepEngine,
   toWorld,
+  isAfloat,
   uprightness,
   vehicleName,
   waterDrive,
@@ -420,6 +421,8 @@ export class LocalSimulation {
   private engineLoad = 0;
   /** Chemin parcouru, choc le plus fort et secondes de propulsion depuis le dernier bilan d'usure. */
   private readonly vehicleUse = new Map<string, { dist: number; force: number; drive: number }>();
+  /** Véhicule qui vient d'apparaître : il se pose, ses premiers contacts ne comptent pas comme des chocs. */
+  private readonly settle = new Map<string, number>();
   /** Charge des sources d'énergie (machine fixe) au dernier calcul du réseau. */
   private readonly machineLoad = new Map<string, number>();
   /** Effort du joueur qui pousse ou pagaie (W, lissé, pour l'affichage). */
@@ -1475,7 +1478,7 @@ export class LocalSimulation {
       if (veh) {
         const f = FRAMES[veh.frame];
         const missing = missingForRolling(veh);
-        const what = missing ?? (uprightness(veh) < 0.6 ? 'renversé, à redresser' : f.medium === 'eau' ? 'monter à bord' : f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur') ? 'monter sur le siège' : 'pousser');
+        const what = missing ?? (uprightness(veh) < 0.6 ? 'renversé, à redresser' : f.medium === 'eau' ? (isAfloat(veh) ? 'monter à bord' : 'échoué : le pousser jusqu’à l’eau') : f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur') ? 'monter sur le siège' : 'pousser');
         return { action: `${vehicleName(veh)} : ${what}`, ready: true, interact: true };
       }
     }
@@ -2347,11 +2350,20 @@ export class LocalSimulation {
     if (def.vehicle) {
       // Phase 7 : le châssis terminé devient un véhicule (calé tant qu'il lui manque des roues).
       const f = FRAMES[def.vehicle];
-      const y = f.medium === 'eau' ? WATER_LEVEL + 0.12 : site.y + 0.02;
-      this.vehicles.push(makeVehicle(`veh${this.nextVehicle++}`, def.vehicle, site.x, y, site.z, site.yaw));
+      // Bateau : à flot dans l'eau peu profonde, ou couché sur la rive (le fond de la coque au-dessus
+      // du point le plus haut de son emprise : il se pose ensuite sur la pente).
+      let y = site.y + 0.02;
+      if (f.medium === 'eau') {
+        const top = Math.max(...[-1, 1].flatMap((a) => [-1, 0, 1].map((b) => this.terrain.heightAt(site.x + a * f.half.x * Math.cos(site.yaw) + b * f.half.z * Math.sin(site.yaw), site.z - a * f.half.x * Math.sin(site.yaw) + b * f.half.z * Math.cos(site.yaw)))));
+        y = site.y > WATER_LEVEL + 0.05 ? top - f.hull!.bottom + 0.04 : WATER_LEVEL + 0.12;
+      }
+      const made = makeVehicle(`veh${this.nextVehicle++}`, def.vehicle, site.x, y, site.z, site.yaw);
+      this.vehicles.push(made);
+      this.settle.set(made.id, this.time + 2);
       this.build.removeSite(site.id);
       const wheels = f.slots.some((x) => x.part === 'roue') ? 'les essieux puis les roues' : 'les quatre petites roues';
-      this.msg(`${def.label} : terminé. ${f.medium === 'terre' ? `Il est calé : installez ${wheels} (Prendre sur le châssis).` : 'Il flotte : montez à bord (Prendre).'}`, 'info');
+      const boat = site.y > WATER_LEVEL + 0.05 ? 'Elle est sur la terre ferme : poussez-la jusqu’à l’eau (Prendre, « Pousser »).' : 'Il flotte : montez à bord (Prendre).';
+      this.msg(`${def.label} : terminé${f.feminine ? 'e' : ''}. ${f.medium === 'terre' ? `Il est calé : installez ${wheels} (Prendre sur le châssis).` : boat}`, 'info');
       return;
     }
     const kind = def.install!;
@@ -2589,7 +2601,7 @@ export class LocalSimulation {
   /** Choc violent sur une pièce (pierre lancée, débris qui tombe) : dégâts selon la force. */
   private onImpact(h1: number, h2: number, force: number): void {
     const veh = this.vphys.vehicleOf(h1) ?? this.vphys.vehicleOf(h2);
-    if (veh) {
+    if (veh && this.time >= (this.settle.get(veh) ?? 0)) {
       const u = this.useOf(veh);
       u.force = Math.max(u.force, force);
     }
@@ -3445,7 +3457,8 @@ export class LocalSimulation {
   private physicsStep(input: DriveInput | null): void {
     const driven = this.driving?.v ?? null;
     if (this.vehicles.length) {
-      this.vphys.sync(this.vehicles, driven);
+      // Seul un conducteur assis pèse sur le véhicule (pas celui qui pousse à pied).
+      this.vphys.sync(this.vehicles, this.driving?.mode === 'siege' ? driven : null);
       for (const v of this.vehicles) if (this.vphys.has(v.id)) this.vphys.preStep(v, v.id === driven ? input : null, TICK_DT);
     }
     this.phys.step(TICK_DT);
@@ -3626,6 +3639,8 @@ export class LocalSimulation {
       brake: (c.buttons & BTN_JUMP) !== 0,
       sprint: human && (c.buttons & BTN_SPRINT) !== 0 && !s.exhausted && (s.restrict & R_NO_SPRINT) === 0,
       effort: human ? (s.exhausted ? 0.45 : 1) * Math.min(1, Math.max(0.3, s.speedMul)) : 1,
+      push: d.mode === 'pousse' && f.medium === 'eau',
+      seated: d.mode === 'siege',
     };
     this.engineLoad = engine ? Math.abs(input.throttle) : 0;
     this.physicsStep(input);
@@ -3697,7 +3712,8 @@ export class LocalSimulation {
     const missing = missingForRolling(v);
     if (missing) return fail(`${cap(vehicleName(v))} ne peut pas rouler : ${missing}.`);
     if (uprightness(v) < 0.6) return fail(`${cap(vehicleName(v))} est renversé${f.feminine ? 'e' : ''} : redressez-l${f.feminine ? 'a' : 'e'} d’abord.`);
-    if (mode === 'pousse' && !f.push) return fail('On ne pousse pas un bateau de l’intérieur : montez à bord pour pagayer.');
+    if (mode === 'pousse' && !f.push) return fail('Ce véhicule ne se pousse pas.');
+    if (mode === 'pousse' && f.medium === 'eau' && isAfloat(v)) return fail('Il flotte déjà : montez à bord pour pagayer.');
     if (mode === 'siege' && !f.seat) return fail(`${cap(vehicleName(v))} se pousse : il n’y a pas de siège.`);
     if (f.medium === 'terre' && this.state.mode === MODE_SWIM) return fail('Sortez d’abord de l’eau.');
     this.driving = { v: v.id, mode };
@@ -3705,6 +3721,7 @@ export class LocalSimulation {
     this.placeDriver(v, mode);
     if (!this.driving) return fail('Impossible de le prendre ici.');
     copyState(this.prev, this.state);
+    if (mode === 'pousse' && f.medium === 'eau') return ok(`Vous calez vos épaules contre la poupe : avancez pour pousser ${vehicleName(v)} jusqu’à l’eau. ${this.keyHint('lâcher')}`);
     if (mode === 'pousse') return ok(`Vous prenez les brancards : avancez pour pousser, reculez pour tirer, sautez pour freiner. ${this.keyHint('lâcher')}`);
     if (f.medium === 'eau') {
       if (waterDrive(v)) return ok(`Vous prenez la barre. ${v.engine.pressure > 0.2 ? 'Avancez pour lancer la roue à aubes.' : 'La machine n’a pas de pression : en attendant, on pagaie.'} ${this.keyHint('descendre')}`);
@@ -3759,7 +3776,8 @@ export class LocalSimulation {
       case 'monter':
         return this.boardVehicle(v, f.medium === 'eau' || (f.seat && v.parts.some((p) => p.kind === 'machine_vapeur')) ? 'siege' : 'pousse');
       case 'pousser':
-        return f.medium === 'eau' ? this.shoveBoat(v) : this.boardVehicle(v, 'pousse');
+        // Un bateau qui flotte, on lui donne une poussée ; échoué, on le pousse à pied jusqu'à l'eau.
+        return f.medium === 'eau' && isAfloat(v) ? this.shoveBoat(v) : this.boardVehicle(v, 'pousse');
       case 'installer':
       case 'retirer':
       case 'reparer':
@@ -4095,6 +4113,7 @@ export class LocalSimulation {
     for (const sd of f.slots) if (opts.parts === 'toutes' || opts.parts?.includes(sd.part)) v.parts.push({ slot: sd.id, kind: sd.part, wear: 0, broken: false, q: 70 });
     if (opts.steam && v.parts.some((p) => p.kind === 'machine_vapeur')) v.engine = { fuel: ENGINE.maxFuel, lit: true, heat: 1, pressure: 1, water: ENGINE.water };
     this.vehicles.push(v);
+    this.settle.set(v.id, this.time + 2);
     return v.id;
   }
 
@@ -4276,6 +4295,7 @@ export class LocalSimulation {
     this.build.restore(r.build);
     this.fauna.restore(r.fauna);
     this.vehicles = readVehicles(r.vehicles);
+    for (const v of this.vehicles) this.settle.set(v.id, this.time + 2);
     const maxId = this.vehicles.reduce((m, v) => Math.max(m, Number(v.id.replace(/^veh/, '')) || 0), 0);
     this.nextVehicle = Math.max(maxId + 1, typeof r.nextVehicle === 'number' && Number.isInteger(r.nextVehicle) ? Math.min(1e9, r.nextVehicle) : 1);
     const p = r.player as Record<string, unknown> | undefined;

@@ -6,7 +6,7 @@ import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
 import type { BuildRef, PlayerAction } from '../../shared/actions';
 import { INSTALL_PLANS, type Need, PIECE_PLANS, PLANS, PLAN_IDS, type PlanId, VEHICLE_PLANS, maxHp, needLabel, pieceTransform, repairNeeds, stepsOf } from '../../shared/building';
 import { MACHINES, RUNS_AT } from '../../shared/machines';
-import { ENGINE, FRAMES, FRAME_REPAIR, PARTS, partAt, partName, uprightness, vehicleName } from '../../shared/vehicles';
+import { ENGINE, FRAMES, FRAME_REPAIR, PARTS, isAfloat, partAt, partName, uprightness, vehicleName } from '../../shared/vehicles';
 import { RECIPES, RECIPE_IDS, canDismantle, conditionOf, experimentHint, improveOptions, repairOptions, skillLevel } from '../../shared/crafting';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type Container, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
 import { ITEMS, type ItemId, itemName } from '../../shared/items';
@@ -505,8 +505,13 @@ export class BagView {
       if (driving) vehOut.push({ label: sim.driving!.mode === 'pousse' ? 'Lâcher les brancards' : 'Descendre', run: () => this.act({ type: 'vehicule', v: id, op: 'descendre' }) });
       else if (uprightness(veh) < 0.6) vehOut.push({ label: `Redresser ${vehicleName(veh)}`, run: () => this.act({ type: 'vehicule', v: id, op: 'redresser' }) });
       else if (f.medium === 'eau') {
-        vehOut.push({ label: 'Monter à bord', run: board('monter') });
-        vehOut.push({ label: 'Pousser le bateau', run: () => this.act({ type: 'vehicule', v: id, op: 'pousser' }) });
+        if (isAfloat(veh)) {
+          vehOut.push({ label: 'Monter à bord', run: board('monter') });
+          vehOut.push({ label: 'Pousser le bateau', run: () => this.act({ type: 'vehicule', v: id, op: 'pousser' }) });
+        } else {
+          vehOut.push({ label: 'Pousser jusqu’à l’eau', run: board('pousser') });
+          vehOut.push({ label: 'Monter à bord', run: board('monter') });
+        }
       } else {
         if (f.seat && veh.parts.some((p) => p.kind === 'machine_vapeur')) vehOut.push({ label: 'Monter sur le siège', run: board('monter') });
         vehOut.push({ label: 'Pousser', run: board('pousser') });

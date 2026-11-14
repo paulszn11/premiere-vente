@@ -17,7 +17,15 @@ export interface DriveInput {
   sprint: boolean;
   /** Force humaine disponible (0 à 1 : endurance). */
   effort: number;
+  /** Bateau poussé par l'arrière (échoué, qu'on mène à l'eau) plutôt que pagayé. */
+  push?: boolean;
+  /** Le conducteur est assis à bord (sa masse compte) ; faux quand il pousse à pied. */
+  seated?: boolean;
 }
+
+/** Vitesse d'un bateau qu'on pousse à pied (m/s) et force d'un homme arc-bouté contre la poupe (N). */
+const BOAT_PUSH_SPEED = 1.3;
+const BOAT_PUSH_FORCE = 380;
 
 /** Ce qu'a fait le véhicule pendant le pas : distance, vitesse, contact avec l'eau. */
 export interface DriveResult {
@@ -116,10 +124,13 @@ export class VehiclePhysics {
     }
     const colliders: RAPIER.Collider[] = [];
     const c = world.createCollider(
-      RAPIER.ColliderDesc.cuboid(f.half.x, f.half.y, f.half.z)
+      // Coque d'un bateau : arêtes arrondies, elle glisse sur le sol sans accrocher les facettes du relief.
+      (f.medium === 'eau' ? RAPIER.ColliderDesc.roundCuboid(f.half.x - 0.06, f.half.y - 0.06, f.half.z - 0.06, 0.06) : RAPIER.ColliderDesc.cuboid(f.half.x, f.half.y, f.half.z))
         .setTranslation(0, f.cy, 0)
         .setDensity(0)
-        .setFriction(f.medium === 'eau' ? 0.6 : 0.5)
+        .setFriction(f.medium === 'eau' ? 0.3 : 0.5)
+        // Coque en bois sur le sol : son propre frottement (0,3), quel que soit le sol.
+        .setFrictionCombineRule(f.medium === 'eau' ? RAPIER.CoefficientCombineRule.Min : RAPIER.CoefficientCombineRule.Average)
         .setCollisionGroups(VEHICLE_GROUPS)
         .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
         .setContactForceEventThreshold(VEHICLE_IMPACT),
@@ -192,7 +203,7 @@ export class VehiclePhysics {
       const speed = this.speedOf(v.id);
       const power = input ? enginePower(v) : 0;
       const upright = uprightness(v) > 0.5;
-      const mass = massProps(v, !!input).mass;
+      const mass = massProps(v, !!input?.seated).mass;
       let force = 0;
       if (input && upright) {
         if (power > 0) {
@@ -223,13 +234,28 @@ export class VehiclePhysics {
         ctl.setWheelBrake(i, perWheel * k);
       }
       ctl.updateVehicle(dt, undefined, WHEEL_QUERY);
-      this.rollover(lv, v, !!input, dt);
+      this.rollover(lv, v, !!input?.seated, dt);
       return;
     }
     // Bateau : flottaison point par point, traînée, courant, propulsion.
     const hull = f.hull!;
     body.resetForces(true);
     body.resetTorques(true);
+    // Poussé à pied (sur la rive, puis dans l'eau peu profonde) : une force à la poupe, le long de la coque.
+    if (input?.push && f.push && uprightness(v) > 0.5) {
+      const r = body.rotation();
+      const fwd = { x: 2 * (r.x * r.z + r.w * r.y), z: 1 - 2 * (r.x * r.x + r.y * r.y) };
+      const l = Math.hypot(fwd.x, fwd.z) || 1;
+      const along = (body.linvel().x * fwd.x + body.linvel().z * fwd.z) / l;
+      const cap = BOAT_PUSH_SPEED * (input.sprint ? 1.3 : 1);
+      if ((input.throttle > 0 && along < cap) || (input.throttle < 0 && along > -cap * 0.6)) {
+        // Appliquée dans l'axe du centre de gravité : on pousse la coque, on ne la fait pas piquer du nez.
+        const k = BOAT_PUSH_FORCE * input.throttle * input.effort * (input.sprint ? 1.3 : 1);
+        body.addForce({ x: (fwd.x / l) * k, y: 0, z: (fwd.z / l) * k }, true);
+      }
+      // Tourner : on pousse la poupe de côté.
+      if (input.steer !== 0) body.addTorque({ x: 0, y: input.steer * BOAT_PUSH_FORCE * 1.2 * input.effort, z: 0 }, true);
+    }
     const share = (1000 * 9.81 * hull.volume) / hull.points.length;
     let submerged = 0;
     for (const [px, pz] of hull.points) {
@@ -258,7 +284,7 @@ export class VehiclePhysics {
     const dLat = -hull.dragLat * side * Math.abs(side) * wet;
     let thrust = 0;
     let turn = 0;
-    if (input && uprightness(v) > 0.3) {
+    if (input && !input.push && uprightness(v) > 0.3) {
       if (waterDrive(v) && enginePower(v) > 0) {
         const p = enginePower(v);
         if (input.throttle > 0 && along < f.maxEngine) thrust = Math.min(900, p / Math.max(1, Math.abs(along))) * input.throttle;
@@ -331,7 +357,7 @@ export class VehiclePhysics {
     const afloat = f.medium === 'eau' && WATER_LEVEL - toWorld(v, { x: 0, y: f.hull!.bottom, z: 0 }).y > 0.02;
     // Effort humain : force × distance (pousser, pagayer).
     const human = input && !(f.medium === 'terre' ? enginePower(v) > 0 : waterDrive(v) && enginePower(v) > 0);
-    const work = human ? f.human * Math.abs(input!.throttle) * input!.effort * dist : 0;
+    const work = human ? (input!.push ? BOAT_PUSH_FORCE : f.human) * Math.abs(input!.throttle) * input!.effort * dist : 0;
     return { dist, speed, afloat, work };
   }
 
