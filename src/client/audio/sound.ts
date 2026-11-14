@@ -18,6 +18,9 @@ const REF: Partial<Record<SoundKind, number>> = {
   ombre_gronde: 50,
   vautours: 30,
   impala_alarme: 20,
+  vapeur_coup: 22,
+  craquement: 18,
+  roue_eau: 14,
 };
 const MAX_VOICES = 14;
 
@@ -34,6 +37,8 @@ export class SoundSystem {
   volume = 0.8;
   /** Désactivé (tests automatiques, navigateur sans Web Audio). */
   disabled = false;
+  /** Nombre de sons joués par sorte (diagnostic, tests). */
+  readonly counts: Partial<Record<SoundKind, number>> = {};
 
   constructor(mobile: boolean) {
     this.hrtf = !mobile;
@@ -186,6 +191,7 @@ export class SoundSystem {
   play(kind: SoundKind, x: number, y: number, z: number, gain = 1): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running' || this.voices > MAX_VOICES * 6) return;
+    this.counts[kind] = (this.counts[kind] ?? 0) + 1;
     const t = ctx.currentTime + 0.01;
     const dest = this.out(x, y, z, kind);
     const k = gain;
@@ -259,6 +265,41 @@ export class SoundSystem {
       case 'piege':
         this.burst(t, 0.04, dest, 0.6 * k, 'highpass', 2000);
         this.osc('triangle', 320, 150, t, 0.09, dest, 0.4 * k);
+        break;
+      // Phase 7 : véhicules et machines.
+      case 'vapeur_coup':
+        // Coup de piston : souffle de vapeur et choc sourd.
+        this.burst(t, 0.14, dest, 0.32 * k, 'lowpass', 1100);
+        this.osc('sine', 72, 46, t, 0.12, dest, 0.35 * k);
+        break;
+      case 'roue_roule':
+        this.burst(t, 0.32, dest, 0.12 * k, 'lowpass', 260);
+        break;
+      case 'pagaie':
+        this.burst(t, 0.28, dest, 0.22 * k, 'bandpass', 850, 1.2);
+        this.burst(t + 0.05, 0.18, dest, 0.12 * k, 'highpass', 1800);
+        break;
+      case 'aubes':
+        this.burst(t, 0.2, dest, 0.18 * k, 'highpass', 650);
+        break;
+      case 'roue_eau':
+        this.osc('triangle', 190, 150, t, 0.32, dest, 0.12 * k, 0.05);
+        this.burst(t + 0.1, 0.45, dest, 0.2 * k, 'highpass', 500);
+        break;
+      case 'meule':
+        this.osc('sawtooth', 880, 860, t, 0.9, dest, 0.05 * k, 0.1);
+        this.burst(t, 0.9, dest, 0.12 * k, 'bandpass', 3200, 1.5);
+        break;
+      case 'soufflet':
+        this.burst(t, 0.8, dest, 0.22 * k, 'lowpass', 600);
+        break;
+      case 'pompe':
+        this.osc('square', 170, 120, t, 0.08, dest, 0.12 * k);
+        this.burst(t, 0.05, dest, 0.2 * k, 'bandpass', 1400, 2);
+        break;
+      case 'craquement':
+        this.burst(t, 0.16, dest, 0.5 * k, 'bandpass', 1200, 1.5);
+        this.osc('sine', 95, 50, t, 0.22, dest, 0.5 * k);
         break;
     }
   }

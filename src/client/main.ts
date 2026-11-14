@@ -690,8 +690,14 @@ async function boot(): Promise<void> {
     spawnCreatures: (sp: string, distance = 25, n?: number) => session?.spawnCreatures(sp as SpeciesId, distance, n) ?? 0,
     spawnVehicle: (frame: string, steam = false) => session?.spawnVehicle(frame as FrameKind, steam) ?? null,
     vehicleKit: () => session?.giveVehicleKit() ?? 0,
+    /** Sons joués depuis le début, par sorte (phase 7 : véhicules et machines). */
+    sounds: () => ({ running: sound.running, counts: { ...sound.counts } }),
+    water: () => session?.world.waterStats() ?? null,
+    /** Un maillage porte ce nom dans la scène (tests de l'affichage). */
+    hasMesh: (name: string) => !!session?.scene.getMeshByName(name),
+    wind: () => session?.sim?.wind() ?? null,
     vehicles: () =>
-      session?.sim?.vehicles.map((v) => ({ id: v.id, frame: v.frame, x: v.x, y: v.y, z: v.z, hp: v.hp, parts: v.parts.map((p) => ({ ...p })), engine: { ...v.engine }, upright: uprightness(v) })) ?? [],
+      session?.sim?.vehicles.map((v) => ({ id: v.id, frame: v.frame, x: v.x, y: v.y, z: v.z, hp: v.hp, parts: v.parts.map((p) => ({ ...p })), engine: { ...v.engine }, cargo: (v.cargo.bag ?? []).map((c) => ({ ...c })), upright: uprightness(v) })) ?? [],
     driving: () => (session?.sim?.driving ? { ...session.sim.driving, speed: session.sim.lastDrive?.speed ?? 0, effort: session.sim.effortW } : null),
     lakeTest: () => session?.lakeTest() ?? false,
     stopBuild: () => session?.stopBuild(),

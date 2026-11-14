@@ -3571,6 +3571,7 @@ export class LocalSimulation {
       const u = this.useOf(v.id);
       u.force = Math.max(u.force, massProps(v, false).mass * 9.81 * 11);
     }
+    this.push({ type: 'son', kind: 'craquement', x: v.x, y: v.y + 0.8, z: v.z, tick: this.tick });
     if (v.hp <= 0) {
       this.wreckVehicle(v);
       return;
@@ -4104,6 +4105,7 @@ export class LocalSimulation {
           continue;
         }
         if (shock > 0.5 && this.near(v, 30)) this.msg(`${cap(vehicleName(v))} encaisse un choc violent (${Math.round((v.hp / f.hp) * 100)} %).`, 'alerte');
+        if (shock > 0.2) this.push({ type: 'son', kind: 'craquement', x: v.x, y: v.y + 0.8, z: v.z, tick: this.tick });
       }
     }
     for (const e of out) this.onVehicleEvent(e);

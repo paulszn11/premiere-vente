@@ -408,6 +408,13 @@ export class WorldView {
     vd.applyToMesh(this.water, true);
   }
 
+  /** Hauteur maximale des vagues affichées (diagnostic, tests). */
+  waterStats(): { waves: boolean; maxY: number; vertices: number } {
+    let maxY = 0;
+    for (let i = 0; i < this.waterNear; i++) maxY = Math.max(maxY, Math.abs(this.waterPos[i * 3 + 1]!));
+    return { waves: this.waves, maxY, vertices: this.waterPos.length / 3 };
+  }
+
   /** Vagues autour de la caméra : hauteur et pente de chaque sommet proche, selon le vent et le temps. */
   updateWater(camX: number, camZ: number, time: number, wind: Wind): void {
     const pos = this.waterPos;

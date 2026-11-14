@@ -2517,6 +2517,23 @@ async function phase7Scenario(browser, touchOnly = false) {
   await page.keyboard.press('KeyE');
   await sleep(400);
   check('E lâche les brancards', (await driving()) === null);
+  // Coffre du chariot : une corde (poche 1) rangée depuis son panneau ; une caisse apparaît sur le plateau.
+  await page.evaluate(() => {
+    const sim = window.__game.sim();
+    sim.inventory.pockets[0] = { item: 'corde', count: 2 };
+  });
+  if (cart3) await aimAt(cart3.id, 0.6);
+  await sleep(300);
+  await page.keyboard.press('KeyE');
+  await sleep(500);
+  const chestBtn = (await page.evaluate(() => window.__game.bag())).actions.find((a) => a.startsWith('Ranger dans'));
+  if (chestBtn) await page.evaluate((label) => window.__game.bagRun(label), chestBtn);
+  await sleep(300);
+  await page.evaluate(() => window.__game.closeBag());
+  const cargo = (await vehicles()).find((v) => v.frame === 'chariot_bras')?.cargo ?? [];
+  await sleep(300);
+  const crate = cart3 ? await page.evaluate((id) => window.__game.hasMesh(`${id} caisse`), cart3.id) : false;
+  check('Coffre du chariot : depuis son panneau, « Ranger dans le chariot à bras » y met la corde ; une caisse apparaît sur le plateau', chestBtn === 'Ranger dans le chariot à bras' && cargo.some((c) => c.item === 'corde') && crate, `${chestBtn} · ${JSON.stringify(cargo)} · caisse ${crate}`);
   // 5. Chariot à vapeur : on monte sur le siège, la machine l'emmène ; la vue tourne avec lui.
   const wagon = await page.evaluate(() => window.__game.spawnVehicle('chariot', true));
   await sleep(800);
@@ -2545,6 +2562,8 @@ async function phase7Scenario(browser, touchOnly = false) {
   const w1 = (await vehicles()).find((v) => v.id === wagon);
   const turned = Math.abs(Math.atan2(Math.sin(yaw1 - yaw0), Math.cos(yaw1 - yaw0)));
   check('Chariot à vapeur : sur le siège, W accélère (machine), D tourne et la vue suit le chariot, Espace freine', seatBtn && fast > 3 && turned > 0.4 && Math.hypot(w1.x - w0.x, w1.z - w0.z) > 10 && (await driving())?.speed < 1, `${fast.toFixed(1)} m/s · virage ${turned.toFixed(2)} rad`);
+  const snd = await page.evaluate(() => window.__game.sounds());
+  check('Sons : le chariot à vapeur fait entendre ses coups de piston et le roulement de ses roues', snd.running && (snd.counts.vapeur_coup ?? 0) > 3 && (snd.counts.roue_roule ?? 0) > 3, JSON.stringify({ vapeur: snd.counts.vapeur_coup, roues: snd.counts.roue_roule }));
   await page.keyboard.press('KeyE');
   await sleep(500);
   const out = (await sess(page)).state;
@@ -2599,6 +2618,37 @@ async function phase7Scenario(browser, touchOnly = false) {
   check('Réglages : l’outil de test fait apparaître une pirogue', vsAfter.length === n0 + 1 && vsAfter.some((v) => v.frame === 'pirogue'));
   check('Aucune erreur dans la console (phase 7)', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
+
+  // Vagues : en qualité Moyenne, par vent fort, la surface du lac ondule (et le radeau danse).
+  const wCtx = await browser.newContext({ viewport: { width: 1000, height: 560 } });
+  await wCtx.addInitScript((settings) => localStorage.setItem('baz.settings.v1', JSON.stringify(settings)), { ...QA_SETTINGS, quality: 'medium' });
+  const wPage = await wCtx.newPage();
+  const wErrors = watchErrors(wPage, 'phase 7 (vagues)');
+  await wPage.goto(BASE);
+  await startGame(wPage);
+  await settle(wPage);
+  await wPage.evaluate(() => window.__game.teleport('lac'));
+  await settle(wPage);
+  await wPage.evaluate(() => {
+    const sim = window.__game.sim();
+    for (let t = sim.time; t < sim.time + 40000; t += 50) {
+      sim.time = t;
+      if (sim.wind().speed > 6.5) break;
+    }
+  });
+  const wRaft = await wPage.evaluate(() => window.__game.spawnVehicle('radeau', false));
+  await sleep(1500);
+  const ys = [];
+  for (let k = 0; k < 12; k++) {
+    ys.push(await wPage.evaluate((id) => window.__game.sim().vehicle(id).y, wRaft));
+    await sleep(150);
+  }
+  const water = await wPage.evaluate(() => window.__game.water());
+  const wind = await wPage.evaluate(() => window.__game.wind());
+  writeFileSync(`${OUT}phase7-vagues.png`, await wPage.screenshot());
+  check('Vagues : par vent fort, la surface du lac ondule et le radeau danse sur l’eau', water?.waves && water.maxY > 0.05 && Math.max(...ys) - Math.min(...ys) > 0.02, `vent ${wind?.speed.toFixed(1)} m/s · vagues ${water?.maxY.toFixed(2)} m · radeau ${(Math.max(...ys) - Math.min(...ys)).toFixed(2)} m`);
+  check('Aucune erreur dans la console (phase 7, vagues)', wErrors.length === 0, wErrors.slice(0, 3).join(' | '));
+  await wCtx.close();
   }
 
   // Téléphone : Prendre sur le chariot, « Pousser », joystick vers l'avant, Prendre pour lâcher.

@@ -349,6 +349,49 @@ export class GameSession {
     }
   }
 
+  /** Prochain son de chaque véhicule ou machine qui tourne (moteur, roues, pagaie, meule…). */
+  private readonly nextSound = new Map<string, number>();
+
+  /** Sons des véhicules et des machines proches (phase 7). */
+  private updateVehicleSounds(sim: LocalSimulation, views: ReturnType<LocalSimulation['props']['views']>, x: number, z: number, now: number): void {
+    const snd = this.opts.sound;
+    if (!snd?.running) return;
+    const due = (key: string, period: number): boolean => {
+      if (now < (this.nextSound.get(key) ?? 0)) return false;
+      this.nextSound.set(key, now + period * 1000 * (0.9 + Math.random() * 0.2));
+      return true;
+    };
+    for (const v of sim.vehicles) {
+      if (Math.hypot(v.x - x, v.z - z) > 45) continue;
+      const f = FRAMES[v.frame];
+      const m = sim.vphys.motion(v.id);
+      const speed = m ? Math.hypot(m.vx, m.vz) : 0;
+      const driven = sim.driving?.v === v.id;
+      const e = v.engine;
+      // La machine à vapeur : coups de piston de plus en plus serrés avec la vitesse.
+      if (e.lit && v.parts.some((p) => p.kind === 'machine_vapeur')) {
+        const going = driven && speed > 0.2;
+        if (due(`${v.id}:vapeur`, going ? Math.max(0.12, Math.min(0.6, 0.9 / speed)) : 0.9)) snd.play('vapeur_coup', v.x, v.y + 1.5, v.z, 0.4 + 0.6 * e.pressure);
+      }
+      if (f.medium === 'terre' && speed > 0.3 && due(`${v.id}:roues`, 0.28)) snd.play('roue_roule', v.x, v.y + 0.3, v.z, Math.min(1.5, speed * 0.4));
+      if (f.medium === 'eau' && driven && speed > 0.1) {
+        const engine = waterDrive(v) && enginePower(v) > 0;
+        if (engine && due(`${v.id}:aubes`, 0.35)) snd.play('aubes', v.x, v.y, v.z, 0.8);
+        else if (!engine && sim.effortW > 30 && due(`${v.id}:pagaie`, 1.1)) snd.play('pagaie', v.x, v.y, v.z, 0.8);
+      }
+    }
+    for (const p of views) {
+      if (!MACHINE_KINDS.has(p.kind) || Math.hypot(p.x - x, p.z - z) > 35) continue;
+      const m = sim.props.defOf(p.id)?.machine;
+      if (!m) continue;
+      if (p.kind === 'roue_eau' && m.power > 0 && due(`${p.id}:roue`, 1.6)) snd.play('roue_eau', p.x, p.y, p.z);
+      else if (p.kind === 'machine_fixe' && m.engine?.lit && due(`${p.id}:vapeur`, 0.7)) snd.play('vapeur_coup', p.x, p.y + 0.6, p.z, 0.4 + 0.6 * m.engine.pressure);
+      else if (p.kind === 'meule' && m.power >= RUNS_AT && due(`${p.id}:meule`, 1)) snd.play('meule', p.x, p.y, p.z, 0.7);
+      else if (p.kind === 'soufflet_meca' && m.power >= RUNS_AT && due(`${p.id}:soufflet`, 2)) snd.play('soufflet', p.x, p.y, p.z);
+      else if (p.kind === 'pompe' && m.power >= RUNS_AT && due(`${p.id}:pompe`, 1.2)) snd.play('pompe', p.x, p.y, p.z);
+    }
+  }
+
   /** Outil de test : fait apparaître des créatures devant le joueur. Renvoie leur nombre. */
   spawnCreatures(sp: SpeciesId, distance = 25, n?: number): number {
     const sim = this.sim;
@@ -590,6 +633,7 @@ export class GameSession {
     this.updateLights(views, x, camY, z, now);
     this.updateFauna(sim, views, x, camY, z, now, dt);
     this.vehicleView.update(sim, a, x, z, dt, now);
+    this.updateVehicleSounds(sim, views, x, z, now);
     this.scene.render();
     if (bag?.isOpen) bag.frame(dt);
     this.lastCpuMs = performance.now() - now;

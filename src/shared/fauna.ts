@@ -80,7 +80,17 @@ export type SoundKind =
   | 'frolement'
   | 'vautours'
   | 'cri_douleur'
-  | 'piege';
+  | 'piege'
+  // Phase 7 : véhicules et machines.
+  | 'vapeur_coup'
+  | 'roue_roule'
+  | 'pagaie'
+  | 'aubes'
+  | 'roue_eau'
+  | 'meule'
+  | 'soufflet'
+  | 'pompe'
+  | 'craquement';
 
 export type FaunaEvent =
   | { type: 'attaque'; id: string; sp: SpeciesId; behind: boolean; downed: boolean }
