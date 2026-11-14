@@ -69,8 +69,11 @@ import {
   BENCH_SLOTS,
   FX_LIGATURE_LACHE,
   FX_MANCHE_FENDU,
+  BAG_CAPACITY_L,
   addToBag,
   addToPockets,
+  bagContentMass,
+  bagVolume,
   carriedMass,
   consume,
   countOf,
@@ -82,6 +85,7 @@ import {
   store,
   takeAt,
   tearClothing,
+  unitMass,
   unitVolume,
   metaOf,
 } from './inventory';
@@ -140,7 +144,7 @@ import {
   wearParts,
   yawOf,
 } from './vehicles';
-import { GROUP_OBSTACLE, GROUP_TERRAIN, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
+import { GROUP_OBSTACLE, GROUP_TERRAIN, GROUP_VEHICLE, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
 import { type FireState, type FurnaceState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
@@ -284,6 +288,8 @@ const FOOD_KINDS = new Set<PropKind>(['fruit_baobab', 'figue', 'muhacha', 'viand
 const FOOD_ITEMS = new Set<ItemId>(['fruit_baobab', 'figue', 'muhacha', 'viande_crue', 'viande_cuite']);
 /** Requête des sens des créatures : le relief, les rochers, les troncs et les murs. */
 const QUERY_SIGHT = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
+/** Obstacles au déplacement des créatures : les mêmes, et les véhicules (phase 7). */
+const QUERY_MOVE = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_VEHICLE);
 const ZONE_AT: Record<Zone, string> = { tete: 'à la tête', torse: 'au torse', bras_g: 'au bras gauche', bras_d: 'au bras droit', jambe_g: 'à la jambe gauche', jambe_d: 'à la jambe droite' };
 const ATTACK_VERB: Partial<Record<SpeciesId, string>> = {
   hyene: 'vous mord',
@@ -451,6 +457,10 @@ export class LocalSimulation {
       physicsAt: (x, z) => this.phys.hasChunk(chunkCoord(x), chunkCoord(z)),
       ray: (x, y, z, dx, dy, dz, len) => {
         const hit = this.phys.world.castRay(new RAPIER.Ray({ x, y, z }, { x: dx, y: dy, z: dz }), len, true, undefined, QUERY_SIGHT);
+        return hit ? hit.timeOfImpact : null;
+      },
+      moveRay: (x, y, z, dx, dy, dz, len) => {
+        const hit = this.phys.world.castRay(new RAPIER.Ray({ x, y, z }, { x: dx, y: dy, z: dz }), len, true, undefined, QUERY_MOVE);
         return hit ? hit.timeOfImpact : null;
       },
       ground: (x, z) => this.terrain.heightAt(x, z),
@@ -637,6 +647,7 @@ export class LocalSimulation {
     }
     this.applyImpacts();
     this.stepFauna();
+    if (this.tick % 6 === 3) this.separateCreaturesFromVehicles();
     if (this.dead) {
       this.tick++;
       return;
@@ -891,6 +902,20 @@ export class LocalSimulation {
     const s = this.state;
     const dy = p.y - (s.y + 0.9);
     return Math.hypot(p.x - s.x, dy, p.z - s.z) <= ACTION_REACH ? def : null;
+  }
+
+  /** Contenant à portée : sac posé, coffre, corps, ou coffre d'un véhicule (phase 7). */
+  private containerAt(id: string): { c: Container; capacity: number; maxKg: number; def: PropDef | null; vehicle: VehicleState | null; after: () => void } | null {
+    const v = this.vehicle(id);
+    if (v) {
+      if (!this.nearVehicle(v)) return null;
+      if (!v.cargo.bag) v.cargo.bag = [];
+      const f = FRAMES[v.frame];
+      return { c: v.cargo, capacity: f.cargo.volume, maxKg: f.cargo.maxKg, def: null, vehicle: v, after: () => undefined };
+    }
+    const def = this.reachable(id);
+    if (!def?.container) return null;
+    return { c: def.container, capacity: BAG_CAPACITY_L, maxKg: Number.POSITIVE_INFINITY, def, vehicle: null, after: () => this.afterContainerChange(def) };
   }
 
   private afterContainerChange(def: PropDef): void {
@@ -1150,9 +1175,9 @@ export class LocalSimulation {
         return ok('Vous mettez le sac sur votre dos.');
       }
       case 'prendre_dans': {
-        const def = this.reachable(a.prop);
-        const c = def?.container;
-        if (!def || !c) return fail('Trop loin.');
+        const box = this.containerAt(a.prop);
+        if (!box) return fail('Trop loin.');
+        const c = box.c;
         const st = stackAt(c, a.from);
         if (!st) return fail();
         const taken = takeAt(c, a.from, st.count)!;
@@ -1163,15 +1188,15 @@ export class LocalSimulation {
           else if (c.bag) c.bag.push(back);
           else this.dropOnGround(back);
         }
-        this.afterContainerChange(def);
+        box.after();
         return left === taken.count ? fail('Pas de place pour le prendre.') : ok();
       }
       case 'tout_prendre': {
-        const def = this.reachable(a.prop);
-        const c = def?.container;
-        if (!def || !c) return fail('Trop loin.');
+        const box = this.containerAt(a.prop);
+        if (!box) return fail('Trop loin.');
+        const c = box.c;
         let tookBag = false;
-        if (!inv.bag && c.bag && def.kind === 'corps') {
+        if (!inv.bag && c.bag && box.def?.kind === 'corps') {
           inv.bag = c.bag;
           c.bag = null;
           tookBag = true;
@@ -1195,22 +1220,26 @@ export class LocalSimulation {
             } else c.bag.splice(i, 1);
           }
         }
-        this.afterContainerChange(def);
+        box.after();
         if (missed > 0) return ok(`Vous prenez ce que vous pouvez (${missed} objet${missed > 1 ? 's' : ''} laissé${missed > 1 ? 's' : ''}, faute de place).`);
         return ok(tookBag ? 'Vous récupérez le sac et tout son contenu.' : 'Vous prenez tout.');
       }
       case 'deposer_dans': {
-        const def = this.reachable(a.prop);
-        const c = def?.container;
-        if (!def || !c) return fail('Trop loin.');
+        const box = this.containerAt(a.prop);
+        if (!box) return fail('Trop loin.');
+        const c = box.c;
         if (!c.bag) return fail('Il n’y a pas de sac ici.');
         const st = stackAt(inv, a.from);
         if (!st) return fail();
         const moved = takeAt(inv, a.from, st.count)!;
-        const left = addToBag(c, moved);
+        // Coffre d'un véhicule : sa charge maximale compte aussi.
+        let n = moved.count;
+        if (Number.isFinite(box.maxKg)) n = Math.max(0, Math.min(n, Math.floor((box.maxKg - bagContentMass(c.bag)) / Math.max(1e-6, unitMass(moved)) + 1e-9)));
+        const left = addToBag(c, { ...moved, count: n }, box.capacity) + (moved.count - n);
         if (left > 0) store(inv, { ...moved, count: left });
-        this.afterContainerChange(def);
-        return left === moved.count ? fail('Ce sac est plein.') : ok();
+        box.after();
+        if (left === moved.count) return fail(box.vehicle ? `${cap(vehicleName(box.vehicle))} est plein${FRAMES[box.vehicle.frame].feminine ? 'e' : ''} (${Math.round(bagContentMass(c.bag))} kg, ${Math.round(bagVolume(c.bag))} L).` : 'Ce sac est plein.');
+        return ok();
       }
       case 'trainer': {
         const def = this.reachable(a.prop);
@@ -2896,6 +2925,8 @@ export class LocalSimulation {
         const d = SPECIES[e.sp];
         const atk = d.attack;
         if (!atk || !c) break;
+        // Un éléphant qui charge le conducteur heurte aussi son véhicule.
+        if (this.driving && d.mass >= 1000) this.creatureHitsVehicle(this.driving.v, e.sp, 80);
         const zones: Array<[Zone, number]> = e.downed ? [['torse', 3], ['tete', 1], ['bras_g', 1], ['bras_d', 1]] : atk.zones;
         let total = 0;
         for (const [, w] of zones) total += w;
@@ -2952,6 +2983,10 @@ export class LocalSimulation {
         if (e.sp !== 'vautour' && e.sp !== 'ombre') this.spawnCarcass(e.sp, e.x, e.z, e.yaw, e.scale);
         break;
       case 'piece': {
+        if (e.s.startsWith('veh:')) {
+          this.creatureHitsVehicle(e.s.slice(4), e.sp, e.damage);
+          break;
+        }
         const p = this.build.piece(e.s, e.p);
         if (!p) break;
         if (this.build.damage(e.s, e.p, damageFor(p.mat, 'creature', e.damage))) {
@@ -3356,6 +3391,21 @@ export class LocalSimulation {
 
   /** Pièce de construction qui barre le passage en ce point (clôtures, murs, portes fermées). */
   private pieceNear(x: number, y: number, z: number, r: number): { s: string; p: number; wood: boolean } | null {
+    // Phase 7 : un véhicule barre aussi la route (l'éléphant le bouscule, la hyène ronge le bois).
+    for (const v of this.vehicles) {
+      if (Math.abs(v.x - x) > 6 || Math.abs(v.z - z) > 6) continue;
+      const b = this.vehicleBox(v);
+      const c = Math.cos(b.yaw);
+      const sn = Math.sin(b.yaw);
+      const dx0 = x - b.x;
+      const dz0 = z - b.z;
+      const lx = dx0 * c - dz0 * sn;
+      const lz = dx0 * sn + dz0 * c;
+      const dx = Math.max(0, Math.abs(lx) - b.hx);
+      const dy = Math.max(0, Math.abs(y - b.y) - b.hy);
+      const dz = Math.max(0, Math.abs(lz) - b.hz);
+      if (dx * dx + dy * dy + dz * dz <= r * r) return { s: `veh:${v.id}`, p: 0, wood: true };
+    }
     for (const st of this.build.structures) {
       if (Math.hypot(st.x - x, st.z - z) > 40) continue;
       for (const p of st.pieces) {
@@ -3437,6 +3487,87 @@ export class LocalSimulation {
     if (!res) return;
     this.push({ type: 'touche', sp: c.sp, part: hit.part, killed: res.killed, x: c.x, y: v.y + f.cy, z: c.z, tick: this.tick });
     this.msg(res.killed ? `${cap(vehicleName(v))} écrase ${speciesName(c.sp, 'le')}.` : `${cap(vehicleName(v))} percute ${speciesName(c.sp, 'le')} !`, 'alerte');
+  }
+
+  /** Volume d'un véhicule (boîte orientée selon son cap) : pour les créatures. */
+  private vehicleBox(v: VehicleState): { x: number; y: number; z: number; hx: number; hy: number; hz: number; yaw: number } {
+    const f = FRAMES[v.frame];
+    const c = toWorld(v, { x: 0, y: f.cy, z: 0 });
+    const hy = f.medium === 'terre' ? (f.cy + f.half.y + f.rail) / 2 : f.half.y + 0.1;
+    return { x: c.x, y: f.medium === 'terre' ? v.y + hy : c.y, z: c.z, hx: f.half.x + 0.1, hy, hz: f.half.z + (f.push ? 0.2 : 0.05), yaw: yawOf(v) };
+  }
+
+  /** Une créature bouscule ou ronge un véhicule : dégâts, et l'éléphant le pousse. */
+  private creatureHitsVehicle(id: string, sp: SpeciesId, damage: number): void {
+    const v = this.vehicle(id);
+    if (!v) return;
+    const f = FRAMES[v.frame];
+    const heavy = SPECIES[sp].mass >= 1000;
+    v.hp -= heavy ? damage * 0.5 : damage * 0.3;
+    if (heavy) {
+      // Poussé par l'animal le plus proche de cette espèce, à l'opposé de lui.
+      let best: { x: number; z: number } | null = null;
+      let bd = 1e9;
+      for (const c of this.fauna.creatures.values()) {
+        if (c.sp !== sp || c.dead) continue;
+        const d = Math.hypot(c.x - v.x, c.z - v.z);
+        if (d < bd) {
+          bd = d;
+          best = c;
+        }
+      }
+      if (best && bd < 12) {
+        const dx = v.x - best.x;
+        const dz = v.z - best.z;
+        const l = Math.hypot(dx, dz) || 1;
+        this.vphys.shove(v.id, dx / l, dz / l, massProps(v, false).mass * 2.2);
+      }
+      const u = this.useOf(v.id);
+      u.force = Math.max(u.force, massProps(v, false).mass * 9.81 * 11);
+    }
+    if (v.hp <= 0) {
+      this.wreckVehicle(v);
+      return;
+    }
+    if (this.near(v, 40) && this.time - (this.vehicleHitAt.get(`warn:${v.id}`) ?? -1e9) > 8) {
+      this.vehicleHitAt.set(`warn:${v.id}`, this.time);
+      this.msg(heavy ? `${cap(speciesName(sp, 'un'))} bouscule ${vehicleName(v)} (${Math.round((v.hp / f.hp) * 100)} %) !` : `${cap(speciesName(sp, 'un'))} ronge ${vehicleName(v)}.`, 'alerte');
+    }
+  }
+
+  /** Une créature ne reste pas dans un véhicule : elle est repoussée ; un éléphant arrête le véhicule. */
+  private separateCreaturesFromVehicles(): void {
+    if (!this.vehicles.length || !this.fauna.enabled) return;
+    for (const v of this.vehicles) {
+      if (!this.vphys.has(v.id)) continue;
+      const b = this.vehicleBox(v);
+      const c = Math.cos(b.yaw);
+      const sn = Math.sin(b.yaw);
+      for (const cr of this.fauna.creatures.values()) {
+        if (cr.dead || cr.sp === 'ombre' || cr.sp === 'vautour') continue;
+        if (Math.abs(cr.x - b.x) > 8 || Math.abs(cr.z - b.z) > 8) continue;
+        const r = SPECIES[cr.sp].radius * cr.scale;
+        const dx0 = cr.x - b.x;
+        const dz0 = cr.z - b.z;
+        const lx = dx0 * c - dz0 * sn;
+        const lz = dx0 * sn + dz0 * c;
+        const ox = b.hx + r - Math.abs(lx);
+        const oz = b.hz + r - Math.abs(lz);
+        if (ox <= 0 || oz <= 0 || cr.y > b.y + b.hy + 0.5 || cr.y + SPECIES[cr.sp].height * cr.scale < b.y - b.hy) continue;
+        if (SPECIES[cr.sp].mass >= massProps(v, this.driving?.v === v.id).mass) {
+          // Plus lourd que le véhicule : c'est le véhicule qui s'arrête.
+          this.vphys.damp(v.id, 0.3);
+          continue;
+        }
+        // Repoussée par le côté le plus proche (repère du véhicule), puis remise dans le monde.
+        let nx = lx;
+        let nz = lz;
+        if (ox < oz) nx = Math.sign(lx || 1) * (b.hx + r + 0.02);
+        else nz = Math.sign(lz || 1) * (b.hz + r + 0.02);
+        cr.x = b.x + nx * c + nz * sn;
+        cr.z = b.z - nx * sn + nz * c;
+      }
+    }
   }
 
   /** Véhicule visé (à portée de main) et sa distance. */

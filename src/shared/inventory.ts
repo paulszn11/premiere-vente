@@ -162,14 +162,14 @@ export function addToPockets(c: Container, st: ItemStack): number {
   return left;
 }
 
-/** Range dans le sac autant d'unités que possible ; renvoie le nombre restant. */
-export function addToBag(c: Container, st: ItemStack): number {
+/** Range dans le sac autant d'unités que possible ; renvoie le nombre restant. capacityL : volume du contenant (coffre de véhicule). */
+export function addToBag(c: Container, st: ItemStack, capacityL = BAG_CAPACITY_L): number {
   const bag = c.bag;
   if (!bag || !fitsBag(st)) return st.count;
   const def = ITEMS[st.item];
   const unitV = unitVolume(st);
   let left = st.count;
-  let free = BAG_CAPACITY_L - bagVolume(bag);
+  let free = capacityL - bagVolume(bag);
   for (const slot of bag) {
     if (!sameKind(slot, st) || left === 0) continue;
     const n = Math.max(0, Math.min(left, def.stack - slot.count, Math.floor(free / unitV + 1e-9)));

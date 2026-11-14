@@ -29,11 +29,28 @@ export const MACHINES: Record<MachinePropKind, MachineDef> = {
 export const RUNS_AT = 0.5;
 
 /**
- * Puissance d'une roue à eau selon la vitesse du courant (m/s). Formule simplifiée (proportionnelle
- * au carré de la vitesse) : environ 340 W dans le courant du Zambèze (0,75 m/s), 100 W dans le Limpopo.
+ * Roue à eau « par-dessous » (roue à aubes poussée par le courant), installée dans un bief creusé
+ * sur la rive : le bief resserre le courant, qui y coule plus vite (conservation du débit).
+ */
+export const WATER_WHEEL = {
+  /** Surface des pales plongées dans l'eau (m²) : 0,6 m de large, 0,55 m de profondeur. */
+  blade: 0.33,
+  /** Resserrement du bief : largeur à l'entrée / largeur devant la roue. */
+  race: 2.6,
+  /** Rendement de la roue et de la transmission. */
+  efficiency: 0.8,
+};
+
+/**
+ * Puissance d'une roue à eau selon la vitesse du courant (m/s). Théorie de la roue à impulsion :
+ * la force de l'eau sur les pales vaut ρ·A·(v − u)², et la puissance F·u est la plus grande, (4/27)·ρ·A·v³,
+ * quand les pales avancent au tiers de la vitesse de l'eau. Environ 290 W dans le courant du Zambèze
+ * (0,75 m/s, soit 1,95 m/s dans le bief), 45 W dans le Limpopo (0,4 m/s).
  */
 export function waterWheelPower(current: number): number {
-  return current < 0.15 ? 0 : 600 * current * current;
+  if (current < 0.1) return 0;
+  const v = current * WATER_WHEEL.race;
+  return WATER_WHEEL.efficiency * (4 / 27) * 1000 * WATER_WHEEL.blade * v * v * v;
 }
 
 /** Puissance d'une machine à vapeur fixe selon sa pression et son usure (W). */

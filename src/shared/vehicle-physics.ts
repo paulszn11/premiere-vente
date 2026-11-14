@@ -28,6 +28,9 @@ export interface DriveResult {
   work: number;
 }
 
+/** Gain du couple de renversement ajouté (réglé pour basculer à l'angle de stabilité statique). */
+export const ROLL_GAIN = { value: 6 };
+
 /** Choc à partir duquel un véhicule s'abîme (force de contact, N). */
 export const VEHICLE_IMPACT = 6000;
 const WHEEL_QUERY = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
@@ -280,6 +283,8 @@ export class VehiclePhysics {
    * Renversement. Le modèle à rayons garde les roues collées au sol : il ne fait pas basculer un
    * véhicule. On ajoute donc le couple qui manque quand la force latérale (dévers, virage serré)
    * dépasse ce que la voie peut retenir : centre de gravité haut et voie étroite → il se renverse.
+   * Gain réglé pour que le véhicule bascule à l'angle de stabilité statique, atan(demi-voie / hauteur
+   * du centre de gravité), à un degré près (vérifié par un test).
    */
   private rollover(lv: Live, v: VehicleState, driver: boolean, dt: number): void {
     const ctl = lv.ctl!;
@@ -302,7 +307,7 @@ export class VehiclePhysics {
     const track = Math.max(...lv.wheels.map((w) => Math.abs(w.x)));
     const excess = Math.abs(lateral) * Math.max(0.2, mp.com.y) - Math.max(0, vertical) * track;
     if (excess <= 0) return;
-    const k = mp.mass * excess * dt * Math.sign(lateral);
+    const k = ROLL_GAIN.value * mp.mass * excess * dt * Math.sign(lateral);
     lv.body.applyTorqueImpulse({ x: -fwd.x * k, y: -fwd.y * k, z: -fwd.z * k }, true);
   }
 

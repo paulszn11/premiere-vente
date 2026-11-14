@@ -482,13 +482,14 @@ export const PLANS: Record<PlanId, PlanDef> = {
     material: 'bois',
     hp: 300,
     steps: [
+      { label: 'Creuser le bief (il resserre le courant)', needs: [], tool: 'fouir', seconds: 14 },
       { label: 'Tailler l’arbre et les pales', needs: [['buche', 3], ['perche', 2]], tool: 'hache', seconds: 12 },
       { label: 'Assembler la roue', needs: [['clous', 12], ['barre_fer', 1]], tool: 'percuteur', seconds: 10 },
     ],
     known: false,
     hintedBy: ['barre_fer'],
     hint: 'Le courant du fleuve ne s’arrête jamais… Une roue à pales sur la rive tournerait toute seule.',
-    description: 'Sur une rive où le courant est assez fort (Zambèze, Limpopo), elle entraîne les machines à moins de 6 m. Plus le courant est fort, plus elle est puissante.',
+    description: 'Sur la rive d’un fleuve qui coule, dans un bief qui resserre le courant : elle entraîne les machines à moins de 6 m. Environ 290 W dans le Zambèze (de quoi faire tourner une meule et une pompe), 45 W dans le Limpopo.',
     water: 'courant',
   },
   machine_fixe: {

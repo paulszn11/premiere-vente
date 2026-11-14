@@ -118,7 +118,7 @@ export class VehicleView {
   }
 
   private signature(v: VehicleState): string {
-    return `${v.frame}|${onChocks(v) ? 'c' : ''}|${v.parts.map((p) => `${p.slot}${p.broken ? 'x' : ''}`).join(',')}`;
+    return `${v.frame}|${onChocks(v) ? 'c' : ''}|${(v.cargo.bag?.length ?? 0) > 0 ? 'k' : ''}|${v.parts.map((p) => `${p.slot}${p.broken ? 'x' : ''}`).join(',')}`;
   }
 
   private build(v: VehicleState): Rig {
@@ -140,6 +140,16 @@ export class VehicleView {
       const parts: Part[] = [];
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) parts.push([box(0.22, h, 0.3, sx * (f.half.x - 0.12), h / 2, sz * (f.half.z - 0.25)), ...DARK]);
       add(`${v.id} cales`, parts, root);
+    }
+    // Coffre chargé : une caisse sur le plateau (ou un ballot au fond du bateau).
+    if ((v.cargo.bag?.length ?? 0) > 0) {
+      const c = f.cargo;
+      add(`${v.id} caisse`, [
+        [box(0.5, 0.3, 0.4, c.x, c.y - 0.02, c.z), ...WOOD],
+        [box(0.52, 0.04, 0.42, c.x, c.y + 0.14, c.z), ...DARK],
+        [box(0.04, 0.31, 0.41, c.x - 0.18, c.y - 0.02, c.z), ...DARK],
+        [box(0.04, 0.31, 0.41, c.x + 0.18, c.y - 0.02, c.z), ...DARK],
+      ], root);
     }
     const wheels = new Map<string, { steer: TransformNode; spin: Mesh; baseY: number }>();
     let aubes: Mesh | null = null;

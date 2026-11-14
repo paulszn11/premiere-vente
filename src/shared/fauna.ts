@@ -48,6 +48,8 @@ export interface FaunaEnv {
   physicsAt(x: number, z: number): boolean;
   /** Premier obstacle (sol, rochers, troncs, murs) le long d'une direction unitaire : distance, ou null. */
   ray(x: number, y: number, z: number, dx: number, dy: number, dz: number, len: number): number | null;
+  /** Obstacles au déplacement (les véhicules en plus) ; par défaut, le même rayon que la vue. */
+  moveRay?(x: number, y: number, z: number, dx: number, dy: number, dz: number, len: number): number | null;
   /** Hauteur du sol (rochers compris dans la zone physique). */
   ground(x: number, z: number): number;
   /** Feux allumés (foyers, forges, torches tenues, pièces en feu). */
@@ -2181,7 +2183,7 @@ export class Fauna {
     const env = this.env!;
     if (d.archetype !== 'abysse' && d.archetype !== 'charognard' && env.physicsAt(c.x, c.z)) {
       const y = c.y + Math.max(0.35, d.height * c.scale * 0.45);
-      const hit = env.ray(c.x, y, c.z, sx, 0, sz, len);
+      const hit = (env.moveRay ?? env.ray)(c.x, y, c.z, sx, 0, sz, len);
       if (hit !== null && hit < len) return false;
     }
     if (d.archetype !== 'pachyderme' && d.archetype !== 'abysse' && d.archetype !== 'charognard') {

@@ -8,7 +8,7 @@ import { INSTALL_PLANS, type Need, PIECE_PLANS, PLANS, PLAN_IDS, type PlanId, VE
 import { MACHINES, RUNS_AT } from '../../shared/machines';
 import { ENGINE, FRAMES, FRAME_REPAIR, PARTS, partAt, partName, uprightness, vehicleName } from '../../shared/vehicles';
 import { RECIPES, RECIPE_IDS, canDismantle, conditionOf, experimentHint, improveOptions, repairOptions, skillLevel } from '../../shared/crafting';
-import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
+import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type Container, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
 import { ITEMS, type ItemId, itemName } from '../../shared/items';
 import { ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, PROP_LABELS } from '../../shared/props';
 import { type LocalSimulation, TOOL_NEEDS, type Tone } from '../../shared/simulation';
@@ -275,15 +275,22 @@ export class BagView {
     return { def, kind: def.kind as MachinePropKind, m: def.machine ?? { power: 0 } };
   }
 
-  private otherContainer() {
+  /** Contenant ouvert : sac posé, coffre, corps, ou coffre du véhicule ouvert (phase 7). */
+  private otherContainer(): { id: string; kind: string; c: Container; def: { kind: string } } | null {
     const sim = this.sim;
-    if (!sim || !this.otherProp) return null;
+    if (!sim) return null;
+    const veh = this.otherVehicle ? this.openedVehicle() : null;
+    if (veh) {
+      if (!veh.cargo.bag) veh.cargo.bag = [];
+      return { id: veh.id, kind: 'vehicule', c: veh.cargo, def: { kind: 'vehicule' } };
+    }
+    if (!this.otherProp) return null;
     const def = sim.props.defOf(this.otherProp);
     const pos = sim.props.position(this.otherProp);
     if (!def?.container || !pos) return null;
     const s = sim.state;
     if (Math.hypot(pos.x - s.x, pos.z - s.z) > 3.4) return null;
-    return { def, c: def.container };
+    return { id: this.otherProp, kind: def.kind, c: def.container, def };
   }
 
   /** Appelé à chaque image pendant que le sac est ouvert. */
@@ -309,6 +316,7 @@ export class BagView {
       bag: sim.inventory.bag,
       hand: held ? { kind: held.kind, radius: held.radius, length: held.length } : null,
       other: other?.c ?? null,
+      ...(other?.kind === 'vehicule' ? { otherLabel: 'Coffre du véhicule' } : {}),
       bench: sim.inventory.bench,
     });
     // Même règle que la feuille de style : petit écran = onglets Sac / Corps.
@@ -468,14 +476,16 @@ export class BagView {
         out.push({ label: 'Prendre en main', run: () => this.act({ type: 'sortir', from }) });
         if (s.zone === 'poche' && sim.inventory.bag) out.push({ label: 'Mettre dans le sac', run: () => this.act({ type: 'deplacer', from, to: 'sac' }) });
         if (s.zone === 'sac' && ITEMS[item].pocket) out.push({ label: 'Mettre en poche', run: () => this.act({ type: 'deplacer', from, to: 'poche' }) });
-        if ((other?.def.kind === 'sac' || other?.def.kind === 'coffre') && other.c.bag && this.otherProp) {
-          const prop = this.otherProp;
-          out.push({ label: other.def.kind === 'coffre' ? 'Ranger dans le coffre' : 'Ranger dans le sac posé', run: () => this.act({ type: 'deposer_dans', prop, from }) });
+        if (other && other.kind !== 'corps' && other.c.bag) {
+          const prop = other.id;
+          const veh = other.kind === 'vehicule' ? sim.vehicle(other.id) : undefined;
+          const label = veh ? `Ranger dans ${vehicleName(veh)}` : other.kind === 'coffre' ? 'Ranger dans le coffre' : 'Ranger dans le sac posé';
+          out.push({ label, run: () => this.act({ type: 'deposer_dans', prop, from }) });
         }
         out.push({ label: 'Poser au sol', run: () => this.act({ type: 'poser', from }) });
         toolButtons(from);
-      } else if (this.otherProp) {
-        const prop = this.otherProp;
+      } else if (other) {
+        const prop = other.id;
         const from: Slot = { zone: s.zone === 'autre-poche' ? 'poche' : 'sac', index: s.index };
         out.push({ label: 'Prendre', run: () => this.act({ type: 'prendre_dans', prop, from }) });
       }
@@ -563,11 +573,12 @@ export class BagView {
       out.push({ label: 'Ajouter du bois', run: () => this.act({ type: 'alimenter', prop }) });
       if (fire.fire.pot) out.push({ label: fire.fire.pot.item.startsWith('viande') ? 'Reprendre la viande' : 'Reprendre le pot', run: () => this.act({ type: 'reprendre_feu', prop }) });
     }
-    if (other && this.otherProp) {
-      const prop = this.otherProp;
-      out.push({ label: 'Tout prendre', run: () => this.act({ type: 'tout_prendre', prop }) });
-      if (other.c.bag && !sim.inventory.bag) out.push({ label: 'Mettre ce sac sur le dos', run: () => this.act({ type: 'prendre_sac', prop }) });
-      if (other.def.kind === 'corps')
+    if (other) {
+      const prop = other.id;
+      const empty = !other.c.pockets.some(Boolean) && !(other.c.bag ?? []).length;
+      if (!(other.kind === 'vehicule' && empty)) out.push({ label: other.kind === 'vehicule' ? 'Tout prendre dans le coffre' : 'Tout prendre', run: () => this.act({ type: 'tout_prendre', prop }) });
+      if (other.c.bag && !sim.inventory.bag && (other.kind === 'sac' || other.kind === 'corps')) out.push({ label: 'Mettre ce sac sur le dos', run: () => this.act({ type: 'prendre_sac', prop }) });
+      if (other.kind === 'corps')
         out.push({
           label: 'Traîner le corps',
           run: () => {
@@ -662,7 +673,7 @@ export class BagView {
     let title = inv.bag
       ? `Sac : ${vol.toFixed(1).replace('.', ',')} / ${BAG_CAPACITY_L} L · charge portée ${fmtKg(load)}${load > 25 ? ' (trop lourd pour courir)' : ''}`
       : `Pas de sac · ${POCKET_COUNT} poches · charge ${fmtKg(load)}`;
-    if (other) title += other.def.kind === 'corps' ? ' · vous fouillez un corps' : ` · ${other.def.kind === 'coffre' ? 'coffre' : 'sac posé'} (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
+    if (other && other.kind !== 'vehicule') title += other.kind === 'corps' ? ' · vous fouillez un corps' : ` · ${other.kind === 'coffre' ? 'coffre' : 'sac posé'} (${fmtKg(bagContentMass(other.c.bag ?? []))})`;
     const furnace = this.otherFurnace();
     if (furnace) {
       const f = furnace.f;
@@ -681,6 +692,8 @@ export class BagView {
         const e = veh.engine;
         line += ` · machine : foyer ${e.lit ? 'allumé' : 'éteint'} (${Math.round(e.fuel / 60)} min de bois), pression ${Math.round(e.pressure * 100)} %, eau ${Math.round(e.water)}/${ENGINE.water} L`;
       }
+      const load = bagContentMass(veh.cargo.bag ?? []);
+      line += ` · coffre ${fmtKg(load)} / ${f.cargo.maxKg} kg, ${Math.round(bagVolume(veh.cargo.bag ?? []))} / ${f.cargo.volume} L`;
       line += ` · ${Math.round(veh.odo)} m parcourus`;
       title = `${line} · ${title}`;
     }

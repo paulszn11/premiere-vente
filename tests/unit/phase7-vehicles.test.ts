@@ -282,9 +282,14 @@ describe('physique des véhicules', () => {
       }
       return worst;
     };
-    // Centre de gravité à 1,1 m (machine, conducteur), voie de 1,64 m : à 10° il passe, à 55° il bascule.
+    // Angle de stabilité statique : atan(demi-voie / hauteur du centre de gravité) ; il bascule à ±4° près.
+    const full = all(makeVehicle('m', 'chariot', 0, 0, 0, 0));
+    const critical = (Math.atan(0.82 / massProps(full, true).com.y) * 180) / Math.PI;
+    expect(critical).toBeGreaterThan(30);
+    expect(critical).toBeLessThan(40);
     expect(roll(10)).toBeGreaterThan(0.9);
-    expect(roll(55)).toBeLessThan(0);
+    expect(roll(critical - 4)).toBeGreaterThan(0.5);
+    expect(roll(critical + 4)).toBeLessThan(0);
   });
 });
 
@@ -362,6 +367,47 @@ describe('simulation : construire, équiper, conduire', () => {
       expect(Math.hypot(p.x - v.x, p.z - v.z)).toBeLessThan(0.9);
       expect(p.y - v.y).toBeGreaterThan(0.55);
     }
+    s.dispose();
+  });
+
+  it('coffre du véhicule : on y range de petits objets (volume et charge maximaux), leur masse compte, il est sauvegardé', () => {
+    const h = setup();
+    const { s, act } = h;
+    const id = s.spawnVehicle('chariot_bras', s.state.x, s.state.z + 2.5, 0, { parts: 'toutes' });
+    h.run(30);
+    const v = s.vehicle(id)!;
+    const m0 = massProps(v, false).mass;
+    s.inventory.bag!.push({ item: 'clous', count: 20 }, { item: 'corde', count: 3 });
+    const at = (item: string) => s.inventory.bag!.findIndex((x) => x.item === item);
+    expect(act({ type: 'deposer_dans', prop: id, from: { zone: 'sac', index: at('clous') } }).ok).toBe(true);
+    expect(act({ type: 'deposer_dans', prop: id, from: { zone: 'sac', index: at('corde') } }).ok).toBe(true);
+    expect(v.cargo.bag!.map((x) => x.item).sort()).toEqual(['clous', 'corde']);
+    expect(massProps(v, false).mass).toBeGreaterThan(m0);
+    // Trop lourd : le coffre du chariot à bras porte 250 kg au plus.
+    const max = FRAMES.chariot_bras.cargo.maxKg;
+    const load = () => massProps(v, false).mass - m0;
+    // On le remplit à 3 kg de sa charge maximale avec des barres de fer.
+    const bar = ITEMS.barre_fer.mass;
+    v.cargo.bag!.push({ item: 'barre_fer', count: Math.floor((max - 3 - load()) / bar) });
+    expect(load()).toBeGreaterThan(max - 3 - bar);
+    s.inventory.bag!.push({ item: 'pierre', count: 1, mass: 6, radius: 0.08 });
+    const r = act({ type: 'deposer_dans', prop: id, from: { zone: 'sac', index: at('pierre') } });
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/plein/);
+    expect(load()).toBeLessThanOrEqual(max + 1e-6);
+    expect(countOf(s.inventory, 'pierre')).toBe(1);
+    v.cargo.bag!.splice(2);
+    // On reprend tout ; trop loin, plus rien.
+    expect(act({ type: 'prendre_dans', prop: id, from: { zone: 'sac', index: 0 } }).ok).toBe(true);
+    s.inventory.bag!.push({ item: 'clous', count: 5 });
+    expect(act({ type: 'deposer_dans', prop: id, from: { zone: 'sac', index: at('clous') } }).ok).toBe(true);
+    const saved = JSON.parse(JSON.stringify(s.serialize()));
+    const back = new LocalSimulation(new FlatTerrain(LEVEL), { save: saved });
+    expect(back.vehicles[0]!.cargo.bag!.length).toBe(v.cargo.bag!.length);
+    back.dispose();
+    s.teleport(s.state.x + 30, LEVEL + 0.1, s.state.z);
+    h.run(5);
+    expect(act({ type: 'tout_prendre', prop: id }).message).toMatch(/Trop loin/);
     s.dispose();
   });
 
@@ -490,6 +536,41 @@ describe('simulation : construire, équiper, conduire', () => {
     s.dispose();
   });
 
+  it('créatures : un véhicule barre leur route, une créature qui le chevauche en est repoussée, l’éléphant le bouscule', () => {
+    const h = setup(new FlatTerrain(LEVEL), { fauna: true });
+    const { s } = h;
+    const id = s.spawnVehicle('chariot', s.state.x + 6, s.state.z, 0, { parts: 'toutes' });
+    h.run(60);
+    const v = s.vehicle(id)!;
+    const env = (s as unknown as { faunaEnv: { ray: (...a: number[]) => number | null; moveRay: (...a: number[]) => number | null } }).faunaEnv;
+    // Un rayon de déplacement vers le chariot le rencontre ; la vue passe (on voit le conducteur assis).
+    expect(env.moveRay(v.x - 4, LEVEL + 1.1, v.z, 1, 0, 0, 8)).not.toBeNull();
+    expect(env.ray(v.x - 4, LEVEL + 1.1, v.z, 1, 0, 0, 8)).toBeNull();
+    const piece = (s as unknown as { pieceNear: (x: number, y: number, z: number, r: number) => { s: string } | null }).pieceNear(v.x, LEVEL + 0.8, v.z + 1, 0.5);
+    expect(piece?.s).toBe(`veh:${id}`);
+    // Une hyène apparue dans le chariot en ressort.
+    const [hy] = s.spawnCreatures('hyene', v.x, v.z + 0.3, 1);
+    const c = s.fauna.creatures.get(hy!)!;
+    c.x = v.x + 0.2;
+    c.z = v.z + 0.3;
+    h.run(12);
+    const lx = Math.abs(c.x - v.x);
+    const lz = Math.abs(c.z - v.z);
+    expect(lx > FRAMES.chariot.half.x || lz > FRAMES.chariot.half.z).toBe(true);
+    // L'éléphant le bouscule : dégâts, le chariot est poussé.
+    const [el] = s.spawnCreatures('elephant', v.x - 4, v.z, 1);
+    const e0 = s.fauna.creatures.get(el!)!;
+    e0.x = v.x - 3.5;
+    e0.z = v.z;
+    const hp0 = v.hp;
+    const x0 = v.x;
+    (s as unknown as { creatureHitsVehicle: (id: string, sp: string, dmg: number) => void }).creatureHitsVehicle(id, 'elephant', 60);
+    h.run(30);
+    expect(v.hp).toBeLessThan(hp0);
+    expect(v.x - x0).toBeGreaterThan(0.2);
+    s.dispose();
+  });
+
   it('actions validées (véhicule, machine, affûtage à la meule)', () => {
     expect(readAction({ type: 'vehicule', v: 'veh1', op: 'monter' })).toEqual({ type: 'vehicule', v: 'veh1', op: 'monter' });
     expect(readAction({ type: 'vehicule', v: 'veh1', op: 'installer', slot: 'roue_avg' })).toEqual({ type: 'vehicule', v: 'veh1', op: 'installer', slot: 'roue_avg' });
@@ -516,6 +597,10 @@ describe('machines et transmission', () => {
     expect(r.get('roue')).toBe(1);
     expect(waterWheelPower(0.75)).toBeGreaterThan(waterWheelPower(0.4));
     expect(waterWheelPower(0)).toBe(0);
+    // Théorie de la roue à impulsion : la puissance croît comme le cube de la vitesse de l'eau.
+    expect(waterWheelPower(0.8) / waterWheelPower(0.4)).toBeCloseTo(8, 5);
+    expect(waterWheelPower(0.75)).toBeGreaterThan(MACHINES.meule.demand + 100);
+    expect(waterWheelPower(0.4)).toBeLessThan(MACHINES.meule.demand);
   });
 
   const machine = (s: LocalSimulation, kind: PropKind, x: number, z: number) =>

@@ -36,6 +36,8 @@ export interface BagModel {
   other: Container | null;
   /** Plan de travail (pièces posées pour fabriquer). */
   bench: ItemStack[];
+  /** Nom du contenant fouillé (« Son sac » par défaut ; coffre d'un véhicule). */
+  otherLabel?: string;
 }
 
 export interface Cell {
@@ -242,7 +244,7 @@ export class BagScene {
           const st = o.bag[i] ?? null;
           this.cells.push({ slot: { zone: 'autre-sac', index: i }, x: ox + (i % BAG_COLS) * C + C / 2, z: z - Math.floor(i / BAG_COLS) * C - C / 2, kind: st ? (st.item as PropKind) : null, count: st?.count ?? 0 });
         }
-        this.labels.push({ text: 'Son sac', x: ox + 0.02, z: z + 0.07 });
+        this.labels.push({ text: model.otherLabel ?? 'Son sac', x: ox + 0.02, z: z + 0.07 });
         z -= Math.ceil(n / BAG_COLS) * C;
       }
       maxX = ox + BAG_COLS * C;
