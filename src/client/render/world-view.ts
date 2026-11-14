@@ -9,7 +9,6 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
 import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { CreateCylinderVertexData } from '@babylonjs/core/Meshes/Builders/cylinderBuilder';
-import { CreateGround } from '@babylonjs/core/Meshes/Builders/groundBuilder';
 import { CreateSphereVertexData } from '@babylonjs/core/Meshes/Builders/sphereBuilder';
 import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
@@ -21,6 +20,7 @@ import type { PropKind } from '../../shared/props';
 import { type Terrain, chunkCoord, chunkKey } from '../../shared/terrain';
 import { type ChunkFlora, SPECIES, SPECIES_LIST, type Species } from '../../shared/vegetation';
 import type { QualityParams } from '../settings';
+import { type Wind, waveDepthFactor, waveHeight } from '../../shared/wind';
 import { buildItemMesh } from './item-meshes';
 import type { ChunkJobResult, TerrainJobs } from './terrain-jobs';
 
@@ -261,13 +261,16 @@ export class WorldView {
 
     this.waterMaterial = new StandardMaterial('eau', scene);
     this.waterMaterial.diffuseColor = new Color3(0.12, 0.32, 0.4);
-    this.waterMaterial.specularColor = new Color3(0.25, 0.25, 0.25);
+    // Reflets du soleil sur les pentes des vagues.
+    this.waterMaterial.specularColor = new Color3(0.55, 0.55, 0.5);
+    this.waterMaterial.specularPower = 20;
     this.waterMaterial.alpha = 0.78;
     this.waterMaterial.backFaceCulling = false;
-    this.water = CreateGround('eau', { width: 1, height: 1 }, scene);
+    this.water = new Mesh('eau', scene);
     this.water.material = this.waterMaterial;
     this.water.position.y = WATER_LEVEL;
     this.water.isPickable = false;
+    this.water.alwaysSelectAsActiveMesh = true;
 
     for (const sp of SPECIES_LIST) this.flora.set(sp, buildMesh(`arbre ${sp}`, scene, this.material, speciesParts(sp)));
     this.flora.set('buisson', buildMesh('buissons', scene, this.material, [[ball(1.6, 1.1, 1.6, 4, 0, 0.4, 0), 0.3, 0.42, 0.2]]));
@@ -352,8 +355,112 @@ export class WorldView {
     const d = this.viewDistance;
     this.scene.fogStart = d * 0.55;
     this.scene.fogEnd = d * 0.95;
-    const size = d * 2.6;
-    this.water.scaling.set(size, 1, size);
+    this.buildWater(d * 1.3);
+  }
+
+  // ——— Surface de l'eau (phase 7 : vagues levées par le vent) ———
+
+  private waterPos: Float32Array = new Float32Array(0);
+  private waterNormals: Float32Array = new Float32Array(0);
+  /** Profondeur de l'eau sous chaque sommet proche (mise à jour quand la caméra s'éloigne). */
+  private waterDepth: Float32Array = new Float32Array(0);
+  private waterDepthAt = { x: Number.NaN, z: Number.NaN };
+  private waterNear = 0;
+  private static readonly WATER_SEGMENTS = 64;
+  private static readonly WAVE_RADIUS = 70;
+  /** Vagues affichées (désactivées en qualité Basse : surface plate). */
+  waves = true;
+
+  private buildWater(outer: number): void {
+    const rings: number[] = [0, 0.8];
+    while (rings[rings.length - 1]! < WorldView.WAVE_RADIUS) rings.push(rings[rings.length - 1]! * 1.11 + 0.15);
+    while (rings[rings.length - 1]! < outer) rings.push(Math.min(outer, rings[rings.length - 1]! * 1.6));
+    const seg = WorldView.WATER_SEGMENTS;
+    const n = 1 + (rings.length - 1) * seg;
+    const pos = new Float32Array(n * 3);
+    const nor = new Float32Array(n * 3);
+    const idx: number[] = [];
+    for (let i = 0; i < n; i++) nor[i * 3 + 1] = 1;
+    for (let r = 1; r < rings.length; r++) {
+      for (let k = 0; k < seg; k++) {
+        const a = (k / seg) * Math.PI * 2;
+        const i = 1 + (r - 1) * seg + k;
+        pos[i * 3] = Math.cos(a) * rings[r]!;
+        pos[i * 3 + 2] = Math.sin(a) * rings[r]!;
+        const k2 = (k + 1) % seg;
+        if (r === 1) idx.push(0, 1 + k2, 1 + k);
+        else {
+          const a0 = 1 + (r - 2) * seg;
+          const b0 = 1 + (r - 1) * seg;
+          idx.push(a0 + k, a0 + k2, b0 + k, a0 + k2, b0 + k2, b0 + k);
+        }
+      }
+    }
+    this.waterNear = 1 + (rings.findIndex((x) => x >= WorldView.WAVE_RADIUS) - 1) * seg;
+    this.waterPos = pos;
+    this.waterNormals = nor;
+    this.waterDepth = new Float32Array(this.waterNear);
+    this.waterDepthAt = { x: Number.NaN, z: Number.NaN };
+    const vd = new VertexData();
+    vd.positions = pos;
+    vd.normals = nor;
+    vd.indices = idx;
+    vd.applyToMesh(this.water, true);
+  }
+
+  /** Vagues autour de la caméra : hauteur et pente de chaque sommet proche, selon le vent et le temps. */
+  updateWater(camX: number, camZ: number, time: number, wind: Wind): void {
+    const pos = this.waterPos;
+    const nor = this.waterNormals;
+    const near = this.waterNear;
+    if (!near) return;
+    if (!this.waves || wind.speed < 0.5) {
+      if (pos[1] !== 0 || pos[near * 3 - 2] !== 0) {
+        for (let i = 0; i < near; i++) {
+          pos[i * 3 + 1] = 0;
+          nor[i * 3] = 0;
+          nor[i * 3 + 1] = 1;
+          nor[i * 3 + 2] = 0;
+        }
+        this.water.updateVerticesData('position', pos);
+        this.water.updateVerticesData('normal', nor);
+      }
+      return;
+    }
+    // Profondeur sous les sommets proches : recalculée quand la caméra s'est déplacée de quelques mètres.
+    if (!(Math.hypot(camX - this.waterDepthAt.x, camZ - this.waterDepthAt.z) < 3)) {
+      this.waterDepthAt = { x: camX, z: camZ };
+      for (let i = 0; i < near; i++) this.waterDepth[i] = WATER_LEVEL - this.terrain.heightAt(camX + pos[i * 3]!, camZ + pos[i * 3 + 2]!);
+    }
+    const ox = this.waterDepthAt.x;
+    const oz = this.waterDepthAt.z;
+    const e = 0.35;
+    for (let i = 0; i < near; i++) {
+      const lx = pos[i * 3]!;
+      const lz = pos[i * 3 + 2]!;
+      const wx = ox + lx;
+      const wz = oz + lz;
+      const r = Math.hypot(lx, lz);
+      const fade = r < 45 ? 1 : Math.max(0, 1 - (r - 45) / (WorldView.WAVE_RADIUS - 45));
+      const df = waveDepthFactor(this.waterDepth[i]!) * fade;
+      if (df <= 0) {
+        pos[i * 3 + 1] = 0;
+        nor[i * 3] = 0;
+        nor[i * 3 + 1] = 1;
+        nor[i * 3 + 2] = 0;
+        continue;
+      }
+      const h = waveHeight(wx, wz, time, wind, df);
+      const gx = (waveHeight(wx + e, wz, time, wind, df) - h) / e;
+      const gz = (waveHeight(wx, wz + e, time, wind, df) - h) / e;
+      pos[i * 3 + 1] = h;
+      const l = Math.hypot(gx, 1, gz);
+      nor[i * 3] = -gx / l;
+      nor[i * 3 + 1] = 1 / l;
+      nor[i * 3 + 2] = -gz / l;
+    }
+    this.water.updateVerticesData('position', pos);
+    this.water.updateVerticesData('normal', nor);
   }
 
   private lodCells(dist: number): number {
@@ -545,8 +652,11 @@ export class WorldView {
       this.vegetationDirty = false;
       this.rebuildVegetation();
     }
-    this.water.position.x = camX;
-    this.water.position.z = camZ;
+    // La surface suit la caméra (les vagues sont calculées autour du dernier point de mesure des profondeurs).
+    const wx = Number.isFinite(this.waterDepthAt.x) && this.waves ? this.waterDepthAt.x : camX;
+    const wz = Number.isFinite(this.waterDepthAt.z) && this.waves ? this.waterDepthAt.z : camZ;
+    this.water.position.x = wx;
+    this.water.position.z = wz;
 
     const under = camY < WATER_LEVEL - 0.05;
     if (under !== this.underwater) {

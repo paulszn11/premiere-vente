@@ -35,6 +35,7 @@ import {
   yawOf,
 } from '../../src/shared/vehicles';
 import { FlatTerrain, FnTerrain, cmd } from './helpers';
+import { waveAmplitude, waveDepthFactor, waveHeight, windAt } from '../../src/shared/wind';
 
 beforeAll(async () => {
   await initPhysics();
@@ -632,6 +633,80 @@ describe('simulation : construire, équiper, conduire', () => {
     expect(readAction({ type: 'machine', prop: 'd3', op: 'exploser' })).toBeNull();
     expect(readAction({ type: 'reparer', from: { zone: 'sac', index: 0 }, kind: 'meule' })).toEqual({ type: 'reparer', from: { zone: 'sac', index: 0 }, kind: 'meule' });
     expect(readVehicles([{ id: 'veh1', frame: 'radeau', x: 1, y: 0, z: 2, qx: 0, qy: 0, qz: 0, qw: 1, parts: [{ slot: 'gouvernail', kind: 'gouvernail', wear: 0.2 }, { slot: 'gouvernail', kind: 'roue' }] }, { id: 'x', frame: 'fusee' }])).toHaveLength(1);
+  });
+});
+
+describe('vent, vagues, joueur debout sur un véhicule', () => {
+  it('le vent change lentement ; les vagues restent bornées et ne se forment pas en eau peu profonde', () => {
+    const a = windAt(1000, 42);
+    expect(windAt(1000, 42)).toEqual(a);
+    let lo = 99;
+    let hi = 0;
+    for (let t = 0; t < 20000; t += 37) {
+      const w = windAt(t, 42);
+      lo = Math.min(lo, w.speed);
+      hi = Math.max(hi, w.speed);
+      expect(Math.abs(waveHeight(t * 0.3, -t * 0.1, t, w))).toBeLessThanOrEqual(waveAmplitude(w) + 1e-9);
+    }
+    expect(lo).toBeLessThan(3);
+    expect(hi).toBeGreaterThan(5);
+    // En une seconde, le vent ne change presque pas.
+    expect(Math.abs(windAt(1001, 42).speed - a.speed)).toBeLessThan(0.1);
+    expect(waveDepthFactor(0.2)).toBe(0);
+    expect(waveDepthFactor(3)).toBe(1);
+  });
+
+  /** Un instant où le vent souffle fort (pour des mesures nettes). */
+  const windyTime = (seed: number) => {
+    for (let t = 0; t < 40000; t += 50) if (windAt(t, seed).speed > 6.5) return t;
+    return 0;
+  };
+
+  it('par vent fort, un radeau sans personne dérive sous le vent et danse sur les vagues', () => {
+    const terrain = new FlatTerrain(-5);
+    const s = new LocalSimulation(terrain);
+    s.time = windyTime(terrain.seed);
+    const w = windAt(s.time, terrain.seed);
+    const id = s.spawnVehicle('radeau', s.state.x + 6, s.state.z, 0);
+    for (let i = 0; i < 120; i++) s.step(cmd(0, 0));
+    const v = s.vehicle(id)!;
+    const x0 = v.x;
+    const z0 = v.z;
+    let ylo = 99;
+    let yhi = -99;
+    for (let i = 0; i < 60 * 15; i++) {
+      s.step(cmd(0, 0));
+      ylo = Math.min(ylo, v.y);
+      yhi = Math.max(yhi, v.y);
+    }
+    const along = (v.x - x0) * Math.sin(w.dir) + (v.z - z0) * Math.cos(w.dir);
+    expect(along).toBeGreaterThan(0.8);
+    expect(yhi - ylo).toBeGreaterThan(0.03);
+    expect(uprightness(v)).toBeGreaterThan(0.9);
+    s.dispose();
+  });
+
+  it('debout sur un radeau qui dérive, le joueur est emporté avec lui (et son poids le fait pencher)', () => {
+    const terrain = new FlatTerrain(-5);
+    const s = new LocalSimulation(terrain);
+    s.time = windyTime(terrain.seed);
+    const id = s.spawnVehicle('radeau', s.state.x + 6, s.state.z, 0);
+    for (let i = 0; i < 120; i++) s.step(cmd(0, 0));
+    const v = s.vehicle(id)!;
+    const flat = uprightness(v);
+    // Debout près du bord du radeau.
+    s.teleport(v.x + 0.8, v.y + 0.3, v.z);
+    for (let i = 0; i < 30; i++) s.step(cmd(0, 0));
+    const dx0 = s.state.x - v.x;
+    const dz0 = s.state.z - v.z;
+    const x0 = v.x;
+    const z0 = v.z;
+    for (let i = 0; i < 60 * 12; i++) s.step(cmd(0, 0));
+    expect(Math.hypot(v.x - x0, v.z - z0)).toBeGreaterThan(0.5);
+    expect(Math.hypot(s.state.x - v.x - dx0, s.state.z - v.z - dz0)).toBeLessThan(0.4);
+    expect(s.state.mode).not.toBe(1);
+    expect(uprightness(v)).toBeLessThan(flat);
+    s.dispose();
   });
 });
 

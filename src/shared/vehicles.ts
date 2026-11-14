@@ -398,6 +398,11 @@ export function isAfloat(v: VehicleState): boolean {
   return WATER_LEVEL - toWorld(v, { x: 0, y: f.hull!.bottom, z: 0 }).y > 0.05;
 }
 
+/** Point du monde exprimé dans le repère du véhicule (inverse de toWorld). */
+export function toLocal(v: Pick<VehicleState, 'x' | 'y' | 'z' | 'qx' | 'qy' | 'qz' | 'qw'>, p: Vec3): Vec3 {
+  return toWorld({ x: 0, y: 0, z: 0, qx: -v.qx, qy: -v.qy, qz: -v.qz, qw: v.qw }, { x: p.x - v.x, y: p.y - v.y, z: p.z - v.z });
+}
+
 /** Composante verticale de l'axe « haut » du véhicule (1 : droit, 0 : sur le flanc, < 0 : à l'envers). */
 export function uprightness(v: Pick<VehicleState, 'qx' | 'qy' | 'qz' | 'qw'>): number {
   return 1 - 2 * (v.qx * v.qx + v.qz * v.qz);

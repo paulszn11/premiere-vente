@@ -114,6 +114,7 @@ import {
 } from './movement';
 import { MACHINES, type PowerNode, RUNS_AT, TRANSMISSION, boilerPower, newMachine, powerNetwork, waterWheelPower } from './machines';
 import { type DriveInput, type DriveResult, VehiclePhysics } from './vehicle-physics';
+import { type Wind, windAt } from './wind';
 import {
   ENGINE,
   FRAMES,
@@ -137,6 +138,7 @@ import {
   slotDef,
   stepBoiler,
   stepEngine,
+  toLocal,
   toWorld,
   isAfloat,
   uprightness,
@@ -637,6 +639,7 @@ export class LocalSimulation {
         }
       }
       this.props.update(s, c, propPressed);
+      this.carryOnPlatform();
       if (this.props.thrown) {
         this.projectiles.set(this.props.thrown, { left: 3, age: 0, trap: false });
         this.props.thrown = null;
@@ -3453,15 +3456,45 @@ export class LocalSimulation {
     return u;
   }
 
+  /** Vent du moment (vagues, dérive des bateaux). */
+  wind(): Wind {
+    return windAt(this.time, this.terrain.seed);
+  }
+
+  /**
+   * Debout sur un véhicule (radeau, plateau) : le joueur est emporté par lui (déplacement et rotation du
+   * dernier pas), et son poids appuie là où il se tient.
+   */
+  private carryOnPlatform(): void {
+    if (!this.vehicles.length) return;
+    const s = this.state;
+    if (s.mode !== MODE_WALK) return;
+    const hit = this.phys.world.castRay(new RAPIER.Ray({ x: s.x, y: s.y + 0.3, z: s.z }, { x: 0, y: -1, z: 0 }), 0.6, true, undefined, QUERY_VEHICLES);
+    if (!hit) return;
+    const id = this.vphys.vehicleOf(hit.collider.handle);
+    const v = id ? this.vehicle(id) : undefined;
+    const prev = v ? this.vehiclePrev.get(v.id) : undefined;
+    if (!v || !prev) return;
+    const local = toLocal(prev, { x: s.x, y: s.y, z: s.z });
+    const now = toWorld(v, local);
+    s.x = now.x;
+    s.y = now.y;
+    s.z = now.z;
+    this.vphys.loads.set(v.id, [{ x: s.x, y: s.y + 0.05, z: s.z, f: (70 + s.loadKg + s.carryMass) * 9.81 }]);
+  }
+
   /** Un pas de physique : forces et commandes des véhicules, monde, puis position des véhicules. */
   private physicsStep(input: DriveInput | null): void {
     const driven = this.driving?.v ?? null;
+    this.vphys.time = this.time;
+    if (this.tick % 30 === 0 || this.vphys.wind.speed === 0) this.vphys.wind = this.wind();
     if (this.vehicles.length) {
       // Seul un conducteur assis pèse sur le véhicule (pas celui qui pousse à pied).
       this.vphys.sync(this.vehicles, this.driving?.mode === 'siege' ? driven : null);
       for (const v of this.vehicles) if (this.vphys.has(v.id)) this.vphys.preStep(v, v.id === driven ? input : null, TICK_DT);
     }
     this.phys.step(TICK_DT);
+    this.vphys.loads.clear();
     for (const v of this.vehicles) {
       this.vehiclePrev.set(v.id, { x: v.x, y: v.y, z: v.z, qx: v.qx, qy: v.qy, qz: v.qz, qw: v.qw });
       if (!this.vphys.has(v.id)) continue;

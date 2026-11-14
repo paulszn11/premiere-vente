@@ -246,6 +246,8 @@ export class GameSession {
     this.world.setQuality(q.params);
     this.camera.maxZ = this.world.viewDistance * 1.05 + 60;
     this.creatureView.range = q.preset === 'low' ? 90 : q.preset === 'medium' ? 130 : 180;
+    // Vagues : surface animée (pas en qualité Basse, pour épargner les petits appareils).
+    this.world.waves = q.preset !== 'low';
     if (!s.adaptiveResolution) this.adaptive.reset();
     this.applyScaling();
   }
@@ -575,6 +577,7 @@ export class GameSession {
     this.camera.position.set(x + Math.cos(this.yaw) * bobX - Math.sin(this.yaw) * this.deadBack, camY, z - Math.sin(this.yaw) * bobX - Math.cos(this.yaw) * this.deadBack);
     this.camera.rotation.set(this.pitch + shakeP, this.yaw, shakeR + this.roll);
     this.world.update(x, camY, z, this.opts.device.mobile ? 4 : 6);
+    this.world.updateWater(x, z, sim.time, sim.wind());
     if (sim.world.version !== this.worldVersion) {
       this.worldVersion = sim.world.version;
       this.world.invalidateVegetation();

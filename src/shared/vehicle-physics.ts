@@ -6,6 +6,7 @@
 import { WATER_LEVEL } from './constants';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, type PhysicsWorld, RAPIER, VEHICLE_GROUPS, interactionGroups } from './physics';
 import { chunkCoord, type Terrain } from './terrain';
+import { type Wind, waveDepthFactor, waveHeight } from './wind';
 import { FRAMES, type VehicleState, type WheelInfo, enginePower, massProps, onChocks, railBoxes, toWorld, uprightness, waterDrive, wheelsOf } from './vehicles';
 
 /** Commande du conducteur : accélérer (−1 à 1), tourner (−1 gauche à 1 droite), freiner. */
@@ -56,6 +57,11 @@ interface Live {
 export class VehiclePhysics {
   private readonly live = new Map<string, Live>();
   private readonly byHandle = new Map<number, string>();
+  /** Temps du monde et vent (vagues, dérive), fournis par la simulation à chaque pas. */
+  time = 0;
+  wind: Wind = { dir: 0, speed: 0 };
+  /** Charges posées sur un véhicule pendant ce pas (joueur debout dessus) : point et poids (N). */
+  readonly loads = new Map<string, Array<{ x: number; y: number; z: number; f: number }>>();
 
   constructor(
     private readonly phys: PhysicsWorld,
@@ -193,6 +199,9 @@ export class VehiclePhysics {
     const body = lv.body;
     // Un véhicule garé dort ; on le réveille dès qu'on le conduit.
     if (input && body.isSleeping()) body.wakeUp();
+    // Quelqu'un debout dessus : son poids appuie là où il se tient.
+    const load = this.loads.get(v.id);
+    if (load && !body.isFixed()) for (const l of load) body.applyImpulseAtPoint({ x: 0, y: -l.f * dt, z: 0 }, { x: l.x, y: l.y, z: l.z }, true);
     if (f.medium === 'terre') {
       const ctl = lv.ctl;
       if (!ctl) return;
@@ -260,7 +269,9 @@ export class VehiclePhysics {
     let submerged = 0;
     for (const [px, pz] of hull.points) {
       const p = toWorld(v, { x: px, y: hull.bottom, z: pz });
-      const depth = WATER_LEVEL - p.y;
+      // Surface de l'eau sous ce point : les vagues soulèvent et inclinent la coque.
+      const surface = WATER_LEVEL + waveHeight(p.x, p.z, this.time, this.wind, waveDepthFactor(WATER_LEVEL - this.terrain.heightAt(p.x, p.z)));
+      const depth = surface - p.y;
       if (depth <= 0) continue;
       const sub = Math.min(1, depth / hull.height);
       submerged += sub;
@@ -297,8 +308,14 @@ export class VehiclePhysics {
       const rudder = v.parts.some((p) => p.kind === 'gouvernail' && !p.broken);
       turn = input.steer * (f.steer + (rudder ? Math.abs(along) * 220 : 0)) * (thrust !== 0 || Math.abs(along) > 0.2 || !rudder ? 1 : 0.4);
     }
-    const tx = fx * (dLong + thrust) + fz * dLat;
-    const tz = fz * (dLong + thrust) - fx * dLat;
+    // Vent : traînée de l'air sur ce qui dépasse de l'eau (coque, chargement, conducteur assis).
+    const wvx = Math.sin(this.wind.dir) * this.wind.speed - lin.x;
+    const wvz = Math.cos(this.wind.dir) * this.wind.speed - lin.z;
+    const wrel = Math.hypot(wvx, wvz);
+    const area = (f.half.x + f.half.z) * 0.45 + (input?.seated ? 0.7 : 0);
+    const windK = 0.5 * 1.2 * 1.1 * area * wrel;
+    const tx = fx * (dLong + thrust) + fz * dLat + windK * wvx;
+    const tz = fz * (dLong + thrust) - fx * dLat + windK * wvz;
     body.addForce({ x: tx, y: -lin.y * 900 * wet, z: tz }, true);
     // Sans pagayer, l'eau freine la rotation.
     const ang = body.angvel();
