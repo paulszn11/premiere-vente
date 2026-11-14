@@ -135,6 +135,14 @@ export class RemoteClient {
     }
   }
 
+  /** Onglet caché : un signe de vie de temps en temps (la liaison reste ouverte). */
+  keepAlive(): void {
+    const now = Date.now();
+    if (this.stopped || now - this.lastPing < 2000) return;
+    this.lastPing = now;
+    this.link.send({ t: 'ping', id: ++this.pingId, ct: now }, true);
+  }
+
   flush(): void {
     if (!this.batch.length || this.stopped) return;
     this.link.send({ t: 'in', c: this.batch.splice(0) }, true);

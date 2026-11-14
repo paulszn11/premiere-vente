@@ -1,6 +1,6 @@
 # État des fonctionnalités
 
-Mis à jour le 14/11/2026, version 0.7.1.
+Mis à jour le 14/11/2026, version 0.8.0.
 - **Phase 1 :** validée par le propriétaire du projet le 12/11/2026.
 - **Phase 2 :** terminée, puis vérifiée en profondeur à votre demande le 12/11/2026.
 - **Phase 3 :** terminée le 13/11/2026 (119 tests unitaires, 122 vérifications navigateur). Les décisions de la section 15 qui la concernent m'ont été confiées et sont détaillées dans `docs/PHASE-3.md`. Reste à l'essayer sur vos appareils.
@@ -9,6 +9,7 @@ Mis à jour le 14/11/2026, version 0.7.1.
 - **Phase 6 :** terminée le 13/11/2026 (202 tests unitaires, 186 vérifications navigateur, dont 18 propres à la phase 6). Le catalogue des créatures (section 15) est une proposition signalée et modifiable, détaillée dans `docs/PHASE-6.md`. Reste à l'essayer sur vos appareils.
 - **Phase 7 :** terminée le 13/11/2026 (222 tests unitaires, 206 vérifications navigateur, dont 16 propres à la phase 7). Les types de véhicules, de composants et de machines (section 15) sont une proposition signalée et modifiable, détaillée dans `docs/PHASE-7.md`. Reste à l'essayer sur vos appareils.
 - **Phase 7, limites levées le 14/11/2026 (version 0.7.1) :** coffre des véhicules, créatures qui contournent et bousculent les véhicules, roue à eau calculée par la théorie des roues à impulsion (avec un bief), pirogue creusée dans un vrai tronc puis poussée jusqu'à l'eau, renversement à l'angle de stabilité statique, vent et vagues (flottaison, dérive, surface de l'eau qui ondule), joueur emporté par le véhicule où il se tient, sons des véhicules et des machines. 228 tests unitaires (26 pour la phase 7), 210 vérifications navigateur (20 pour la phase 7), toutes réussies.
+- **Phase 8 (multijoueur et sauvegardes), version 0.8.0, 14/11/2026 :** serveur dans l'onglet de l'hôte, liaison directe WebRTC chiffrée, mise en relation par des courtiers MQTT publics avec messages chiffrés par le code, preuves du code et de l'identité, clé de récupération, permissions et propriété, règles de déconnexion, sauvegardes de sécurité (IndexedDB, dernière + 3, SHA-256, restauration), 10 joueurs. 257 tests unitaires (29 pour la phase 8), 226 vérifications navigateur (16 pour la phase 8). Les décisions (rôles, droits, règles par défaut) sont des propositions modifiables, détaillées dans `docs/PHASE-8.md`. Une refonte graphique proposée par ChatGPT a été essayée puis annulée à votre demande (le rendu reste celui de la phase 7). Reste à l'essayer à plusieurs, sur de vrais réseaux.
 - **Correction (tactile), phase 7 :** le toucher qui ouvrait un panneau (véhicule, fourneau, coffre…) pouvait déclencher le bouton apparu sous le doigt ; les boutons ignorent maintenant les clics pendant 0,45 s après l'ouverture.
 - **Correction (manette), présente depuis la phase 3 :** maintenir Y ouvrait puis refermait le sac à chaque image (de même pour Start et la pause, et pour une touche du clavier maintenue plus d'une demi-seconde). Un bouton encore enfoncé à l'ouverture du sac ou à la pause est maintenant ignoré jusqu'à ce qu'on le relâche.
 
@@ -142,22 +143,29 @@ Légende des tests :
 | Sons des véhicules et des machines (piston, roues, pagaie, roue à aubes, roue à eau, meule, soufflet, pompe, chocs) | 13.5 | Auto (sons joués ; l'écoute reste à faire sur vos appareils) |
 | Sauvegarde des véhicules et des machines (coffre compris) | 3.3 | Auto |
 
-## Préparé mais pas encore branché (phase 8)
+## Terminé — phase 8 (à essayer à plusieurs)
 
-| Élément | Fichier | Tests |
+| Fonctionnalité | Section du cahier | Tests |
 | --- | --- | --- |
-| Code d'accès permanent du monde (16 caractères, 80 bits) | `src/shared/worldcode.ts` | Auto |
-| Protocole réseau validé côté serveur | `src/shared/protocol.ts` | Auto |
-| Limitation des tentatives de connexion | `src/shared/ratelimit.ts` | Auto |
-| Sauvegardes : dernière + 3 de sécurité, empreinte SHA-256, restauration | `src/server/save.ts` | Auto |
-| Apparition loin des joueurs déjà présents | `src/shared/spawn.ts` | Auto |
-| Prédiction client et réconciliation | `src/client/net/prediction.ts` | **Non testé** (à adapter aux nouveaux états) |
-| Secours d'un joueur par un autre (bander, relever) ; traîner un corps | `src/shared/vitals.ts` (`rescue`), `src/shared/simulation.ts` | Auto (règle) ; à brancher avec le multijoueur |
-| Actions du joueur validées pour le réseau | `src/shared/actions.ts` | Auto |
+| Monde ouvert par l'hôte (« Ouvrir mon monde aux autres ») : le serveur tourne dans son onglet, il joue en même temps ; le monde continue pendant sa pause et quand son onglet est caché | 3.1, 14.1 | Auto |
+| Simulation commune : un emplacement par joueur (corps, sac, geste, conduite, objet tenu), le monde avance une fois par pas ; véhicules conduits par plusieurs joueurs à la fois | 14.3 | Auto |
+| Faune : chaque créature s'en prend au joueur proche ; attaques et prises visent le bon joueur ; apparitions autour de chacun | 9, 14.3 | Auto |
+| Rejoindre avec le code (16 caractères) et un pseudonyme, sans compte ; 10 joueurs au maximum | 3.2 | Auto |
+| Mise en relation par des courtiers MQTT publics (plusieurs à la fois), messages chiffrés avec une clé dérivée du code ; le code ne circule jamais | 3.2, 14.4 | Auto (courtier local du même protocole ; les courtiers publics ne sont pas joignables depuis l'environnement de test) |
+| Liaison directe WebRTC chiffrée, canal fiable et canal rapide | 14.4 | Auto (deux onglets, deux navigateurs) |
+| Preuve mutuelle du code à l'ouverture de la liaison ; identité de chaque joueur (identifiant et clé secrète, l'hôte n'en garde que l'empreinte) ; clé de récupération à recopier sur un autre appareil | 3.2, 14.4 | Auto |
+| Tentatives limitées (par pair et globalement), rythme des messages limité, chaque message validé | 14.4 | Auto |
+| L'hôte fait foi : commandes et actions appliquées chez lui ; la copie du joueur prédit ses pas et se corrige | 14.3 | Auto |
+| Réplication : positions des joueurs, créatures et véhicules proches (20 fois par seconde), corps et sac, objets, constructions, arbres et gisements, événements | 14.3 | Auto |
+| Autres joueurs affichés (silhouettes), nom visible seulement en le visant à moins de 15 m ; aucune position transmise au-delà de 200 m | 4, phase 2 | Auto |
+| Rôles (hôte, membre, invité) et droits ajustables par joueur ; ce qu'on construit nous appartient, accès réglable (privé, partagé, public) | 3.4 | Auto |
+| Déconnexion : le personnage reste endormi (2 min par défaut), protégé près de ses constructions ; puis il quitte le monde, gardé pour son retour | 3.5 | Auto |
+| Sauvegardes chez l'hôte : dans ce navigateur, et sauvegardes de sécurité dans IndexedDB toutes les 15 s (dernière + 3, empreinte SHA-256, restauration) ; chaque joueur est sauvegardé avec le monde | 3.3, 12.4 | Auto |
+| Panneau « Joueurs et monde partagé » : code, joueurs, rôles, droits, retrait, règles, sauvegardes | 3.4 | Auto |
 
 ## En cours
 
-La validation des phases 2, 3, 5, 6 et 7 sur vos appareils.
+La validation des phases 2, 3, 5, 6, 7 et 8 sur vos appareils (la phase 8 à plusieurs, sur de vrais réseaux).
 
 ## Restant
 
@@ -169,14 +177,17 @@ La validation des phases 2, 3, 5, 6 et 7 sur vos appareils.
 | 5 (suivi) | Électricité (phase 9) ; cases rondes et pièces de forme libre ; constructions dans les grottes (phase 9) ; attaques des bases (phases 6 et 8) |
 | 6 (suivi) | Armes à feu (avec les bâtiments abandonnés, phase 9) ; créatures souterraines (grottes, phase 9) ; chasses nocturnes (cycle jour/nuit, phase 9) ; peaux et os (équipement) ; animations des coups et des créatures |
 | 7 (suivi) | Voiles, moteurs à essence et électricité (phase 9) ; pluie et tempêtes (météo, phase 9) ; un arbre abattu qui laisse un tronc entier ; nageur soulevé par les vagues ; traction animale (à décider) |
-| 8 | Serveur chez l'hôte (navigateur et programme compagnon), code privé, connexion WebRTC, synchronisation, permissions, sauvegardes du monde et des joueurs, 10 joueurs |
+| 8 (suivi) | Coups entre joueurs (avec les animations de combat) ; secours entre joueurs (bander, relever) ; relais TURN réglable dans l'interface ; prédiction de la conduite chez le joueur distant ; programme compagnon (phase 10) |
 | 9 | Monde complet : grottes, bâtiments abandonnés, histoire, documents, événements, catastrophes, météo, cycle jour/nuit, carte révélée progressivement |
 | 10 | Optimisation, tests sur appareils, installation, documentation, programme compagnon |
 | Plus tard | Graphismes soignés (textures, ombres, ciel, effets), musique adaptative et sons du monde (vent, eau, pas du joueur), interface intégrée à l'univers, menus pilotables à la manette |
 
 ## Limites connues
 
-- En solo, la partie est sauvegardée dans ce navigateur : position, état du corps, sac, objets ramassés, déplacés ou posés, et corps. Les sauvegardes du monde partagé, chez l'hôte, arrivent en phase 8.
+- En solo, la partie est sauvegardée dans ce navigateur : position, état du corps, sac, objets ramassés, déplacés ou posés, et corps. En multijoueur, le monde (et chaque joueur) est sauvegardé chez l'hôte.
+- Multijoueur : sans relais TURN (aucun n'est gratuit sans inscription), la liaison directe peut échouer sur certains réseaux (4G/5G avec partage d'adresse, réseaux d'entreprise ou d'école). Les courtiers publics de mise en relation peuvent être ponctuellement indisponibles (trois sont essayés à la fois).
+- Multijoueur : le joueur distant ne prédit pas la conduite des véhicules (la réponse à la direction suit le délai du réseau) et ne heurte pas les véhicules sur sa copie (l'hôte corrige). Les créatures sont mises à jour 20 fois par seconde chez lui.
+- Multijoueur : l'hôte doit garder son onglet ouvert. Sur téléphone, le système suspend les onglets en arrière-plan : mieux vaut héberger sur un ordinateur. Avec 10 joueurs, le serveur et l'affichage de l'hôte partagent le même processeur.
 - Les indications à l'écran (nom du biome, action possible, barres d'endurance et de souffle, bords rouges, messages) sont temporaires.
 - Matériel médical : chiffons, attelles, aloès et pansements propres (chiffons bouillis). Pas encore de plantes médicinales ni de médicaments.
 - Les temps de reconstitution (gisements, arbres, fruits) comptent en temps de jeu. Sans cycle jour/nuit (phase 9), ce temps avance comme le temps réel, et seulement pendant qu'on joue.

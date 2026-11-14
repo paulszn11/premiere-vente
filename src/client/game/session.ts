@@ -32,6 +32,10 @@ import { WorldView } from '../render/world-view';
 import { StructureView } from '../render/structure-view';
 import { CreatureView } from '../render/creature-view';
 import { VehicleView } from '../render/vehicle-view';
+import { AvatarView } from '../render/avatar-view';
+import type { HostSession } from '../net/multiplayer';
+import type { RemoteClient, Welcome } from '../net/remote-client';
+import type { NetPlayerView } from '../../shared/replication';
 import { ENGINE, FRAMES, type FrameKind, type PartKind, PARTS, enginePower, waterDrive, yawOf } from '../../shared/vehicles';
 import { MACHINES, RUNS_AT } from '../../shared/machines';
 import { MACHINE_KINDS, type MachinePropKind } from '../../shared/props';
@@ -139,6 +143,10 @@ export class GameSession {
   private readonly lights: PointLight[] = [];
   /** Créatures, carcasses, traces de sang (phase 6). */
   readonly creatureView: CreatureView;
+  /** Phase 8 : autres joueurs. */
+  readonly avatars: AvatarView;
+  /** Phase 8 : monde ouvert aux autres (hôte), ou partie chez un hôte (joueur distant). */
+  net: { kind: 'host'; host: HostSession } | { kind: 'client'; client: RemoteClient } | null = null;
   readonly vehicleView: VehicleView;
   /** Cap du véhicule conduit au cadre précédent : la vue tourne avec lui. */
   private lastVehicleYaw: number | null = null;
@@ -202,6 +210,68 @@ export class GameSession {
     return session;
   }
 
+  /** Phase 8 : partie chez un hôte. La copie du monde suit l'hôte, qui fait foi. */
+  static async createRemote(opts: SessionOptions, welcome: Welcome, client: RemoteClient, onProgress?: (text: string) => void): Promise<GameSession> {
+    const seed = welcome.world.seed;
+    const jobs = new TerrainJobs(seed, opts.device.cores >= 4 ? 2 : 1);
+    onProgress?.('Préparation de la physique…');
+    const sim = await LocalSimulation.create(seed, {
+      heightProvider: jobs.heightProvider,
+      fauna: false,
+      start: { x: welcome.start.x, y: welcome.start.y, z: welcome.start.z },
+      playerId: welcome.you.id,
+      playerName: welcome.you.name,
+    });
+    client.attach(sim);
+    const session = new GameSession(opts, sim.terrain, sim, jobs);
+    session.net = { kind: 'client', client };
+    session.yaw = welcome.start.yaw;
+    await session.world.preload(welcome.start.x, welcome.start.y + EYE_HEIGHT, welcome.start.z, (done, total) => onProgress?.(`Chargement du terrain… ${done} / ${total}`));
+    return session;
+  }
+
+  /** Autres joueurs à afficher : instantané reçu (joueur distant) ou simulation commune (hôte). */
+  otherPlayers(): NetPlayerView[] {
+    const sim = this.sim;
+    if (!sim || !this.net) return [];
+    if (this.net.kind === 'client') return this.net.client.players;
+    const out: NetPlayerView[] = [];
+    for (const o of sim.players.values()) {
+      if (o === sim.local) continue;
+      const v = sim.withPlayer(o, () => ({ state: sim.vitals.state, asleep: sim.vitals.posture === 'endormi', driving: sim.driving !== null }));
+      out.push({ id: o.id, name: o.name, x: o.state.x, y: o.state.y, z: o.state.z, yaw: o.cmd.yaw, pitch: o.cmd.pitch, crouched: o.state.crouched, mode: o.state.mode, state: v.state, asleep: o.away || v.asleep, held: null, driving: v.driving });
+    }
+    return out;
+  }
+
+  /** Un pas de simulation, avec le serveur (hôte) ou l'envoi de la commande (joueur distant). */
+  private simStep(sim: LocalSimulation, cmd: InputCmd): void {
+    const net = this.net;
+    if (net?.kind === 'host') net.host.server.beforeStep();
+    sim.step(cmd);
+    if (net?.kind === 'host') net.host.server.afterStep();
+    else if (net?.kind === 'client') net.client.sendInput(cmd);
+  }
+
+  /**
+   * Hôte, onglet caché : le navigateur ne dessine plus d'images ; le monde continue pour les autres joueurs
+   * (appelé par une horloge qui n'est pas ralentie). Commandes neutres pour le joueur de l'hôte.
+   */
+  stepBackground(ms: number): void {
+    const sim = this.sim;
+    if (!sim || this.net?.kind !== 'host') return;
+    this.acc += Math.min(0.25, ms / 1000);
+    let steps = 0;
+    while (this.acc >= TICK_DT && steps < 15) {
+      this.seq++;
+      this.simStep(sim, { seq: this.seq, wx: 0, wz: 0, yaw: this.yaw, pitch: this.pitch, buttons: 0 });
+      this.acc -= TICK_DT;
+      steps++;
+    }
+    for (const ev of sim.takeEvents()) if (ev.type === 'message') this.opts.onMessage?.(ev.text, ev.tone);
+    this.lastFrame = performance.now();
+  }
+
   static createBench(opts: SessionOptions): GameSession {
     return new GameSession(opts, new Terrain(BENCH_SEED), null, new TerrainJobs(BENCH_SEED, opts.device.cores >= 4 ? 2 : 1));
   }
@@ -226,6 +296,7 @@ export class GameSession {
     this.structures = new StructureView(this.scene, smat, (x, z) => terrain.heightAt(x, z));
     this.creatureView = new CreatureView(this.scene);
     this.vehicleView = new VehicleView(this.scene, smat);
+    this.avatars = new AvatarView(this.scene);
     // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
     opts.onBuildMode?.(false);
     this.applySettings();
@@ -294,6 +365,8 @@ export class GameSession {
 
   /** Sauvegarde complète de la partie solo (position, regard, corps, sac, objets du monde). */
   saveData(): { v: 1; yaw: number; pitch: number; sim: unknown } | null {
+    // Joueur distant : c'est l'hôte qui sauvegarde le monde.
+    if (this.net?.kind === 'client') return null;
     return this.sim ? { v: 1, yaw: this.yaw, pitch: this.pitch, sim: this.sim.serialize() } : null;
   }
 
@@ -305,7 +378,7 @@ export class GameSession {
   /** Outil de test : téléporte le joueur vers une destination prédéfinie. */
   teleport(destId: string): boolean {
     const dest = TEST_DESTINATIONS.find((d) => d.id === destId);
-    if (!this.sim || !dest) return false;
+    if (!this.sim || !dest || this.net?.kind === 'client') return false;
     const r = resolveDestination(this.terrain, dest, { x: this.sim.state.x, z: this.sim.state.z });
     this.sim.teleport(r.x, r.y, r.z);
     if (r.yaw !== null) this.yaw = r.yaw;
@@ -333,7 +406,7 @@ export class GameSession {
         if (hot) danger = Math.max(danger, Math.max(0, 1 - d / 35));
       }
     }
-    if (sim.fauna.grab) danger = 1;
+    if (sim.isGrabbed()) danger = 1;
     const swimming = sim.state.mode === MODE_SWIM || y < WATER_LEVEL;
     const ombreLevel = swimming ? ombre : ombre * 0.3;
     this.dread += (Math.max(ombreLevel * 0.8, danger * 0.35) - this.dread) * Math.min(1, dt * 1.5);
@@ -547,7 +620,7 @@ export class GameSession {
     this.acc += dt;
     let steps = 0;
     while (this.acc >= TICK_DT && steps < 6) {
-      sim.step(this.buildCmd());
+      this.simStep(sim, this.buildCmd());
       if (sim.state.impact > 3) this.landVel -= Math.min(4, sim.state.impact * 0.12);
       this.acc -= TICK_DT;
       steps++;
@@ -605,7 +678,7 @@ export class GameSession {
     }
     // Morsure, charge : la vue tremble ; tenu par une créature : secousses continues.
     const struck = Math.max(0, 1 - (now - this.strikeAt) / 400);
-    const held = sim.fauna.grab ? 0.6 : 0;
+    const held = sim.isGrabbed() ? 0.6 : 0;
     if (struck > 0 || held > 0) {
       const k = Math.max(struck, held);
       shakeP += (Math.random() - 0.5) * 0.08 * k;
@@ -633,6 +706,7 @@ export class GameSession {
     this.updateLights(views, x, camY, z, now);
     this.updateFauna(sim, views, x, camY, z, now, dt);
     this.vehicleView.update(sim, a, x, z, dt, now);
+    if (this.net) this.avatars.update(this.otherPlayers(), dt, now);
     this.updateVehicleSounds(sim, views, x, z, now);
     this.scene.render();
     if (bag?.isOpen) bag.frame(dt);
@@ -694,6 +768,8 @@ export class GameSession {
       const base = this.opts.device.touch ? `« Poser » : ${name} · « Tourner » · « Annuler »` : `${this.key('throw')} : poser le plan (${name}) · ${this.key('rest')} : tourner · ${this.key('use')} : annuler`;
       return pl.ok ? `${base}${pl.stilts ? ` · ${pl.stilts} pilotis` : ''}` : `${pl.reason} · ${base}`;
     }
+    const other = this.net ? this.avatars.aimed(this.camera.position.x, this.camera.position.y, this.camera.position.z, this.yaw, this.pitch) : null;
+    if (other) return other.asleep ? `${other.name} (endormi)` : other.name;
     const held = sim.props.held;
     const hint = sim.useHint();
     const hintText = hint ? `${this.key(hint.interact ? 'interact' : 'use')} : ${hint.action}` : null;
@@ -1198,6 +1274,7 @@ export class GameSession {
     this.stop();
     this.world.dispose();
     this.creatureView.dispose();
+    this.avatars.dispose();
     this.jobs.dispose();
     this.sim?.dispose();
     this.instr.dispose();

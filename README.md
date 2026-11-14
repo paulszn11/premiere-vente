@@ -2,7 +2,7 @@
 
 Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le navigateur et installable comme une application (PWA) sur téléphone, tablette et ordinateur.
 
-**État : phase 7 terminée, ses limites levées (228 tests unitaires et 210 vérifications dans le navigateur, toutes réussies).** Le prototype contient :
+**État : phase 8 terminée (multijoueur et sauvegardes).** Le prototype contient :
 - un monde de 16 km × 16 km inspiré du Zimbabwe : vallée du Zambèze et grand lac, haut plateau, forêts de miombo, collines de granit, hautes terres, lowveld, sables du Kalahari ;
 - les déplacements à la première personne : marche, course, accroupi, saut, nage et plongée, escalade, avec endurance, équilibre et chutes ;
 - les objets à prendre, porter, lancer et traîner ;
@@ -38,10 +38,16 @@ Jeu 3D de survie, d'exploration, de construction et d'horreur, jouable dans le n
   - le vent lève des vagues qui font danser les bateaux et les pousse ; debout sur un radeau, on est emporté avec lui ;
   - les animaux contournent les véhicules, l'éléphant les bouscule ; moteurs, roues, pagaies et machines s'entendent ;
   - machines entraînées par une roue à eau ou une machine à vapeur fixe : meule, soufflet mécanique (la fonte du fer se fait seule), pompe ;
+- le multijoueur (phase 8) :
+  - un joueur ouvre son monde (« Ouvrir mon monde aux autres ») : le serveur tourne dans son onglet et il joue en même temps ;
+  - les autres le rejoignent avec le code du monde et un pseudonyme, sans compte (10 joueurs au maximum) ;
+  - liaison directe et chiffrée entre navigateurs (WebRTC), présentée par des services publics gratuits avec des messages chiffrés par le code ;
+  - l'hôte fait foi ; rôles et droits, propriété des constructions et accès réglable ; personnage endormi après une déconnexion ;
+  - sauvegardes chez l'hôte, avec trois sauvegardes de sécurité et la restauration ; clé de récupération pour changer d'appareil ;
 - les commandes au clavier, à la souris, au tactile et à la manette ;
 - des réglages graphiques adaptatifs et un test de performance intégré.
 
-Le jeu est solo pour l'instant. Le multijoueur arrive en phase 8 : un joueur héberge le monde, les autres le rejoignent avec un code privé. Les graphismes restent volontairement simples. Le détail est dans [`docs/ETAT.md`](docs/ETAT.md).
+Les graphismes restent volontairement simples. Le détail est dans [`docs/ETAT.md`](docs/ETAT.md) ; le multijoueur (et comment jouer à plusieurs) dans [`docs/PHASE-8.md`](docs/PHASE-8.md).
 
 ![Les régions du monde](docs/captures/biomes-phase2.png)
 
@@ -125,7 +131,7 @@ Pour essayer rapidement chaque région, ouvrez le menu pause, puis « Réglages 
 - des créatures à faire apparaître devant vous, et une baignade au-dessus des eaux profondes du lac, là où rôde la créature ;
 - un véhicule prêt à rouler ou à naviguer (chariot à bras, chariot à vapeur, radeau, pirogue…), et des pièces, du fer et des outils pour les véhicules, avec tous les plans.
 
-Ces outils seront retirés ou réservés à l'hôte en multijoueur.
+En multijoueur, ces outils ne servent qu'à l'hôte (chez un joueur distant, l'hôte fait foi et la téléportation est désactivée).
 
 ## Tester les performances sur vos appareils
 
@@ -155,7 +161,7 @@ npx playwright install chromium
 
 Options des tests navigateur :
 - `node tests/e2e/run.mjs --webgpu` ajoute le scénario WebGPU ;
-- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,phase7,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; « phase6 » : créatures et horreur ; « phase7 » : véhicules et machines ; chacun sur ordinateur, téléphone et manette).
+- `--only=ordinateur,telephone,manette,phase2,verification,phase3,phase4,phase5,phase6,phase7,phase8,performance,captures,webgpu` ne lance que certains scénarios (« verification » : contrôle complet de la phase 2 ; « phase3 » : survie et inventaire ; « phase4 » : ressources et fabrication ; « phase5 » : construction ; « phase6 » : créatures et horreur ; « phase7 » : véhicules et machines ; « phase8 » : multijoueur, un hôte et un joueur dans deux onglets, et `BAZ_MQTT=ws://…` pour tester aussi la mise en relation par un courtier MQTT ; chacun sur ordinateur, téléphone et manette).
 
 Les captures et le rapport sont écrits dans `tests/e2e/out/`.
 
@@ -172,7 +178,7 @@ src/shared/     code commun au client et au futur serveur : géographie, relief,
                 protocole, codes de monde
 src/client/     jeu dans le navigateur : rendu (Babylon.js), commandes, réglages,
                 mesures de performance, écrans
-src/server/     préparé pour la phase 8 : sauvegardes
+src/server/     serveur du monde partagé (dans l'onglet de l'hôte) et sauvegardes
 src/vendor/     chargement du moteur physique en fichier WebAssembly séparé
 public/         manifeste, service worker, icônes
 tests/unit/     tests Vitest

@@ -101,7 +101,8 @@ export class InputManager {
     if (this.locked) return;
     const fallback = () => {
       try {
-        void this.canvas.requestPointerLock();
+        const q = this.canvas.requestPointerLock() as unknown as Promise<void> | undefined;
+        if (q && typeof q.catch === 'function') q.catch(() => undefined);
       } catch {
         // Verrouillage du pointeur refusé (par exemple hors d'un geste de l'utilisateur).
       }

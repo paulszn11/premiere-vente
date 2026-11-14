@@ -3,7 +3,8 @@
 // manette. Aucun glisser-déposer n'est nécessaire : on touche un objet, puis une action.
 
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
-import type { BuildRef, PlayerAction } from '../../shared/actions';
+import type { AccessRef, BuildRef, PlayerAction } from '../../shared/actions';
+import { ACCESS_LABELS, type Access, type Owned } from '../../shared/permissions';
 import { INSTALL_PLANS, type Need, PIECE_PLANS, PLANS, PLAN_IDS, type PlanId, VEHICLE_PLANS, maxHp, needLabel, pieceTransform, repairNeeds, stepsOf } from '../../shared/building';
 import { MACHINES, RUNS_AT } from '../../shared/machines';
 import { ENGINE, FRAMES, FRAME_REPAIR, PARTS, isAfloat, partAt, partName, uprightness, vehicleName } from '../../shared/vehicles';
@@ -592,7 +593,29 @@ export class BagView {
           },
         });
     }
+    // Phase 8 : le propriétaire règle l'accès de sa construction, de son coffre ou de son véhicule.
+    const owned = this.ownedTarget();
+    if (owned && owned.o.owner === sim.playerId) {
+      const cur: Access = owned.o.access ?? 'partage';
+      const next: Access = cur === 'partage' ? 'public' : cur === 'public' ? 'prive' : 'partage';
+      out.push({ label: `Accès : ${ACCESS_LABELS[cur]} → ${ACCESS_LABELS[next]}`, run: () => this.act({ type: 'acces', target: owned.ref, access: next }) });
+    }
     return out;
+  }
+
+  /** Chose possédée que montre ce panneau (multijoueur), ou null. */
+  private ownedTarget(): { ref: AccessRef; o: Owned } | null {
+    const sim = this.sim!;
+    if (!sim.replica && !sim.permit) return null;
+    if (this.otherBuild?.kind === 'piece') {
+      const st = sim.build.structure(this.otherBuild.s);
+      return st ? { ref: { kind: 'structure', s: st.id }, o: st } : null;
+    }
+    if (!this.otherProp) return null;
+    const v = sim.vehicle(this.otherProp);
+    if (v) return { ref: { kind: 'vehicule', v: v.id }, o: v };
+    const def = sim.props.defOf(this.otherProp);
+    return def?.owner ? { ref: { kind: 'prop', prop: def.id }, o: def } : null;
   }
 
   private bodyButtons(): ActionButton[] {

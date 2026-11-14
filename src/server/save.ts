@@ -33,6 +33,11 @@ export interface WorldSave {
   savedAt: number;
   /** Clé : identifiant local du joueur. */
   players: Record<string, PlayerRecord>;
+  /** Phase 8 : le monde complet (simulation, joueurs présents et absents). */
+  sim?: unknown;
+  /** Phase 8 : regard de l'hôte, joueurs connus et règles du monde. */
+  view?: { yaw: number; pitch: number };
+  host?: unknown;
 }
 
 export interface SaveEntry {

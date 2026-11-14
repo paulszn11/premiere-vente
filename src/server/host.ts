@@ -38,8 +38,12 @@ interface Conn {
   name: string;
   known: boolean;
   openedAt: number;
+  /** Dernier message reçu (un joueur muet trop longtemps est considéré comme parti). */
+  lastMsg: number;
   replicator: Replicator | null;
   queue: InputCmd[];
+  /** Pas consécutifs sans commande reçue. */
+  starve: number;
   /** Messages reçus dans la seconde en cours (limitation du rythme). */
   window: { start: number; inputs: number; acts: number; total: number };
 }
@@ -51,6 +55,8 @@ interface Away {
 /** Commandes en attente au-delà desquelles on rattrape le retard (la plus ancienne est jetée). */
 const MAX_QUEUE = 12;
 const HANDSHAKE_TIMEOUT_MS = 15000;
+/** Un joueur envoie ses commandes 20 fois par seconde : 10 s de silence, sa liaison est morte. */
+const SILENCE_TIMEOUT_MS = 10000;
 
 export class HostServer {
   private readonly conns = new Set<Conn>();
@@ -88,7 +94,7 @@ export class HostServer {
       link.close();
       return;
     }
-    const c: Conn = { link, stage: 'defi', hc: newChallenge(), pc: '', id: '', name: '', known: false, openedAt: now, replicator: null, queue: [], window: { start: now, inputs: 0, acts: 0, total: 0 } };
+    const c: Conn = { link, stage: 'defi', hc: newChallenge(), pc: '', id: '', name: '', known: false, openedAt: now, lastMsg: now, replicator: null, queue: [], starve: 0, window: { start: now, inputs: 0, acts: 0, total: 0 } };
     this.conns.add(c);
     link.onMessage = (raw, fast) => void this.onMessage(c, raw, fast);
     link.onClose = () => this.onClosed(c);
@@ -137,6 +143,7 @@ export class HostServer {
 
   private async onMessage(c: Conn, raw: unknown, fast: boolean): Promise<void> {
     if (c.stage === 'closed') return;
+    c.lastMsg = this.now();
     const msg = parseClientMessage(raw);
     if (!msg) {
       if (c.stage !== 'connected') this.reject(c, 'invalid', true);
@@ -241,7 +248,14 @@ export class HostServer {
   beforeStep(): void {
     for (const c of this.byPlayer.values()) {
       const cmd = c.queue.shift();
-      if (cmd) this.o.sim.setInput(c.id, cmd);
+      if (cmd) {
+        c.starve = 0;
+        this.o.sim.setInput(c.id, cmd);
+      } else if (++c.starve === 15) {
+        // Plus de commandes (onglet caché, réseau ralenti) : le personnage s'arrête au lieu de répéter la dernière.
+        const slot = this.o.sim.players.get(c.id);
+        if (slot) slot.cmd = { ...slot.cmd, wx: 0, wz: 0, buttons: 0 };
+      }
     }
   }
 
@@ -258,6 +272,7 @@ export class HostServer {
   private housekeeping(): void {
     const now = this.now();
     for (const c of [...this.conns]) if (c.stage !== 'connected' && now - c.openedAt > HANDSHAKE_TIMEOUT_MS) this.reject(c, 'invalid');
+    for (const c of [...this.byPlayer.values()]) if (now - c.lastMsg > SILENCE_TIMEOUT_MS) this.dropConn(c, true);
     const sim = this.o.sim;
     for (const [id, a] of [...this.away]) {
       const slot = sim.players.get(id);

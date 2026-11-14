@@ -17,6 +17,10 @@ import { BagView } from './ui/bag-view';
 import { SoundSystem } from './audio/sound';
 import { SPECIES, type SpeciesId } from '../shared/creatures';
 import { type FrameKind, uprightness } from '../shared/vehicles';
+import { HostSession, joinWorld, loadIdentity, saveIdentity } from './net/multiplayer';
+import { readRecoveryKey, recoveryKey } from '../shared/net-crypto';
+import { ACCESS_LABELS, PERMS, PERM_LABELS, ROLE_LABELS, type Role } from '../shared/permissions';
+import { formatWorldCode, normalizeWorldCode } from '../shared/worldcode';
 
 /** Outils de test : véhicules prêts à l'emploi. */
 const VEHICLE_TOOLS: Array<{ id: string; label: string; frame: FrameKind; steam: boolean }> = [
@@ -29,7 +33,7 @@ const VEHICLE_TOOLS: Array<{ id: string; label: string; frame: FrameKind; steam:
 ];
 import { renderSettings } from './ui/settings-panel';
 
-type ScreenName = 'loading' | 'home' | 'game' | 'pause' | 'settings' | 'bench';
+type ScreenName = 'loading' | 'home' | 'game' | 'pause' | 'settings' | 'bench' | 'join' | 'players';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -43,6 +47,8 @@ const screens: Record<Exclude<ScreenName, 'game'>, HTMLElement> = {
   pause: $('#screen-pause'),
   settings: $('#screen-settings'),
   bench: $('#screen-bench'),
+  join: $('#screen-join'),
+  players: $('#screen-players'),
 };
 
 let screen: ScreenName = 'loading';
@@ -401,6 +407,7 @@ async function boot(): Promise<void> {
       if (paused) {
         session?.closeBag();
         savePose();
+        refreshPauseMenu();
         input.exitPointerLock();
         touch.show(false);
         show('pause');
@@ -443,6 +450,9 @@ async function boot(): Promise<void> {
 
   function leaveSession(): void {
     savePose();
+    const net = session?.net;
+    if (net?.kind === 'host') void net.host.close();
+    else if (net?.kind === 'client') net.client.leave();
     session?.closeBag();
     session?.dispose();
     session = null;
@@ -515,6 +525,324 @@ async function boot(): Promise<void> {
     renderSettings(settingsDeps);
     show('settings');
   }
+
+  // ——— Multijoueur (phase 8) ———
+
+  const identity = { current: loadIdentity() };
+  const pseudo = (): string => {
+    try {
+      return localStorage.getItem('baz.pseudo') ?? '';
+    } catch {
+      return '';
+    }
+  };
+  const setPseudo = (name: string) => {
+    try {
+      localStorage.setItem('baz.pseudo', name);
+    } catch {
+      // stockage indisponible
+    }
+  };
+
+  const showCode = (c: string) => formatWorldCode(normalizeWorldCode(c) ?? c);
+
+  // On quitte la page : l'hôte ferme proprement son monde, le joueur prévient l'hôte.
+  window.addEventListener('pagehide', () => {
+    const net = session?.net;
+    if (net?.kind === 'client') net.client.leave();
+    else if (net?.kind === 'host') net.host.server.close();
+  });
+
+  /** Ouvre le monde de la partie en cours aux autres joueurs (l'hôte joue en même temps). */
+  async function openWorld(): Promise<boolean> {
+    if (!session?.sim || session.net) return false;
+    const name = pseudo() || 'Hôte';
+    session.sim.local.name = name;
+    const s = session;
+    try {
+      const host = await HostSession.open(s.sim!, settings.worldSeed!, identity.current, name, () => ({ yaw: s.yaw, pitch: s.pitch }), (text) => toast(text, 5000));
+      s.net = { kind: 'host', host };
+      void host.backup();
+      refreshPauseMenu();
+      toast(`Monde ouvert. Code : ${showCode(host.meta.code)} — donnez-le aux joueurs (menu Pause → Joueurs).`, 9000);
+      return true;
+    } catch (e) {
+      toast(`Impossible d’ouvrir le monde : ${e instanceof Error ? e.message : String(e)}`, 8000);
+      return false;
+    }
+  }
+
+  function refreshPauseMenu(): void {
+    const net = session?.net ?? null;
+    $('#btn-players').hidden = !net;
+    $('#btn-open-world').hidden = !!net || !session?.sim;
+    $('#pause-note').textContent =
+      net?.kind === 'client'
+        ? 'Vous jouez dans le monde d’un hôte : c’est lui qui le sauvegarde. Votre personnage vous y attendra.'
+        : net?.kind === 'host'
+          ? 'Votre monde est ouvert : il continue pour les autres joueurs pendant la pause. Il est sauvegardé dans ce navigateur (et toutes les 15 s en sauvegarde de sécurité).'
+          : 'Votre partie (position, état du corps, sac, objets ramassés ou déplacés) est enregistrée dans ce navigateur.';
+  }
+
+  function openJoin(): void {
+    ($('#join-name') as HTMLInputElement).value = pseudo();
+    $('#join-status').textContent = '';
+    $('#join-recovery').textContent = recoveryKey(identity.current);
+    show('join');
+  }
+
+  async function joinGame(codeText: string, nameText: string): Promise<boolean> {
+    const status = $('#join-status');
+    const code = normalizeWorldCode(codeText);
+    const name = nameText.trim();
+    if (!code) {
+      status.textContent = 'Ce code n’est pas valide : 16 caractères (lettres et chiffres), par exemple ABCD-EFGH-JKLM-NPQR.';
+      return false;
+    }
+    if (!name) {
+      status.textContent = 'Choisissez un pseudonyme.';
+      return false;
+    }
+    setPseudo(name);
+    ($('#btn-join-go') as HTMLButtonElement).disabled = true;
+    try {
+      const { client, welcome } = await joinWorld(code, name, identity.current, (t) => (status.textContent = t));
+      status.textContent = 'Chargement du monde…';
+      show('loading');
+      session = await GameSession.createRemote(sessionOpts, welcome, client, setLoading);
+      client.onStop = (text) => {
+        if (session?.net?.kind !== 'client' || session.net.client !== client) return;
+        leaveSession();
+        toast(text, 9000);
+      };
+      enterGame();
+      session.start();
+      refreshPauseMenu();
+      toast(`Bienvenue dans « ${welcome.world.name} » (${ROLE_LABELS[welcome.you.role]}).`, 6000);
+      return true;
+    } catch (e) {
+      show('join');
+      status.textContent = e instanceof Error ? e.message : String(e);
+      return false;
+    } finally {
+      ($('#btn-join-go') as HTMLButtonElement).disabled = false;
+    }
+  }
+
+  const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = ''): HTMLElementTagNameMap[K] => {
+    const e = document.createElement(tag);
+    if (text) e.textContent = text;
+    if (cls) e.className = cls;
+    return e;
+  };
+
+  /** Panneau « Joueurs » : code du monde, joueurs, rôles et droits, règles, sauvegardes (hôte) ; identité. */
+  function renderPlayers(): void {
+    const body = $('#players-body');
+    body.replaceChildren();
+    const net = session?.net;
+    if (!net) return;
+    if (net.kind === 'host') {
+      const h = net.host;
+      const srv = h.server;
+      body.append(el('h3', 'Code du monde'), el('code', showCode(h.meta.code), 'world-code'));
+      const copy = el('button', 'Copier le code');
+      copy.type = 'button';
+      copy.onclick = async () => toast((await copyText(showCode(h.meta.code))) ? 'Code copié.' : 'Copie impossible : recopiez-le à la main.');
+      const rowB = el('div', '', 'menu row-buttons');
+      rowB.append(copy);
+      body.append(rowB);
+      body.append(el('p', `Mise en relation : ${h.relays > 0 ? `${h.relays} intermédiaire(s) joignable(s)` : 'aucun intermédiaire public joignable pour l’instant (seuls les onglets de ce navigateur peuvent rejoindre)'}. Les joueurs entrent ce code dans « Rejoindre un monde ».`, 'note'));
+      body.append(el('h3', `Joueurs (${srv.connectedCount + 1} / 10 en ligne)`));
+      const list = el('ul', '', 'player-list');
+      for (const r of srv.roster()) {
+        const li = el('li');
+        const who = el('span', '', 'who');
+        const dot = el('span', '', `dot${r.online ? ' on' : ''}`);
+        who.append(dot, document.createTextNode(`${r.name || '(sans nom)'}${r.role === 'hote' ? ' — vous' : ''}`));
+        li.append(who);
+        if (r.role !== 'hote') {
+          const sel = el('select');
+          for (const role of ['membre', 'invite'] as Role[]) {
+            const o = el('option', ROLE_LABELS[role]);
+            o.value = role;
+            o.selected = r.role === role;
+            sel.append(o);
+          }
+          sel.onchange = () => {
+            srv.setRole(r.id, sel.value as Role);
+            renderPlayers();
+          };
+          li.append(sel);
+          if (r.online) {
+            const kick = el('button', 'Retirer');
+            kick.type = 'button';
+            kick.onclick = () => {
+              if (confirm(`Retirer ${r.name} de la partie ? Il pourra revenir avec le code.`)) {
+                srv.kick(r.id);
+                renderPlayers();
+              }
+            };
+            li.append(kick);
+          }
+          const m = h.meta.members.find((x) => x.id === r.id);
+          if (m) {
+            const grid = el('div', '', 'perm-grid');
+            for (const p of PERMS) {
+              if (p === 'gerer') continue;
+              const lab = el('label');
+              const cb = el('input');
+              cb.type = 'checkbox';
+              cb.checked = m.overrides[p] ?? (p === 'construire' || p === 'ouvrir_autres' || p === 'conduire_autres' ? m.role === 'membre' : false);
+              cb.onchange = () => srv.setOverride(r.id, p, cb.checked);
+              lab.append(cb, document.createTextNode(` ${PERM_LABELS[p]}`));
+              grid.append(lab);
+            }
+            li.append(grid);
+          }
+        }
+        list.append(li);
+      }
+      body.append(list);
+      body.append(el('h3', 'Règles du monde'));
+      const rules = srv.rules;
+      const rule = (label: string, input: HTMLElement) => {
+        const l = el('label', '', 'field');
+        l.append(document.createTextNode(label), input);
+        body.append(l);
+      };
+      const away = el('select');
+      for (const sec of [0, 30, 120, 300, 900]) {
+        const o = el('option', sec === 0 ? 'il disparaît aussitôt' : sec < 60 ? `${sec} secondes` : `${sec / 60} minutes`);
+        o.value = String(sec);
+        o.selected = rules.awaySeconds === sec;
+        away.append(o);
+      }
+      away.onchange = () => srv.setRules({ ...rules, awaySeconds: Number(away.value) });
+      rule('Un joueur déconnecté reste endormi dans le monde pendant', away);
+      const base = el('select');
+      for (const [v, t] of [['1', 'protégé s’il est près de ses constructions'], ['0', 'vulnérable partout']] as const) {
+        const o = el('option', t);
+        o.value = v;
+        o.selected = rules.protectAtBase === (v === '1');
+        base.append(o);
+      }
+      base.onchange = () => srv.setRules({ ...rules, protectAtBase: base.value === '1' });
+      rule('Pendant ce temps, il est', base);
+      const def = el('select');
+      for (const role of ['membre', 'invite'] as Role[]) {
+        const o = el('option', ROLE_LABELS[role]);
+        o.value = role;
+        o.selected = rules.defaultRole === role;
+        def.append(o);
+      }
+      def.onchange = () => srv.setRules({ ...rules, defaultRole: def.value as Role });
+      rule('Rôle d’un nouveau joueur', def);
+      body.append(el('p', `Ce que chacun construit lui appartient. Son propriétaire en règle l’accès (${ACCESS_LABELS.prive}, ${ACCESS_LABELS.partage}, ${ACCESS_LABELS.public}) depuis le panneau de la construction, du coffre ou du véhicule.`, 'note'));
+      body.append(el('h3', 'Sauvegardes de sécurité'));
+      const saves = el('ul', '', 'player-list');
+      body.append(saves);
+      void h.listBackups().then((list2) => {
+        if (!list2.length) saves.append(el('li', 'Aucune pour l’instant (une toutes les 15 secondes).'));
+        for (const b of list2) {
+          const li = el('li');
+          li.append(el('span', `${new Date(b.savedAt).toLocaleString('fr-FR')}${b.valid ? '' : ' — corrompue'}`, 'who'));
+          if (b.valid) {
+            const btn = el('button', 'Restaurer');
+            btn.type = 'button';
+            btn.onclick = () => void restoreBackup(h, b.gen);
+            li.append(btn);
+          }
+          saves.append(li);
+        }
+      });
+      if (h.backupError) body.append(el('p', `Dernière sauvegarde de sécurité impossible : ${h.backupError}`, 'note'));
+    } else {
+      const c = net.client;
+      body.append(el('p', `Monde « ${c.welcome?.world.name ?? ''} » — vous êtes ${ROLE_LABELS[c.role]}.`));
+      if (c.perms) {
+        const ul = el('ul', '', 'player-list');
+        for (const p of PERMS) ul.append(el('li', `${c.perms[p] ? '✔' : '✘'} ${PERM_LABELS[p]}`));
+        body.append(el('h3', 'Vos droits'), ul);
+      }
+      body.append(el('h3', 'Joueurs'));
+      const list = el('ul', '', 'player-list');
+      for (const r of c.roster) {
+        const li = el('li');
+        const who = el('span', '', 'who');
+        who.append(el('span', '', `dot${r.online ? ' on' : ''}`), document.createTextNode(`${r.name || '(sans nom)'} — ${ROLE_LABELS[r.role]}`));
+        li.append(who);
+        list.append(li);
+      }
+      body.append(list);
+      body.append(el('p', `Liaison avec l’hôte : ${c.rtt ? `${c.rtt} ms aller-retour` : 'mesure en cours'}.`, 'note'));
+      body.append(el('h3', 'Mon identité'), el('p', 'Clé de récupération (pour retrouver votre personnage sur un autre appareil). Ne la donnez à personne.', 'note'), el('code', recoveryKey(identity.current), 'key'));
+    }
+  }
+
+  async function restoreBackup(h: HostSession, gen: number): Promise<void> {
+    if (!confirm('Restaurer cette sauvegarde ? La partie reprendra à ce moment-là pour tout le monde (les joueurs connectés seront déconnectés).')) return;
+    const data = await h.backupData(gen);
+    if (!data?.sim) {
+      toast('Cette sauvegarde est illisible.');
+      return;
+    }
+    leaveSession();
+    try {
+      localStorage.setItem(saveKey(), JSON.stringify({ v: 1, yaw: data.view?.yaw ?? 0, pitch: data.view?.pitch ?? 0, sim: data.sim }));
+    } catch {
+      toast('Écriture impossible dans ce navigateur.');
+      return;
+    }
+    await play();
+    await openWorld();
+    toast('Sauvegarde restaurée, monde rouvert.', 6000);
+  }
+
+  $('#btn-host').addEventListener('click', async () => {
+    if (device.touch) requestImmersive();
+    await play();
+    if (session?.sim) await openWorld();
+  });
+  $('#btn-join').addEventListener('click', () => openJoin());
+  $('#btn-join-cancel').addEventListener('click', () => show('home'));
+  $('#btn-join-go').addEventListener('click', () => void joinGame(($('#join-code') as HTMLInputElement).value, ($('#join-name') as HTMLInputElement).value));
+  $('#btn-copy-recovery').addEventListener('click', async () => toast((await copyText(recoveryKey(identity.current))) ? 'Clé copiée. Gardez-la secrète.' : 'Copie impossible : sélectionnez la clé à la main.'));
+  $('#btn-import-recovery').addEventListener('click', () => {
+    const idn = readRecoveryKey(($('#join-import') as HTMLInputElement).value);
+    if (!idn) {
+      $('#join-status').textContent = 'Cette clé de récupération n’est pas valide.';
+      return;
+    }
+    if (!confirm('Remplacer l’identité de ce navigateur par celle de cette clé ? (Gardez une copie de l’ancienne clé si vous en avez besoin.)')) return;
+    identity.current = idn;
+    saveIdentity(idn);
+    $('#join-recovery').textContent = recoveryKey(idn);
+    $('#join-status').textContent = 'Identité reprise : vous retrouverez votre personnage chez les hôtes qui vous connaissent.';
+  });
+  $('#btn-players').addEventListener('click', () => {
+    renderPlayers();
+    show('players');
+  });
+  $('#btn-players-close').addEventListener('click', () => show(session ? 'pause' : 'home'));
+  $('#btn-open-world').addEventListener('click', async () => {
+    if (await openWorld()) {
+      renderPlayers();
+      show('players');
+    }
+  });
+
+  // Hôte, onglet caché : le navigateur ne dessine plus d'images ; une horloge dans un worker (non ralentie)
+  // fait avancer le monde pour les autres joueurs.
+  const pulse = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 33);'], { type: 'text/javascript' })));
+  let lastPulse = performance.now();
+  pulse.onmessage = () => {
+    const now = performance.now();
+    const ms = now - lastPulse;
+    lastPulse = now;
+    if (document.hidden && session?.net?.kind === 'host') session.stepBackground(ms);
+    else if (document.hidden && session?.net?.kind === 'client') session.net.client.keepAlive();
+  };
 
   $('#btn-play').addEventListener('click', () => {
     if (device.touch) requestImmersive();
@@ -592,6 +920,21 @@ async function boot(): Promise<void> {
         meshes: session.scene.meshes.length,
       },
     teleport: (id: string) => session?.teleport(id) ?? false,
+    /** Phase 8 : état du multijoueur (tests). */
+    net: () => {
+      const n = session?.net;
+      if (!n || !session?.sim) return null;
+      if (n.kind === 'host')
+        return { kind: 'host', code: n.host.meta.code, connected: n.host.server.connectedCount, roster: n.host.server.roster(), relays: n.host.relays, slots: session.sim.players.size, lastBackupAt: n.host.lastBackupAt };
+      const c = n.client;
+      return { kind: 'client', role: c.role, perms: c.perms, rtt: c.rtt, connected: c.connected, roster: c.roster, players: c.players.map((p) => ({ id: p.id, name: p.name, x: p.x, y: p.y, z: p.z })), corrections: session.sim.corrections };
+    },
+    openWorld: () => openWorld(),
+    pause: (on = true) => session?.setPaused(on),
+    joinWorld: (code: string, name: string) => joinGame(code, name),
+    otherPlayers: () => session?.otherPlayers() ?? [],
+    hostSetRole: (id: string, role: Role) => (session?.net?.kind === 'host' ? session.net.host.server.setRole(id, role) : undefined),
+    identity: () => identity.current.id,
     testKit: () => session?.giveTestKit() ?? 0,
     buildKit: () => session?.giveBuildKit() ?? 0,
     /** Simulation complète (diagnostic). */

@@ -116,9 +116,11 @@
     <section id="screen-home" class="screen" hidden>
       <div class="panel">
         <h1>Bienvenue au Zimbabwe</h1>
-        <p class="sub">Prototype — phase 7 : véhicules et machines</p>
+        <p class="sub">Prototype — phase 8 : multijoueur et sauvegardes</p>
         <div class="menu">
           <button type="button" id="btn-play" class="primary">Jouer</button>
+          <button type="button" id="btn-host">Ouvrir mon monde aux autres</button>
+          <button type="button" id="btn-join">Rejoindre un monde</button>
           <button type="button" id="btn-new-world">Nouveau monde</button>
           <button type="button" id="btn-bench">Test de performance</button>
           <button type="button" id="btn-settings">Réglages</button>
@@ -135,10 +137,45 @@
         <h2>Pause</h2>
         <div class="menu">
           <button type="button" id="btn-resume" class="primary">Reprendre</button>
+          <button type="button" id="btn-players" hidden>Joueurs et monde partagé</button>
+          <button type="button" id="btn-open-world" hidden>Ouvrir ce monde aux autres</button>
           <button type="button" id="btn-pause-settings">Réglages</button>
           <button type="button" id="btn-quit">Quitter la partie</button>
         </div>
-        <p class="note">Votre partie (position, état du corps, sac, objets ramassés ou déplacés) est enregistrée dans ce navigateur. Les sauvegardes du monde partagé arrivent avec le multijoueur (phase 8).</p>
+        <p class="note" id="pause-note">Votre partie (position, état du corps, sac, objets ramassés ou déplacés) est enregistrée dans ce navigateur.</p>
+      </div>
+    </section>
+
+    <section id="screen-join" class="screen overlay" hidden>
+      <div class="panel">
+        <h2>Rejoindre un monde</h2>
+        <label class="field">Code du monde<input id="join-code" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="24" /></label>
+        <label class="field">Votre pseudonyme<input id="join-name" maxlength="20" autocomplete="nickname" /></label>
+        <p class="note" id="join-status" role="status"></p>
+        <div class="menu">
+          <button type="button" id="btn-join-go" class="primary">Rejoindre</button>
+          <button type="button" id="btn-join-cancel">Annuler</button>
+        </div>
+        <details class="identity">
+          <summary>Mon identité (changement d’appareil)</summary>
+          <p class="note">Votre personnage est lié à cette clé secrète, créée dans ce navigateur. Recopiez-la sur votre autre appareil pour l’y retrouver. Ne la donnez à personne.</p>
+          <code id="join-recovery" class="key"></code>
+          <div class="menu row-buttons">
+            <button type="button" id="btn-copy-recovery">Copier ma clé</button>
+          </div>
+          <label class="field">Utiliser une clé de récupération<input id="join-import" placeholder="BAZ1-…" autocomplete="off" spellcheck="false" /></label>
+          <button type="button" id="btn-import-recovery">Utiliser cette clé</button>
+        </details>
+      </div>
+    </section>
+
+    <section id="screen-players" class="screen overlay" hidden>
+      <div class="panel wide">
+        <div class="panel-head">
+          <h2>Joueurs et monde partagé</h2>
+          <button type="button" id="btn-players-close">Fermer</button>
+        </div>
+        <div id="players-body"></div>
       </div>
     </section>
 

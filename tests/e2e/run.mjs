@@ -2751,6 +2751,195 @@ async function phase7Scenario(browser, touchOnly = false) {
  * Les scénarios des phases 1 à 5 se jouent sans créatures : un animal ne doit pas fausser un test
  * qui n'a rien à voir avec lui. Les contextes ouverts avec { fauna: true } (phase 6) les gardent.
  */
+/** Phase 8 : un hôte ouvre son monde, un joueur le rejoint avec le code (mise en relation, WebRTC). */
+async function phase8Scenario() {
+  console.log('\n— Phase 8 : multijoueur (hôte et joueur dans deux onglets)');
+  // Les candidats locaux en clair permettent la liaison directe entre deux onglets du même ordinateur.
+  const browser = await chromium.launch({ args: ['--disable-features=WebRtcHideLocalIpsWithMdns'] });
+  const ctx = await browser.newContext({ viewport: { width: 900, height: 500 } });
+  await ctx.addInitScript((settings) => {
+    if (!localStorage.getItem('baz.settings.v1')) localStorage.setItem('baz.settings.v1', JSON.stringify(settings));
+    // Mise en relation entre onglets seulement (les courtiers publics ne sont pas joignables ici).
+    if (localStorage.getItem('baz.courtiers') === null) localStorage.setItem('baz.courtiers', '[]');
+  }, { ...QA_SETTINGS, fauna: false });
+  const host = await ctx.newPage();
+  const hostErrors = watchErrors(host, 'hôte');
+  await host.goto(BASE);
+  await waitFor(host, () => window.__game && window.__game.screen() === 'home', null, 60000);
+  await host.evaluate(() => localStorage.setItem('baz.pseudo', 'Paul'));
+  await host.click('#btn-host');
+  await waitFor(host, () => window.__game.net()?.kind === 'host', null, 120000).catch(() => undefined);
+  const hnet0 = await host.evaluate(() => window.__game.net());
+  check('L’hôte ouvre son monde : code d’accès de 16 caractères', !!hnet0 && /^[2-9A-HJ-NP-Z]{16}$/.test(hnet0.code.replace(/-/g, '')), hnet0 ? hnet0.code : 'pas de monde ouvert');
+  if (!hnet0) {
+    await browser.close();
+    return;
+  }
+
+  const guest = await ctx.newPage();
+  const guestErrors = watchErrors(guest, 'joueur');
+  await guest.goto(BASE);
+  await waitFor(guest, () => window.__game && window.__game.screen() === 'home', null, 60000);
+  // Un mauvais code est refusé (aucun hôte ne répond à ce sujet chiffré).
+  await guest.click('#btn-join');
+  await guest.fill('#join-code', 'ABCD-EFGH');
+  await guest.fill('#join-name', 'Béa');
+  await guest.click('#btn-join-go');
+  await sleep(300);
+  const badMsg = await guest.textContent('#join-status');
+  check('Un code mal formé est refusé avec une explication', /pas valide/.test(badMsg ?? ''), badMsg ?? '');
+  const t0 = Date.now();
+  await guest.fill('#join-code', hnet0.code.toLowerCase());
+  await guest.click('#btn-join-go');
+  await waitFor(guest, () => window.__game.screen() === 'game' && window.__game.net()?.connected, null, 90000).catch(() => undefined);
+  const gnet = await guest.evaluate(() => window.__game.net());
+  check('Le joueur rejoint avec le code (saisie tolérante) et arrive dans le monde', !!gnet && gnet.kind === 'client' && gnet.connected, gnet ? `en ${((Date.now() - t0) / 1000).toFixed(1)} s, rôle ${gnet.role}` : 'échec');
+  if (!gnet) {
+    await browser.close();
+    return;
+  }
+  await sleep(1500);
+  const hnet = await host.evaluate(() => window.__game.net());
+  check('L’hôte voit le joueur dans sa liste (en ligne) ; le joueur voit la même liste', hnet.roster.some((r) => r.name === 'Béa' && r.online) && gnet.roster.some((r) => r.name === 'Paul' && r.role === 'hote'), hnet.roster.map((r) => `${r.name}:${r.role}${r.online ? '' : ' (absent)'}`).join(', '));
+  const far = await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    return g ? Math.hypot(g.state.x - sim.state.x, g.state.z - sim.state.z) : -1;
+  });
+  check('Le joueur apparaît au hasard, loin de l’hôte (aucune carte des joueurs)', far > 1000, `${Math.round(far)} m`);
+  const seesFar = await guest.evaluate(() => window.__game.net().players.length);
+  check('De si loin, le joueur ne reçoit pas la position de l’hôte', seesFar === 0, `${seesFar} joueur(s) visibles`);
+
+  // L'hôte vient près du joueur.
+  await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    sim.teleport(g.state.x + 6, g.state.y + 0.5, g.state.z);
+  });
+  await sleep(2500);
+  const seen = await guest.evaluate(() => window.__game.net().players);
+  check('Proche, le joueur voit l’hôte (position transmise)', seen.some((p) => p.name === 'Paul'), seen.map((p) => p.name).join(', ') || 'personne');
+  const hostSees = await host.evaluate(() => window.__game.otherPlayers().map((p) => p.name));
+  check('L’hôte voit le joueur', hostSees.includes('Béa'), hostSees.join(', '));
+
+  // Le joueur marche : sa copie prédit ses pas, l'hôte fait foi.
+  const before = await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    return { x: g.state.x, z: g.state.z };
+  });
+  await guest.bringToFront();
+  await guest.keyboard.down('KeyW');
+  await sleep(1500);
+  await guest.keyboard.up('KeyW');
+  await sleep(800);
+  const after = await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    return { x: g.state.x, z: g.state.z };
+  });
+  const gs = await guest.evaluate(() => window.__game.session().state);
+  const moved = Math.hypot(after.x - before.x, after.z - before.z);
+  const agree = Math.hypot(gs.x - after.x, gs.z - after.z);
+  check('Le joueur avance (touche W) : l’hôte le voit avancer, et sa prédiction reste d’accord', moved > 1 && agree < 0.3, `${moved.toFixed(2)} m chez l’hôte, écart ${agree.toFixed(3)} m`);
+
+  // Une action du joueur passe par l'hôte.
+  await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    g.inventory.pockets[0] = { item: 'chiffon', count: 1 };
+  });
+  await sleep(600);
+  await guest.evaluate(() => window.__game.act({ type: 'sortir', from: { zone: 'poche', index: 0 } }));
+  await sleep(1200);
+  const held = await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    return g.held?.id ?? null;
+  });
+  const gheld = await guest.evaluate(() => window.__game.sim().props.held?.id ?? null);
+  check('Une action du joueur (sortir un chiffon) est appliquée par l’hôte, puis vue chez le joueur', !!held && held === gheld, `${held} / ${gheld}`);
+
+  // Permissions : l'hôte le passe invité ; il ne peut plus construire.
+  const gid = await guest.evaluate(() => window.__game.identity());
+  await host.evaluate((id) => window.__game.hostSetRole(id, 'invite'), gid);
+  await sleep(800);
+  const role = await guest.evaluate(() => window.__game.net().role);
+  await guest.evaluate(() => {
+    const s = window.__game.session().state;
+    window.__game.act({ type: 'planifier', plan: 'coffre', aim: { x: s.x, y: s.y, z: s.z + 2 }, turn: 0, on: null });
+  });
+  await sleep(1200);
+  const msg = await guest.textContent('#message');
+  check('Invité, il ne peut pas construire : l’hôte refuse et le lui dit', role === 'invite' && /droit de construire/.test(msg ?? ''), `${role} · ${msg}`);
+
+  // Sauvegarde de sécurité chez l'hôte (IndexedDB).
+  await host.bringToFront();
+  await waitFor(host, () => window.__game.net().lastBackupAt > 0, null, 20000).catch(() => undefined);
+  const backups = await host.evaluate(async () => {
+    const req = indexedDB.open('bienvenue-au-zimbabwe');
+    const db = await new Promise((r, j) => {
+      req.onsuccess = () => r(req.result);
+      req.onerror = () => j(req.error);
+    });
+    const all = await new Promise((r) => {
+      const q = db.transaction('saves').objectStore('saves').getAll();
+      q.onsuccess = () => r(q.result);
+    });
+    return all.map((e) => ({ gen: e.gen, len: e.data.length, sha: e.sha256.length }));
+  });
+  check('Sauvegarde de sécurité du monde partagé (IndexedDB, empreinte SHA-256)', backups.length >= 1 && backups.every((b) => b.sha === 64 && b.len > 1000), `${backups.length} génération(s), ${backups.map((b) => `${Math.round(b.len / 1024)} ko`).join(', ')}`);
+
+  // Le panneau « Joueurs » de l'hôte.
+  await host.evaluate(() => window.__game.pause(true));
+  await sleep(300);
+  await host.click('#btn-players');
+  await sleep(500);
+  const panel = await host.textContent('#players-body');
+  check('Panneau « Joueurs » : code, joueurs, règles, sauvegardes de sécurité', panel.includes(hnet0.code.slice(0, 4)) && panel.includes('Béa') && /Règles du monde/.test(panel) && /Sauvegardes de sécurité/.test(panel), panel.slice(0, 80).replace(/\s+/g, ' '));
+  await host.click('#btn-players-close');
+
+  // Le joueur se déconnecte : son personnage reste endormi chez l'hôte.
+  await guest.close();
+  await sleep(2500);
+  const away = await host.evaluate(() => {
+    const sim = window.__game.sim();
+    const g = [...sim.players.values()].find((p) => p !== sim.local);
+    return g ? g.away : null;
+  });
+  const roster2 = await host.evaluate(() => window.__game.net().roster);
+  check('Déconnecté, son personnage reste endormi dans le monde (règle de l’hôte)', away === true && roster2.some((r) => r.name === 'Béa' && !r.online), `endormi : ${away}`);
+  check('Aucune erreur dans la console (hôte et joueur)', hostErrors.length === 0 && guestErrors.length === 0, [...hostErrors, ...guestErrors].slice(0, 3).join(' | '));
+  await host.screenshot({ path: `${OUT}phase8-hote.png` });
+
+  // Mise en relation par un courtier MQTT (même protocole que les courtiers publics), si un courtier local est indiqué :
+  // BAZ_MQTT=ws://localhost:9001 node tests/e2e/run.mjs --only=phase8
+  const mqtt = process.env.BAZ_MQTT;
+  if (mqtt) {
+    await host.evaluate((u) => localStorage.setItem('baz.courtiers', JSON.stringify([u])), mqtt);
+    await host.evaluate(() => window.__game.pause(false));
+    await host.click('#btn-quit').catch(() => undefined);
+    await host.evaluate(() => window.__game.pause(true)).catch(() => undefined);
+    // Rouvrir le monde avec la mise en relation MQTT.
+    await host.goto(BASE);
+    await waitFor(host, () => window.__game && window.__game.screen() === 'home', null, 60000);
+    await host.click('#btn-host');
+    await waitFor(host, () => window.__game.net()?.kind === 'host' && window.__game.net().relays >= 2, null, 120000).catch(() => undefined);
+    const code2 = await host.evaluate(() => window.__game.net()?.code);
+    // Autre contexte : pas de canal entre onglets, seulement le courtier.
+    const ctx2 = await browser.newContext({ viewport: { width: 800, height: 450 } });
+    await ctx2.addInitScript((u) => localStorage.setItem('baz.courtiers', JSON.stringify([u])), mqtt);
+    const g2 = await ctx2.newPage();
+    await g2.goto(BASE);
+    await waitFor(g2, () => window.__game && window.__game.screen() === 'home', null, 60000);
+    const t1 = Date.now();
+    const ok2 = await g2.evaluate((c) => window.__game.joinWorld(c, 'Zodwa'), code2);
+    const why = ok2 ? '' : `${await g2.textContent('#join-status')} · hôte : ${JSON.stringify(await host.evaluate(() => window.__game.net() && { relays: window.__game.net().relays, code: window.__game.net().code }))} · code utilisé ${code2}`;
+    check('Mise en relation par un courtier MQTT (autre navigateur, sans canal entre onglets)', ok2 === true, ok2 ? `en ${((Date.now() - t1) / 1000).toFixed(1)} s (${mqtt})` : why);
+  } else console.log('      (courtier MQTT : non testé ici ; BAZ_MQTT=ws://… pour le tester)');
+  await browser.close();
+}
+
 function noFaunaByDefault(browser) {
   const open = browser.newContext.bind(browser);
   browser.newContext = async (options = {}) => {
@@ -2801,6 +2990,7 @@ try {
   if (want('phase6')) await phase6Scenario(browser);
   if (want('phase7')) await phase7Scenario(browser);
   if (want('phase7t')) await phase7Scenario(browser, true);
+  if (want('phase8')) await phase8Scenario();
   if (want('captures')) await userScreenshots(browser);
   await browser.close();
   if (want('webgpu')) await webgpuScenario();

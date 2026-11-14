@@ -8,11 +8,11 @@ Le cahier des charges (§ 14.1) demande de séparer cinq blocs. Voici ce qui exi
 
 | Bloc | Rôle | État |
 | --- | --- | --- |
-| Client web 3D | Affichage, commandes, interface, prédiction | En place (jeu solo, phases 1 à 5) |
-| Serveur autoritaire chez l'hôte | Référence pour les déplacements, inventaires, combats, constructions, ressources | Phase 8. La simulation est déjà séparée de l'affichage (`src/shared/simulation.ts`) |
-| Sauvegarde locale | Monde sauvegardé chez l'hôte, 3 sauvegardes de sécurité | Phase 8. Module préparé et testé (`src/server/save.ts`) |
-| Synchronisation multijoueur | Échanges client ↔ serveur | Phase 8. Protocole, prédiction et limitation des tentatives préparés |
-| Programme compagnon | Démarrer et gérer le serveur hors du navigateur | Phase 8 / 10 |
+| Client web 3D | Affichage, commandes, interface, prédiction | En place (phases 1 à 8) |
+| Serveur autoritaire chez l'hôte | Référence pour les déplacements, inventaires, combats, constructions, ressources | En place (phase 8) : dans l'onglet de l'hôte (`src/server/host.ts`), même simulation que le solo |
+| Sauvegarde locale | Monde sauvegardé chez l'hôte, 3 sauvegardes de sécurité | En place (phase 8) : IndexedDB (`src/client/net/idb.ts`, `src/server/save.ts`) |
+| Synchronisation multijoueur | Échanges client ↔ serveur | En place (phase 8) : WebRTC, mise en relation MQTT chiffrée, réplication (`src/shared/replication.ts`) — voir `docs/PHASE-8.md` |
+| Programme compagnon | Démarrer et gérer le serveur hors du navigateur | Phase 10 (le serveur, sans affichage, s'y prête) |
 
 ```
             Phase 1 (aujourd'hui)                         Phase 8 (cible)
@@ -137,7 +137,7 @@ Côté client :
 | Moteur graphique | **WebGL 2 par défaut**, WebGPU en option | WebGL 2 est disponible partout ; WebGPU est plus récent et variable selon les appareils. Le test de performance permettra de décider appareil par appareil | WebGPU par défaut (trop de risques sur mobile aujourd'hui) |
 | Installation | **PWA** : manifeste + service worker écrit à la main | Installable sur téléphone et ordinateur, mises à jour automatiques à chaque visite, démarrage rapide | vite-plugin-pwa (dépendance lourde pour un besoin simple) |
 | Réseau (phase 8) | **WebRTC** (canaux de données chiffrés) | Seule solution réaliste pour qu'un site HTTPS joigne un ordinateur personnel derrière une box : connexion directe, chiffrée, mode « non fiable » adapté au jeu | WebSocket direct vers l'hôte (impossible sans certificat ni ouverture de port) |
-| Mise en relation (phase 8) | Service gratuit à choisir en phase 8 | WebRTC exige un intermédiaire pour présenter les joueurs ; un relais (TURN) est parfois nécessaire. Les offres gratuites ont des limites, à vérifier le moment venu | — |
+| Mise en relation (phase 8) | Courtiers MQTT publics (EMQX, HiveMQ, Mosquitto), messages chiffrés par le code | WebRTC exige un intermédiaire pour présenter les joueurs ; un relais (TURN) est parfois nécessaire. Les offres gratuites ont des limites, à vérifier le moment venu | — |
 | Sauvegardes (phase 8) | IndexedDB (hôte dans le navigateur), fichiers (programme compagnon) | Transactions atomiques, empreinte SHA-256 de chaque sauvegarde | localStorage (trop petit, pas transactionnel) |
 | Tests | **Vitest** (logique, dans Node) + **Playwright** (vrai navigateur) | La physique et la simulation sont testées sans affichage ; le jeu complet est testé dans Chromium | — |
 
