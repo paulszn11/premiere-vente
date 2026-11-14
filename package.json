@@ -1,7 +1,7 @@
 {
   "name": "bienvenue-au-zimbabwe",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "type": "module",
   "description": "Jeu 3D de survie, exploration, construction et horreur multijoueur (prototype phase 1).",
   "engines": {
