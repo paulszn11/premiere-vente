@@ -134,6 +134,14 @@ export class PhysicsWorld {
     return this.chunks.size;
   }
 
+  /** Chunks physiques chargés (coordonnées). */
+  loadedChunks(): Array<{ cx: number; cz: number }> {
+    return [...this.chunks.keys()].map((k) => {
+      const [cx, cz] = k.split(',').map(Number);
+      return { cx: cx!, cz: cz! };
+    });
+  }
+
   hasChunk(cx: number, cz: number): boolean {
     return this.chunks.has(chunkKey(cx, cz));
   }

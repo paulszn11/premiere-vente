@@ -3,6 +3,7 @@
 // (sac posé, chiffons, corps) sont mémorisés pour réapparaître au bon endroit quand on revient,
 // et sauvegardés.
 
+import { readOwned } from './permissions';
 import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, MOVE } from './constants';
 import { type SpeciesId, isSpeciesId } from './creatures';
 import { type Container, type ItemMeta, readContainer } from './inventory';
@@ -231,6 +232,8 @@ export class PropSystem {
   clock: () => number = () => 0;
   private nextDyn = 1;
   held: { id: string; mode: 'carry' | 'drag' } | null = null;
+  /** Objets tenus par les autres joueurs (phase 8) : on ne peut ni les viser ni les prendre. */
+  readonly heldByOthers = new Set<string>();
   /** Raison du dernier refus de prise (bras cassé…), lue puis effacée par la simulation. */
   refusal: string | null = null;
   /** Objet lancé pendant ce pas (lu puis effacé par la simulation : projectiles). */
@@ -368,7 +371,7 @@ export class PropSystem {
 
   private unloadChunk(cx: number, cz: number): void {
     for (const [id, lp] of this.live) {
-      if (this.held?.id === id) continue;
+      if (this.held?.id === id || this.heldByOthers.has(id)) continue;
       const t = lp.body.translation();
       if (chunkCoord(t.x) !== cx || chunkCoord(t.z) !== cz) continue;
       if (this.displaced(id, lp)) this.stored.set(id, this.snapshot(lp));
@@ -390,7 +393,7 @@ export class PropSystem {
     if (wall && wall.timeOfImpact < d - 0.2) return null;
     const id = this.byCollider.get(hit.collider.handle);
     const lp = id ? this.live.get(id) : undefined;
-    if (!id || !lp) return null;
+    if (!id || !lp || this.heldByOthers.has(id)) return null;
     return { id, kind: lp.def.kind, label: PROP_LABELS[lp.def.kind], mass: lp.mass, handling: lp.handling, distance: d, fixed: !!lp.def.fixed };
   }
 
@@ -407,7 +410,7 @@ export class PropSystem {
   /** Prend un objet en main (ou le traîne s'il est trop lourd). */
   grab(id: string, s: MoveState): boolean {
     const lp = this.live.get(id);
-    if (!lp || this.held || lp.def.fixed) return false;
+    if (!lp || this.held || lp.def.fixed || this.heldByOthers.has(id)) return false;
     lp.body.wakeUp();
     if (lp.handling === 'trainer') {
       if (s.stamina < 5) {
@@ -597,6 +600,57 @@ export class PropSystem {
     return [...this.live.keys()];
   }
 
+  // ——— Réplication (phase 8) ———
+
+  /** Définition et position d'un objet simulé (l'hôte les envoie aux joueurs proches). */
+  livePose(id: string): { def: PropDef; x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number; sleeping: boolean } | null {
+    const lp = this.live.get(id);
+    if (!lp) return null;
+    const t = lp.body.translation();
+    const r = lp.body.rotation();
+    return { def: lp.def, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w, sleeping: lp.body.isSleeping() };
+  }
+
+  /** Place un objet là où l'hôte le dit (copie chez un joueur distant). */
+  setPose(id: string, x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number): void {
+    const lp = this.live.get(id);
+    if (!lp || ![x, y, z, qx, qy, qz, qw].every(Number.isFinite)) return;
+    lp.body.setTranslation({ x, y, z }, false);
+    lp.body.setRotation({ x: qx, y: qy, z: qz, w: qw }, false);
+    if (!lp.def.fixed) {
+      lp.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+      lp.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    }
+    this.phys.markDirty();
+  }
+
+  /** Crée ou met à jour un objet reçu de l'hôte (même identifiant), puis le place. */
+  upsert(def: PropDef, pose: { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number }): void {
+    const lp = this.live.get(def.id);
+    if (lp) {
+      const shapeChanged = lp.def.kind !== def.kind || lp.def.radius !== def.radius || lp.def.length !== def.length || !!lp.def.fixed !== !!def.fixed || lp.def.size !== def.size;
+      if (shapeChanged) this.despawn(def.id);
+      else {
+        for (const k of Object.keys(lp.def) as Array<keyof PropDef>) if (!(k in def)) delete lp.def[k];
+        Object.assign(lp.def, def);
+        if (lp.def.container) this.refreshMass(def.id);
+      }
+    }
+    if (!this.live.has(def.id)) {
+      this.stored.delete(def.id);
+      this.spawn({ ...def }, pose.x, pose.y, pose.z, { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw }, false);
+    }
+    this.setPose(def.id, pose.x, pose.y, pose.z, pose.qx, pose.qy, pose.qz, pose.qw);
+  }
+
+  /** Retire un objet que l'hôte n'a plus ; un objet naturel ne réapparaît pas au prochain chargement. */
+  forget(id: string): void {
+    const def = this.defOf(id);
+    this.despawn(id);
+    this.stored.delete(id);
+    if (def && !def.dynamic) this.taken.set(id, this.clock());
+  }
+
   massOf(id: string): number {
     return this.live.get(id)?.mass ?? 0;
   }
@@ -705,6 +759,7 @@ function readStored(raw: unknown): StoredProp | null {
   };
   if (d.dynamic === true) def.dynamic = true;
   if (d.fixed === true) def.fixed = true;
+  Object.assign(def, readOwned(d));
   if (def.kind === 'sac' || def.kind === 'corps' || def.kind === 'coffre') def.container = readContainer(d.container);
   if (typeof d.on === 'object' && d.on !== null) {
     const o = d.on as Record<string, unknown>;

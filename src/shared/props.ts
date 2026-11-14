@@ -12,6 +12,7 @@ import type { NodeKind } from './resources';
 import { hash32 } from './rng';
 import type { Terrain } from './terrain';
 import { floraInChunk } from './vegetation';
+import type { Owned } from './permissions';
 import type { EngineState, PartState } from './vehicles';
 
 /** Objets transportables : leur type est aussi leur identifiant dans le catalogue. */
@@ -83,7 +84,7 @@ export interface FireState {
 }
 export type Handling = 'une-main' | 'deux-mains' | 'trainer';
 
-export interface PropDef {
+export interface PropDef extends Owned {
   id: string;
   kind: PropKind;
   x: number;

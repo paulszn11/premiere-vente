@@ -87,7 +87,8 @@ export class VehiclePhysics {
   }
 
   /** Crée ou retire les corps selon la zone physique chargée ; reconstruit si les pièces ont changé. */
-  sync(list: VehicleState[], driverOf: string | null): void {
+  sync(list: VehicleState[], driverOf: string | null | ReadonlySet<string>): void {
+    const seated = (id: string): boolean => (typeof driverOf === 'string' || driverOf === null ? driverOf === id : driverOf.has(id));
     const keep = new Set<string>();
     for (const v of list) {
       const inside = this.phys.hasChunk(chunkCoord(v.x), chunkCoord(v.z));
@@ -97,13 +98,13 @@ export class VehiclePhysics {
         continue;
       }
       keep.add(v.id);
-      const sig = this.signature(v, driverOf === v.id);
-      if (!lv) this.create(v, driverOf === v.id, null);
+      const sig = this.signature(v, seated(v.id));
+      if (!lv) this.create(v, seated(v.id), null);
       else if (lv.sig !== sig) {
         const vel = lv.body.linvel();
         const ang = lv.body.angvel();
         this.remove(v.id);
-        this.create(v, driverOf === v.id, { vel, ang });
+        this.create(v, seated(v.id), { vel, ang });
       }
     }
     for (const id of [...this.live.keys()]) if (!keep.has(id)) this.remove(id);

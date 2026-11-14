@@ -18,6 +18,8 @@ export type FurnaceOp = 'minerai' | 'bois' | 'souffler' | 'loupe';
 export type VehicleOp = 'monter' | 'pousser' | 'descendre' | 'installer' | 'retirer' | 'reparer' | 'bois' | 'eau' | 'allumer' | 'eteindre' | 'redresser';
 export const VEHICLE_OPS: readonly VehicleOp[] = ['monter', 'pousser', 'descendre', 'installer', 'retirer', 'reparer', 'bois', 'eau', 'allumer', 'eteindre', 'redresser'];
 export type MachineOp = 'bois' | 'eau' | 'allumer' | 'eteindre' | 'reparer';
+/** Phase 8 : chose dont le propriétaire règle l'accès. */
+export type AccessRef = { kind: 'structure'; s: string } | { kind: 'prop'; prop: string } | { kind: 'vehicule'; v: string };
 export const MACHINE_OPS: readonly MachineOp[] = ['bois', 'eau', 'allumer', 'eteindre', 'reparer'];
 
 export type PlayerAction =
@@ -77,6 +79,8 @@ export type PlayerAction =
   | { type: 'vehicule'; v: string; op: VehicleOp; slot?: string }
   | { type: 'machine'; prop: string; op: MachineOp }
   | { type: 'interrompre' }
+  /** Phase 8 : le propriétaire règle l'accès (privé, partagé, public). */
+  | { type: 'acces'; target: AccessRef; access: 'prive' | 'partage' | 'public' }
   /** État critique ou inconscient : mourir tout de suite (personne ne peut venir). */
   | { type: 'abandonner' };
 
@@ -124,6 +128,7 @@ const TYPES = new Set([
   'fourneau',
   'vehicule',
   'machine',
+  'acces',
 ]);
 
 function readSlot(raw: unknown, allowHand: boolean): HandOrSlot | null {
@@ -240,6 +245,16 @@ export function readAction(raw: unknown): PlayerAction | null {
     }
     case 'machine':
       return propId(r.prop) && MACHINE_OPS.includes(r.op as MachineOp) ? { type: 'machine', prop: r.prop, op: r.op as MachineOp } : null;
+    case 'acces': {
+      if (r.access !== 'prive' && r.access !== 'partage' && r.access !== 'public') return null;
+      const t = r.target as Record<string, unknown> | null;
+      if (!t || typeof t !== 'object') return null;
+      let target: AccessRef | null = null;
+      if (t.kind === 'structure' && propId(t.s)) target = { kind: 'structure', s: t.s };
+      else if (t.kind === 'prop' && propId(t.prop)) target = { kind: 'prop', prop: t.prop };
+      else if (t.kind === 'vehicule' && propId(t.v)) target = { kind: 'vehicule', v: t.v };
+      return target ? { type: 'acces', target, access: r.access } : null;
+    }
     default:
       return { type: r.type } as PlayerAction;
   }

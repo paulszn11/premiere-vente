@@ -16,6 +16,8 @@ import type { Terrain } from './terrain';
 // ——— Interfaces avec la simulation ———
 
 export interface FaunaPlayer {
+  /** Identifiant du joueur (phase 8 : plusieurs joueurs). */
+  id?: string;
   x: number;
   y: number;
   z: number;
@@ -93,9 +95,9 @@ export type SoundKind =
   | 'craquement';
 
 export type FaunaEvent =
-  | { type: 'attaque'; id: string; sp: SpeciesId; behind: boolean; downed: boolean }
-  | { type: 'saisie'; id: string; sp: SpeciesId }
-  | { type: 'lache'; id: string; sp: SpeciesId; reason: 'temps' | 'coups' | 'debattu' | 'blessee' | 'mort' }
+  | { type: 'attaque'; id: string; sp: SpeciesId; behind: boolean; downed: boolean; pid?: string }
+  | { type: 'saisie'; id: string; sp: SpeciesId; pid?: string }
+  | { type: 'lache'; id: string; sp: SpeciesId; reason: 'temps' | 'coups' | 'debattu' | 'blessee' | 'mort'; pid?: string }
   | { type: 'son'; kind: SoundKind; x: number; y: number; z: number }
   | { type: 'mort'; id: string; sp: SpeciesId; x: number; y: number; z: number; yaw: number; scale: number }
   | { type: 'piece'; s: string; p: number; damage: number; sp: SpeciesId }
@@ -307,14 +309,16 @@ export class Fauna {
   /** Sites de groupes suivis disparus définitivement (clé → temps du monde). */
   private readonly sitesTried = new Set<string>();
   private trail: Crumb[] = [];
+  /** Pistes de chaque joueur (phase 8) ; `trail` désigne celle du joueur concerné. */
+  private readonly trails = new Map<string, Crumb[]>();
   /** Traces de sang des créatures blessées (affichage, pistage). */
   blood: Array<{ x: number; z: number; t: number }> = [];
   private noises: Noise[] = [];
   private readonly events: FaunaEvent[] = [];
   /** Évolution du comportement par espèce : méfiance (proies) et hardiesse (prédateurs), de −1 à 1. */
   readonly traits: Record<string, { wary: number; bold: number }> = {};
-  /** Prise en cours : créature qui tient le joueur. */
-  grab: { id: string; t: number; struggle: number; hits: number } | null = null;
+  /** Prise en cours : créature qui tient un joueur (pid : ce joueur). Une seule prise à la fois dans le monde. */
+  grab: { id: string; t: number; struggle: number; hits: number; pid?: string } | null = null;
   private rng: number;
   private nextId = 1;
   private nextGroup = 1;
@@ -325,6 +329,8 @@ export class Fauna {
   private lastSound = new Map<string, number>();
   private tickCount = 0;
   private player: FaunaPlayer | null = null;
+  /** Tous les joueurs présents (phase 8) ; `player` désigne celui qui concerne la créature en cours. */
+  private players: FaunaPlayer[] = [];
   private env: FaunaEnv | null = null;
   /** Créatures réelles au plus (téléphone : 24). */
   cap: number;
@@ -686,16 +692,20 @@ export class Fauna {
    * Fait avancer la faune d'un pas. Le joueur et l'environnement sont fournis par la simulation.
    * Renvoie rien : lire les événements avec takeEvents().
    */
-  step(dt: number, time: number, player: FaunaPlayer, env: FaunaEnv): void {
+  step(dt: number, time: number, playerOrList: FaunaPlayer | FaunaPlayer[], env: FaunaEnv): void {
+    const list = Array.isArray(playerOrList) ? playerOrList : [playerOrList];
+    if (!list.length) return;
+    const player = list[0]!;
+    this.players = list;
     this.time = time;
     this.player = player;
     this.env = env;
     if (!this.enabled) return;
     this.tickCount++;
-    this.trackPlayer(player);
+    for (const p of list) this.trackPlayer(p);
     if (this.wild && time - this.lastSites > 5) {
       this.lastSites = time;
-      this.ensureSites(player.x, player.z);
+      for (const p of list) this.ensureSites(p.x, p.z);
     }
     if (time - this.lastEco >= 60) {
       const minutes = Math.min(60, (time - this.lastEco) / 60);
@@ -706,15 +716,21 @@ export class Fauna {
       this.lastSpawnCheck = time;
       this.manageGroups(player);
     }
-    this.stepOmbreAttention(dt, player);
+    this.stepOmbreAttention(dt, this.ombrePlayer());
     // Décisions de groupe (2 fois par seconde), puis individuelles, puis déplacements.
-    for (const g of this.groups.values()) if (g.members.length && time - g.modeT >= 0) this.thinkGroup(g);
+    for (const g of this.groups.values()) {
+      if (!g.members.length || time - g.modeT < 0) continue;
+      const first = this.creatures.get(g.members[0]!);
+      if (first) this.focus(first.x, first.z);
+      this.thinkGroup(g);
+    }
     for (const c of this.creatures.values()) {
       if (c.dead) continue;
+      this.focus(c.x, c.z, c.id);
       if (time >= c.nextThink) {
         const elapsed = time - c.lastThink;
         c.lastThink = time;
-        const far = dist2(c.x, c.z, player.x, player.z);
+        const far = dist2(c.x, c.z, this.player!.x, this.player!.z);
         // Plus souvent quand il se passe quelque chose ; moins souvent pour un animal calme ou lointain.
         const busy = c.alert > 0.3 || ACTIVE_MODES.has(c.mode) || this.grab?.id === c.id;
         c.nextThink = time + (far < 80 ? (busy ? 0.1 : 0.25) : far < 160 ? (busy ? 0.2 : 0.4) : 0.6);
@@ -724,17 +740,79 @@ export class Fauna {
       this.act(c, dt);
       this.move(c, dt);
     }
+    if (this.grab) this.focusOn(this.grab.pid);
     this.stepGrab(dt);
     this.stepBlood(dt);
     if (this.noises.length && time - this.noises[0]!.t > 0.6) this.noises = this.noises.filter((n) => time - n.t <= 0.6);
   }
 
+  /** Désigne le joueur qui concerne ce point : celui qui est tenu par cette créature, sinon le plus proche (vivant de préférence). */
+  private focus(x: number, z: number, creatureId?: string): void {
+    if (this.players.length <= 1) {
+      this.setFocus(this.players[0] ?? this.player);
+      return;
+    }
+    if (creatureId && this.grab?.id === creatureId) {
+      this.focusOn(this.grab.pid);
+      return;
+    }
+    let best: FaunaPlayer | null = null;
+    let bd = Infinity;
+    for (const p of this.players) {
+      const d = dist2(x, z, p.x, p.z) + (p.state === 'mort' ? 1e6 : 0);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    this.setFocus(best);
+  }
+
+  private focusOn(pid: string | undefined): void {
+    const p = this.players.find((q) => q.id === pid) ?? this.players[0] ?? this.player;
+    this.setFocus(p);
+  }
+
+  private setFocus(p: FaunaPlayer | null): void {
+    if (!p) return;
+    this.player = p;
+    this.trail = this.trails.get(p.id ?? '') ?? this.trail;
+  }
+
+  /** Le joueur que l'« ombre » du lac surveille : un joueur dans l'eau du lac, sinon le premier. */
+  private ombrePlayer(): FaunaPlayer {
+    for (const p of this.players) if (p.state !== 'mort' && (p.swimming || p.underwater) && inLakeDomain(this.terrain, p.x, p.z, 5)) return p;
+    const g = this.ombreGroup();
+    const c = g?.members.length ? this.creatures.get(g.members[0]!) : undefined;
+    if (c) {
+      this.focus(c.x, c.z, c.id);
+      return this.player!;
+    }
+    return this.players[0]!;
+  }
+
+  /** Joueur qui frappe ou agit (appelé par la simulation avant hurt/rayHit/struggle). */
+  setActivePlayer(p: FaunaPlayer): void {
+    if (!this.players.includes(p)) {
+      const i = this.players.findIndex((q) => q.id !== undefined && q.id === p.id);
+      if (i >= 0) this.players[i] = p;
+    }
+    this.setFocus(p);
+  }
+
   private trackPlayer(p: FaunaPlayer): void {
     if (p.state === 'mort') return;
-    const last = this.trail[this.trail.length - 1];
+    const key = p.id ?? '';
+    let trail = this.trails.get(key);
+    if (!trail) {
+      // Le joueur unique (solo) garde la piste historique.
+      trail = this.trails.size === 0 ? this.trail : [];
+      this.trails.set(key, trail);
+    }
+    const last = trail[trail.length - 1];
     if (!last || dist2(last.x, last.z, p.x, p.z) >= TRAIL_STEP) {
-      this.trail.push({ x: p.x, z: p.z, t: this.time, blood: p.bleeding > 0.05 });
-      if (this.trail.length > 200) this.trail.shift();
+      trail.push({ x: p.x, z: p.z, t: this.time, blood: p.bleeding > 0.05 });
+      if (trail.length > 200) trail.shift();
     }
   }
 
@@ -783,7 +861,7 @@ export class Fauna {
           this.groups.delete(g.id);
           continue;
         }
-        const near = alive.some((c) => dist2(c.x, c.z, p.x, p.z) < (g.key ? NEAR_OUT : DYN_DESPAWN));
+        const near = alive.some((c) => this.players.some((q) => dist2(c.x, c.z, q.x, q.z) < (g.key ? NEAR_OUT : DYN_DESPAWN)));
         if (!near) this.dematerialize(g);
         // Les morts restent un moment (carcasse créée par la simulation) puis sont oubliés.
         for (const id of [...g.members]) {
@@ -813,14 +891,28 @@ export class Fauna {
             g.abstract.z += (tz - g.abstract.z) * 0.1;
           }
         }
-        if (dist2(g.abstract.x, g.abstract.z, p.x, p.z) < NEAR_IN && concrete + g.abstract.hp.length <= this.cap) {
+        if (this.players.some((q) => dist2(g.abstract!.x, g.abstract!.z, q.x, q.z) < NEAR_IN) && concrete + g.abstract.hp.length <= this.effectiveCap()) {
           concrete += g.abstract.hp.length;
           this.materialize(g);
         }
       }
     }
-    // Apparitions dynamiques (hardes, familles, crocodiles) selon la population de la zone.
-    if (p.state === 'mort' || !this.wild) return;
+    // Apparitions dynamiques (hardes, familles, crocodiles) selon la population de la zone, autour de chaque joueur.
+    if (!this.wild) return;
+    for (const q of this.players) {
+      if (q.state === 'mort') continue;
+      concrete = this.spawnAround(q, concrete);
+    }
+    void p;
+  }
+
+  /** Plafond de créatures réelles : un peu plus haut quand plusieurs joueurs sont dispersés. */
+  private effectiveCap(): number {
+    return Math.round(this.cap * Math.min(2.5, 1 + 0.5 * (this.players.length - 1)));
+  }
+
+  private spawnAround(p: FaunaPlayer, concreteIn: number): number {
+    let concrete = concreteIn;
     for (const sp of ['impala', 'phacochere', 'elephant', 'crocodile'] as const) {
       const d = SPECIES[sp];
       let groups = 0;
@@ -844,7 +936,7 @@ export class Fauna {
         const avail = Math.floor(c.counts[sp] ?? 0);
         if (avail < 1) break;
         const n = Math.min(avail, Math.round(this.range(d.group[0], d.group[1])));
-        if (concrete + n > this.cap) break;
+        if (concrete + n > this.effectiveCap()) break;
         c.counts[sp] = (c.counts[sp] ?? 0) - n;
         const g = this.makeGroup(sp, null, x, z, sp === 'crocodile' ? 80 : 500, ci);
         this.groups.set(g.id, g);
@@ -860,6 +952,7 @@ export class Fauna {
         break;
       }
     }
+    return concrete;
   }
 
   /** Itinéraire d'une harde d'éléphants : l'eau, puis la forêt, puis l'eau… */
@@ -1860,7 +1953,7 @@ export class Fauna {
     c.cooldown = atk.cooldown;
     const p = this.player!;
     if (c.target === 'joueur') {
-      if (p.state === 'mort' || this.grab) return;
+      if (p.state === 'mort' || (this.grab && this.grab.pid === p.id)) return;
       const reach = d.halfLength * c.scale + atk.reach + 0.45;
       const dx = p.x - c.x;
       const dz = p.z - c.z;
@@ -1870,13 +1963,13 @@ export class Fauna {
       const vertOk = d.archetype === 'abysse' ? Math.abs(dy) < 3 : dy > -1.5 && dy < 2.2;
       if (horiz <= reach && facing && vertOk) {
         const behind = Math.abs(wrap(p.yaw - angleTo(p.x, p.z, c.x, c.z))) > 2;
-        this.emit({ type: 'attaque', id: c.id, sp: c.sp, behind, downed: p.state !== 'eveille' });
+        this.emit({ type: 'attaque', id: c.id, sp: c.sp, behind, downed: p.state !== 'eveille', ...(p.id !== undefined ? { pid: p.id } : {}) });
         this.sound(c.sp === 'elephant' ? 'coup' : 'morsure', p.x, p.y + 1, p.z, 0.2, c.id + 'atk');
         this.traits[c.sp]!.bold = Math.min(1, this.traits[c.sp]!.bold + 0.03);
         if (atk.grab && !this.grab && (d.archetype === 'abysse' || p.waterDepth > 0.3 || this.depthAt(c.x, c.z) > 0.4)) {
-          this.grab = { id: c.id, t: 0, struggle: 0, hits: 0 };
+          this.grab = { id: c.id, t: 0, struggle: 0, hits: 0, ...(p.id !== undefined ? { pid: p.id } : {}) };
           this.setMode(c, 'saisit');
-          this.emit({ type: 'saisie', id: c.id, sp: c.sp });
+          this.emit({ type: 'saisie', id: c.id, sp: c.sp, ...(p.id !== undefined ? { pid: p.id } : {}) });
         }
         // Frapper puis s'éloigner (hyènes), recul après la charge (éléphant).
         const g = this.groups.get(c.group);
@@ -1918,7 +2011,7 @@ export class Fauna {
     this.grab = null;
     const c = this.creatures.get(gr.id);
     if (!c) return;
-    this.emit({ type: 'lache', id: c.id, sp: c.sp, reason });
+    this.emit({ type: 'lache', id: c.id, sp: c.sp, reason, ...(gr.pid !== undefined ? { pid: gr.pid } : {}) });
     c.cooldown = SPECIES[c.sp].attack!.cooldown + 4;
     if (c.sp === 'ombre') {
       this.setMode(c, reason === 'temps' ? 'cercle' : 'repli');

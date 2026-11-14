@@ -3,6 +3,7 @@
 // matériau et l'outil, feu, effondrement. Données simples, sérialisables et déterministes :
 // le serveur de l'hôte fera foi en phase 8. Aucune dépendance au moteur physique ni à l'affichage.
 
+import { type Owned, readOwned } from './permissions';
 import { WATER_LEVEL } from './constants';
 import { ITEMS, type ItemId, type ToolTag } from './items';
 import { FRAMES, type FrameKind } from './vehicles';
@@ -634,7 +635,7 @@ export interface Piece {
   support: number;
 }
 
-export interface Structure {
+export interface Structure extends Owned {
   id: string;
   x: number;
   y: number;
@@ -646,7 +647,7 @@ export interface Structure {
 }
 
 /** Chantier d'installation (coffre, établi, puits, fourneau, forge), posé librement. */
-export interface InstallSite {
+export interface InstallSite extends Owned {
   id: string;
   plan: PlanId;
   x: number;
@@ -1396,7 +1397,7 @@ export class BuildState {
       for (const so of r.structures.slice(0, 2000)) {
         const o = so as Record<string, unknown>;
         if (typeof o?.id !== 'string' || !num(o.x, 9000) || !num(o.y, 5000) || !num(o.z, 9000) || !num(o.yaw, 100)) continue;
-        const s: Structure = { id: o.id, x: o.x, y: o.y, z: o.z, yaw: o.yaw, pieces: [], nextId: int(o.nextId) ? o.nextId : 1 };
+        const s: Structure = { id: o.id, x: o.x, y: o.y, z: o.z, yaw: o.yaw, pieces: [], nextId: int(o.nextId) ? o.nextId : 1, ...readOwned(o) };
         const seen = new Set<string>();
         if (Array.isArray(o.pieces)) {
           for (const po of o.pieces.slice(0, 5000)) {
@@ -1438,7 +1439,7 @@ export class BuildState {
         const step = int(o.step, 100) ? Math.max(0, Math.min(PLANS[plan].steps.length - 1, o.step)) : 0;
         const onRaw = o.on as Record<string, unknown> | null;
         const on = onRaw && typeof onRaw.s === 'string' && int(onRaw.p) ? { s: onRaw.s, p: onRaw.p } : null;
-        this.sites.push({ id: o.id, plan, x: o.x, y: o.y, z: o.z, yaw: o.yaw, step, on });
+        this.sites.push({ id: o.id, plan, x: o.x, y: o.y, z: o.z, yaw: o.yaw, step, on, ...readOwned(o) });
       }
     }
     const next = r.next as unknown[];

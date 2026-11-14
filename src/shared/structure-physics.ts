@@ -12,7 +12,7 @@ export class StructurePhysics {
   private colliders: RAPIER.Collider[] = [];
   private readonly byHandle = new Map<number, { s: string; p: number }>();
   private builtVersion = -1;
-  private center = { x: Number.NaN, z: Number.NaN };
+  private centers: Array<{ x: number; z: number }> = [];
 
   constructor(
     private readonly phys: PhysicsWorld,
@@ -30,14 +30,20 @@ export class StructurePhysics {
 
   /** Reconstruit les collisions si les constructions ont changé ou si le joueur s'est éloigné. */
   sync(x: number, z: number, radius = 120): void {
-    const moved = !(Math.hypot(x - this.center.x, z - this.center.z) < radius / 3);
+    this.syncMany([{ x, z }], radius);
+  }
+
+  /** Même chose autour de plusieurs joueurs (phase 8) : les pièces proches de l'un d'eux ont leurs collisions. */
+  syncMany(points: ReadonlyArray<{ x: number; z: number }>, radius = 120): void {
+    const moved = points.length !== this.centers.length || points.some((q, i) => !(Math.hypot(q.x - this.centers[i]!.x, q.z - this.centers[i]!.z) < radius / 3));
     if (this.builtVersion === this.bs.version && !moved) return;
     this.clear();
-    this.center = { x, z };
+    this.centers = points.map((q) => ({ x: q.x, z: q.z }));
     this.builtVersion = this.bs.version;
+    const near = (sx: number, sz: number) => this.centers.some((c) => Math.hypot(sx - c.x, sz - c.z) <= radius);
     const world = this.phys.world;
     for (const s of this.bs.structures) {
-      if (Math.hypot(s.x - x, s.z - z) > radius) continue;
+      if (!near(s.x, s.z)) continue;
       for (const p of s.pieces) {
         if (!isDone(p)) continue;
         const ladder = PLANS[p.plan].piece === 'echelle';

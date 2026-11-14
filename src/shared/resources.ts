@@ -176,6 +176,12 @@ export class WorldState {
   /** Augmente quand un arbre tombe ou repousse (affichage et physique à refaire). */
   version = 0;
 
+  /** Oublie tout (copie chez un joueur distant, avant de recevoir l'état de l'hôte). */
+  reset(): void {
+    this.nodes.clear();
+    this.trees.clear();
+  }
+
   nodeLeft(id: string, kind: NodeKind, now: number): number {
     const spec = NODE_SPECS[kind];
     const u = this.nodes.get(id);

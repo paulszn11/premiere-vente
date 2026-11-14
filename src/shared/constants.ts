@@ -5,7 +5,7 @@ export const GAME_NAME = 'Bienvenue au Zimbabwe';
 export const GAME_VERSION = '0.7.1';
 
 /** Version du protocole réseau. Un client et un serveur de versions différentes refusent de se parler. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 /** Version du format de sauvegarde. */
 export const SAVE_FORMAT_VERSION = 1;
 

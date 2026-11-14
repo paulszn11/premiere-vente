@@ -3,6 +3,7 @@
 // types de véhicules et composants) ; les chiffres sont modifiables. La physique (roues, flottaison)
 // est dans vehicle-physics.ts ; tout l'état d'un véhicule tient dans des données sauvegardées.
 
+import { type Owned, readOwned } from './permissions';
 import type { Need } from './building';
 import { WATER_LEVEL } from './constants';
 import { type Container, bagContentMass, readContainer } from './inventory';
@@ -300,7 +301,7 @@ export interface EngineState {
   water: number;
 }
 
-export interface VehicleState {
+export interface VehicleState extends Owned {
   id: string;
   frame: FrameKind;
   x: number;
@@ -633,6 +634,7 @@ export function readVehicles(raw: unknown): VehicleState[] {
     if (e && typeof e === 'object') v.engine = { fuel: num(e.fuel, 0, ENGINE.maxFuel, 0), lit: e.lit === true, heat: num(e.heat, 0, 1, 0), pressure: num(e.pressure, 0, 1, 0), water: num(e.water, 0, ENGINE.water, 0) };
     v.cargo = readContainer(o.cargo);
     if (!v.cargo.bag) v.cargo.bag = [];
+    Object.assign(v, readOwned(o));
     ids.add(v.id);
     out.push(v);
   }

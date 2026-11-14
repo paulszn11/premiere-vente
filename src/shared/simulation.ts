@@ -3,7 +3,7 @@
 // blessures, soins), son inventaire, la mort, le corps laissé dans le monde et la réapparition.
 // En phase 8, cette même logique tournera sur le serveur de l'hôte et le client prédira.
 
-import type { ActionResult, BuildRef, FurnaceOp, HandOrSlot, MachineOp, PieceOp, PlayerAction, VehicleOp } from './actions';
+import type { AccessRef, ActionResult, BuildRef, FurnaceOp, HandOrSlot, MachineOp, PieceOp, PlayerAction, VehicleOp } from './actions';
 import {
   type BuildTarget,
   BuildState,
@@ -97,6 +97,7 @@ import {
   BTN_SPRINT,
   MODE_CLIMB,
   type InputCmd,
+  BTN_THROW,
   MODE_SWIM,
   MODE_WALK,
   type MoveState,
@@ -105,9 +106,11 @@ import {
   R_NO_JUMP,
   R_NO_SPRINT,
   R_NO_THROW,
+  cloneState,
   copyState,
   drainStamina,
   makeState,
+  positionError,
   quantizeInput,
   regenStamina,
   stepMovement,
@@ -149,6 +152,7 @@ import {
 } from './vehicles';
 import { GROUP_OBSTACLE, GROUP_TERRAIN, GROUP_VEHICLE, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
+import type { Access, Owned, Use } from './permissions';
 import { type FireState, type FurnaceState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
@@ -304,20 +308,79 @@ const ATTACK_VERB: Partial<Record<SpeciesId, string>> = {
   ombre: 'vous saisit',
 };
 
-/** Sauvegarde de la partie (solo pour l'instant ; l'hôte en phase 8). */
+/** Ce qu'on garde d'un joueur : position, corps, sac, carnet (phase 8 : aussi les joueurs absents). */
+export interface PlayerSave {
+  x: number;
+  y: number;
+  z: number;
+  vitals: Vitals;
+  inventory: Inventory;
+  respawn: SpawnPoint | null;
+  lastBody: { id: string; x: number; z: number } | null;
+  knowledge: Knowledge;
+  /** Phase 8 : regard, point d'arrivée et pseudonyme. */
+  yaw?: number;
+  spawn?: SpawnPoint;
+  name?: string;
+}
+
+/** Ce qui appartient à un joueur (phase 8). Tout le reste de la simulation est le monde partagé. */
+export interface PlayerSlot {
+  readonly id: string;
+  name: string;
+  state: MoveState;
+  prev: MoveState;
+  spawn: SpawnPoint;
+  collider: RAPIER.Collider;
+  respawns: number;
+  deaths: number;
+  vitals: Vitals;
+  inventory: Inventory;
+  respawnPoint: SpawnPoint | null;
+  lastBody: { id: string; x: number; z: number } | null;
+  gesture: Gesture | null;
+  deadTime: number;
+  knowledge: Knowledge;
+  craft: { recipe: RecipeId; step: number } | null;
+  useCooldown: number;
+  extraSpent: number;
+  trappedIn: string | null;
+  driving: { v: string; mode: 'siege' | 'pousse' } | null;
+  lastDrive: DriveResult | null;
+  engineLoad: number;
+  effortW: number;
+  lastDrownEvent: number;
+  yaw: number;
+  pitch: number;
+  events: SimEvent[];
+  drive: DriveInput | null;
+  held: { id: string; mode: 'carry' | 'drag' } | null;
+  /** Commande du prochain pas (un joueur distant garde la dernière reçue). */
+  cmd: InputCmd;
+  /** Numéro de la dernière commande appliquée (accusé pour la prédiction du client). */
+  lastSeq: number;
+  /** Déconnecté : le personnage reste endormi un moment dans le monde. */
+  away: boolean;
+  /** Protégé (absent dans sa base, selon les règles de l'hôte) : les créatures l'ignorent, on ne peut pas le blesser. */
+  shielded: boolean;
+}
+
+/** Champs propres au joueur, échangés quand la simulation passe d'un joueur à l'autre. */
+const SLOT_KEYS = [
+  'state', 'prev', 'spawn', 'collider', 'respawns', 'deaths', 'vitals', 'inventory', 'respawnPoint', 'lastBody', 'gesture', 'deadTime',
+  'knowledge', 'craft', 'useCooldown', 'extraSpent', 'trappedIn', 'driving', 'lastDrive', 'engineLoad', 'effortW', 'lastDrownEvent', 'yaw',
+  'pitch', 'events', 'drive',
+] as const;
+
+const IDLE_CMD: InputCmd = { seq: 0, wx: 0, wz: 0, yaw: 0, pitch: 0, buttons: 0 };
+
+/** Sauvegarde de la partie (solo, et monde partagé chez l'hôte en phase 8). */
 export interface SimSave {
   version: 1;
   time: number;
-  player: {
-    x: number;
-    y: number;
-    z: number;
-    vitals: Vitals;
-    inventory: Inventory;
-    respawn: SpawnPoint | null;
-    lastBody: { id: string; x: number; z: number } | null;
-    knowledge: Knowledge;
-  };
+  player: PlayerSave;
+  /** Phase 8 : les autres joueurs (présents ou absents), par identifiant. */
+  others?: Record<string, PlayerSave>;
   props: ReturnType<PropSystem['serialize']>;
   world: ReturnType<WorldState['serialize']>;
   /** Constructions (phase 5) ; absentes des anciennes sauvegardes. */
@@ -342,6 +405,9 @@ export interface SimulationOptions {
   creatureCap?: number;
   /** Faune active (par défaut : seulement dans un vrai monde, pas sur les terrains de test). */
   fauna?: boolean;
+  /** Phase 8 : identifiant et pseudonyme du joueur local (l'hôte). */
+  playerId?: string;
+  playerName?: string;
 }
 
 /** Secondes entre la mort et la réapparition. */
@@ -363,16 +429,85 @@ const PROP_ARTICLE = (kind: PropKind): string => propWithArticle(kind);
 const ok = (message?: string): ActionResult => (message ? { ok: true, message } : { ok: true });
 const fail = (message?: string): ActionResult => (message ? { ok: false, message } : { ok: false });
 
+/** Point valide dans le monde, ou null. */
+function readPoint(o: unknown): SpawnPoint | null {
+  const q = o as Record<string, unknown> | null;
+  if (!q || typeof q !== 'object') return null;
+  const { x, y, z } = q;
+  return typeof x === 'number' && typeof y === 'number' && typeof z === 'number' && [x, y, z].every(Number.isFinite) && Math.abs(x) < 8000 && Math.abs(z) < 8000 ? { x, y, z } : null;
+}
+
+interface ReadPlayer {
+  pos: SpawnPoint | null;
+  vitals: Vitals;
+  inventory: Inventory;
+  knowledge: Knowledge;
+  respawn: SpawnPoint | null;
+  lastBody: { id: string; x: number; z: number } | null;
+  yaw: number;
+  spawn: SpawnPoint | null;
+  name: string;
+}
+
+/** Relit (avec contrôle) ce qu'on garde d'un joueur ; null si ce n'est pas exploitable. */
+function readPlayerSave(raw: unknown, rng: number): ReadPlayer | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const p = raw as Record<string, unknown>;
+  const lb = p.lastBody as Record<string, unknown> | null;
+  return {
+    pos: readPoint(p),
+    vitals: readVitals(p.vitals, rng),
+    inventory: readInventory(p.inventory),
+    knowledge: readKnowledge(p.knowledge),
+    respawn: readPoint(p.respawn),
+    lastBody: lb && typeof lb === 'object' && typeof lb.id === 'string' && typeof lb.x === 'number' && typeof lb.z === 'number' ? { id: lb.id, x: lb.x, z: lb.z } : null,
+    yaw: typeof p.yaw === 'number' && Number.isFinite(p.yaw) ? p.yaw : 0,
+    spawn: readPoint(p.spawn),
+    name: typeof p.name === 'string' ? p.name.slice(0, 40) : '',
+  };
+}
+
+function toPlayerSave(r: ReadPlayer): PlayerSave {
+  const pos = r.pos ?? r.spawn ?? { x: 0, y: 0, z: 0 };
+  return { ...pos, vitals: r.vitals, inventory: r.inventory, respawn: r.respawn, lastBody: r.lastBody, knowledge: r.knowledge, yaw: r.yaw, ...(r.spawn ? { spawn: r.spawn } : {}), name: r.name };
+}
+
+/** Ce que l'hôte envoie au joueur distant sur lui-même (corps, sac, carnet, geste, conduite). */
+export interface SelfState {
+  vitals: Vitals;
+  inventory: Inventory;
+  knowledge: Knowledge;
+  gesture: Gesture | null;
+  craft: { recipe: RecipeId; step: number } | null;
+  driving: { v: string; mode: 'siege' | 'pousse' } | null;
+  trappedIn: string | null;
+  respawnPoint: SpawnPoint | null;
+  lastBody: { id: string; x: number; z: number } | null;
+  deadTime: number;
+  effortW: number;
+  lastDrive: DriveResult | null;
+  held: { id: string; mode: 'carry' | 'drag' } | null;
+  spawn: SpawnPoint;
+  /** Tenu par une créature. */
+  grab: boolean;
+}
+
+/** Lien d'une copie (joueur distant) vers l'hôte. */
+export interface ReplicaLink {
+  /** Une action du joueur part chez l'hôte, qui la valide et l'applique. */
+  act(a: PlayerAction): void;
+}
+
 export class LocalSimulation {
   readonly terrain: Terrain;
   readonly phys: PhysicsWorld;
   readonly props: PropSystem;
-  readonly state: MoveState;
+  state: MoveState;
   /** État avant le dernier pas, pour interpoler l'affichage. */
-  readonly prev: MoveState;
+  prev: MoveState;
   /** Point d'arrivée du joueur dans le monde. */
-  readonly spawn: SpawnPoint;
-  readonly events: SimEvent[] = [];
+  spawn: SpawnPoint;
+  events: SimEvent[] = [];
   tick = 0;
   respawns = 0;
   deaths = 0;
@@ -420,7 +555,7 @@ export class LocalSimulation {
   driving: { v: string; mode: 'siege' | 'pousse' } | null = null;
   /** Dernier pas du véhicule conduit (vitesse, effort) et puissance demandée à la machine (0 à 1). */
   lastDrive: DriveResult | null = null;
-  private engineLoad = 0;
+  engineLoad = 0;
   /** Chemin parcouru, choc le plus fort et secondes de propulsion depuis le dernier bilan d'usure. */
   private readonly vehicleUse = new Map<string, { dist: number; force: number; drive: number }>();
   /** Véhicule qui vient d'apparaître : il se pose, ses premiers contacts ne comptent pas comme des chocs. */
@@ -431,7 +566,32 @@ export class LocalSimulation {
   effortW = 0;
   /** Pose des véhicules avant le dernier pas (pour interpoler l'affichage). */
   readonly vehiclePrev = new Map<string, { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number }>();
-  private readonly collider: RAPIER.Collider;
+  private collider: RAPIER.Collider;
+  /** Conduite préparée pendant ce pas (appliquée par le pas physique commun). */
+  private drive: DriveInput | null = null;
+  /** Véhicules occupés par un conducteur assis pendant ce pas (masse). */
+  private seatedNow = new Set<string>();
+  /** Joueurs présents (phase 8) ; le joueur local (l'hôte) est le premier. */
+  readonly players = new Map<string, PlayerSlot>();
+  /** Joueurs absents : ce qu'on garde d'eux jusqu'à leur retour. */
+  readonly absent = new Map<string, PlayerSave>();
+  readonly local: PlayerSlot;
+  /** Joueur dont les champs sont chargés dans la simulation. */
+  private cur: PlayerSlot;
+  /** Phase 8 : copie du monde chez un joueur distant (l'hôte fait foi ; ses actions partent chez lui). */
+  replica: ReplicaLink | null = null;
+  /**
+   * Phase 8 : droits des joueurs (fournis par le serveur de l'hôte). Renvoie un refus, ou null si c'est permis.
+   * Absent (solo) : tout est permis.
+   */
+  permit: ((playerId: string, use: Use, owner?: string, access?: Access) => string | null) | null = null;
+  /** Copie : créatures vues par l'hôte, prise en cours. */
+  remoteCreatures: ReturnType<Fauna['views']> = [];
+  private remoteGrab = false;
+  /** Copie : commandes appliquées en attendant l'accusé de l'hôte (prédiction des pas). */
+  private readonly pending: Array<{ seq: number; cmd: InputCmd; after: MoveState }> = [];
+  /** Copie : corrections de position reçues de l'hôte (diagnostic). */
+  corrections = 0;
   private lastDrownEvent = -1e9;
   private yaw = 0;
   private pitch = 0;
@@ -487,6 +647,189 @@ export class LocalSimulation {
     this.structPhys.sync(start.x, start.z);
     this.phys.refresh();
     this.collider = this.phys.createPlayerCollider(start.x, start.y, start.z);
+    const me = this as unknown as Record<string, unknown>;
+    const local = { id: opts.playerId ?? 'local', name: opts.playerName ?? '', held: null, cmd: IDLE_CMD, lastSeq: 0, away: false, shielded: false } as Record<string, unknown>;
+    for (const k of SLOT_KEYS) local[k] = me[k];
+    this.local = local as unknown as PlayerSlot;
+    this.cur = this.local;
+    this.players.set(this.local.id, this.local);
+  }
+
+  // ——— Joueurs (phase 8) ———
+
+  private saveSlot(): void {
+    const sl = this.cur as unknown as Record<string, unknown>;
+    const me = this as unknown as Record<string, unknown>;
+    for (const k of SLOT_KEYS) sl[k] = me[k];
+    this.cur.held = this.props.held;
+  }
+
+  private loadSlot(slot: PlayerSlot): void {
+    const sl = slot as unknown as Record<string, unknown>;
+    const me = this as unknown as Record<string, unknown>;
+    for (const k of SLOT_KEYS) me[k] = sl[k];
+    this.props.held = slot.held;
+    this.cur = slot;
+    this.refreshHeldByOthers();
+  }
+
+  private refreshHeldByOthers(): void {
+    this.props.heldByOthers.clear();
+    for (const o of this.players.values()) {
+      const h = o === this.cur ? null : o.held;
+      if (h) this.props.heldByOthers.add(h.id);
+    }
+  }
+
+  /** Exécute fn avec ce joueur comme joueur courant (ses champs sont chargés dans la simulation). */
+  withPlayer<T>(slot: PlayerSlot, fn: () => T): T {
+    if (slot === this.cur) return fn();
+    const prev = this.cur;
+    this.saveSlot();
+    this.loadSlot(slot);
+    try {
+      return fn();
+    } finally {
+      this.saveSlot();
+      this.loadSlot(prev);
+    }
+  }
+
+  /** Valeur à jour d'un champ d'un joueur (celui qui est chargé a ses valeurs dans la simulation). */
+  private slotValue<K extends (typeof SLOT_KEYS)[number]>(sl: PlayerSlot, k: K): PlayerSlot[K] {
+    return sl === this.cur ? (this as unknown as PlayerSlot)[k] : sl[k];
+  }
+
+  /** Joueur assis aux commandes de ce véhicule, ou qui le pousse. */
+  private driverOf(vid: string): PlayerSlot | null {
+    for (const sl of this.players.values()) if (this.slotValue(sl, 'driving')?.v === vid) return sl;
+    return null;
+  }
+
+  /** La créature qui tient un joueur tient-elle le joueur courant ? */
+  private grabbedHere(): boolean {
+    const g = this.fauna.grab;
+    return !!g && (g.pid === undefined || g.pid === this.cur.id);
+  }
+
+  /** Identifiant du joueur courant. */
+  get playerId(): string {
+    return this.cur.id;
+  }
+
+  /**
+   * Ajoute un joueur : là où il s'était arrêté s'il revient (sauvegarde fournie, ou gardée parmi les absents),
+   * sinon à un endroit au hasard, loin des autres joueurs.
+   */
+  addPlayer(id: string, name: string, spawnSeed: number, save?: unknown): PlayerSlot {
+    const existing = this.players.get(id);
+    if (existing) {
+      existing.name = name;
+      existing.away = false;
+      existing.shielded = false;
+      return existing;
+    }
+    const others = [...this.players.values()].map((sl) => ({ x: sl.state.x, z: sl.state.z }));
+    const ps = readPlayerSave(save ?? this.absent.get(id), (spawnSeed ^ 0x5eed) >>> 0);
+    this.absent.delete(id);
+    const spawn = ps?.spawn ?? chooseSpawn(this.terrain, spawnSeed, others);
+    const start = ps?.pos ?? spawn;
+    this.phys.ensureAround([start], PHYS_CHUNK_RADIUS, this.tick);
+    this.phys.refresh();
+    const slot: PlayerSlot = {
+      id,
+      name,
+      state: makeState(start.x, start.y, start.z),
+      prev: makeState(start.x, start.y, start.z),
+      spawn,
+      collider: this.phys.createPlayerCollider(start.x, start.y, start.z),
+      respawns: 0,
+      deaths: 0,
+      vitals: ps?.vitals ?? makeVitals((spawnSeed ^ 0x5eed) >>> 0),
+      inventory: ps?.inventory ?? makeInventory(true),
+      respawnPoint: ps?.respawn ?? null,
+      lastBody: ps?.lastBody ?? null,
+      gesture: null,
+      deadTime: 0,
+      knowledge: ps?.knowledge ?? makeKnowledge(),
+      craft: null,
+      useCooldown: 0,
+      extraSpent: 0,
+      trappedIn: null,
+      driving: null,
+      lastDrive: null,
+      engineLoad: 0,
+      effortW: 0,
+      lastDrownEvent: -1e9,
+      yaw: ps?.yaw ?? 0,
+      pitch: 0,
+      events: [],
+      drive: null,
+      held: null,
+      cmd: { ...IDLE_CMD, yaw: ps?.yaw ?? 0 },
+      lastSeq: 0,
+      away: false,
+      shielded: false,
+    };
+    this.players.set(id, slot);
+    return slot;
+  }
+
+  /** Retire un joueur du monde (il est gardé parmi les absents) ; renvoie ce qu'on garde de lui. */
+  removePlayer(id: string): PlayerSave | null {
+    const sl = this.players.get(id);
+    if (!sl || sl === this.local) return null;
+    const save = this.withPlayer(sl, () => {
+      this.leaveVehicle(null);
+      if (this.props.held) this.props.drop(this.state);
+      return this.playerSave();
+    });
+    if (this.fauna.grab?.pid === id) this.fauna.release('temps');
+    this.phys.removeCollider(sl.collider);
+    this.players.delete(id);
+    this.refreshHeldByOthers();
+    this.absent.set(id, save);
+    return save;
+  }
+
+  /** Commande d'un joueur distant pour les prochains pas. */
+  setInput(id: string, cmd: InputCmd): void {
+    const sl = this.players.get(id);
+    if (sl) sl.cmd = cmd;
+  }
+
+  /** Lit et vide les événements d'un joueur. */
+  takePlayerEvents(id: string): SimEvent[] {
+    const sl = this.players.get(id);
+    if (!sl) return [];
+    if (sl === this.cur) return this.takeEvents();
+    return sl.events.splice(0, sl.events.length);
+  }
+
+  /** Action d'un joueur (validée par le serveur de l'hôte). */
+  actAs(id: string, a: PlayerAction): ActionResult {
+    const sl = this.players.get(id);
+    if (!sl) return fail();
+    return this.withPlayer(sl, () => this.act(a));
+  }
+
+  /** Ce qu'on garde du joueur courant (mort : il reprendra à son point de réapparition). */
+  private playerSave(): PlayerSave {
+    const s = this.state;
+    let pos = { x: s.x, y: s.y, z: s.z };
+    let vitals = this.vitals;
+    if (this.dead) {
+      const t = this.respawnTarget.point;
+      pos = { x: t.x, y: t.y + 0.15, z: t.z };
+      vitals = makeVitals(this.vitals.rng);
+      vitals.health = VITALS.respawn.health;
+      vitals.energy = VITALS.respawn.energy;
+      vitals.fatigue = VITALS.respawn.fatigue;
+    }
+    // Aux commandes d'un véhicule : on reprendra la partie à côté de lui.
+    const dv = this.driving ? this.vehicle(this.driving.v) : undefined;
+    if (dv && this.driving?.mode === 'siege' && !this.dead) pos = this.exitPoint(dv);
+    return { ...pos, vitals, inventory: this.inventory, respawn: this.respawnPoint, lastBody: this.lastBody, knowledge: this.knowledge, yaw: this.yaw, spawn: this.spawn, name: this.cur.name };
   }
 
   get dead(): boolean {
@@ -495,6 +838,8 @@ export class LocalSimulation {
 
   private push(e: SimEvent): void {
     this.events.push(e);
+    // Les sons des créatures et des combats sont entendus par tous les joueurs (spatialisés par l'affichage).
+    if (e.type === 'son' && this.players.size > 1) for (const sl of this.players.values()) if (sl !== this.cur) sl.events.push(e);
   }
 
   private msg(text: string, tone: Tone = 'info'): void {
@@ -523,31 +868,69 @@ export class LocalSimulation {
     if (s.stamina > s.staminaMax) s.stamina = s.staminaMax;
   }
 
-  /** Fait avancer le monde d'un pas avec la commande du joueur. */
+  /**
+   * Fait avancer le monde d'un pas avec la commande du joueur local. Phase 8 : chaque joueur présent
+   * avance avec sa dernière commande, puis le monde (physique, faune, feux…) avance une seule fois.
+   */
   step(cmd: InputCmd): void {
+    if (this.replica) {
+      this.replicaStep(cmd);
+      return;
+    }
+    this.local.cmd = cmd;
+    const slots = [...this.players.values()];
+    const points = slots.map((sl) => sl.state);
+    this.phys.ensureAround(points, PHYS_CHUNK_RADIUS, this.tick);
+    if (slots.length === 1) this.structPhys.sync(this.state.x, this.state.z);
+    else this.structPhys.syncMany(points);
+    if (this.tick % 120 === 0) this.phys.unloadUnused(this.tick, 600);
+    this.time += TICK_DT;
+    for (const sl of slots) this.withPlayer(sl, () => this.stepPlayer(sl.cmd));
+    this.physicsStep();
+    for (const sl of slots) this.withPlayer(sl, () => this.afterDrive());
+    this.applyImpacts();
+    this.stepFauna();
+    if (this.tick % 6 === 3) this.separateCreaturesFromVehicles();
+    if (this.tick % 30 === 0) this.props.rescueFallen();
+    if (this.tick % 15 === 0) this.stepCollapse();
+    if (this.tick % 30 === 0) {
+      this.stepFires(30 * TICK_DT);
+      this.stepFurnaces(30 * TICK_DT);
+      this.stepBuildFire(30 * TICK_DT);
+      this.stepVehicles(30 * TICK_DT);
+      this.stepMachines(30 * TICK_DT);
+    }
+    if (this.tick % 600 === 0) {
+      this.cleanupBodies();
+      for (const c of this.world.regrow(this.time)) this.phys.rebuildChunk(c.cx, c.cz);
+    }
+    for (const sl of slots) {
+      const ev = this.slotValue(sl, 'events');
+      if (ev.length > 80) ev.splice(0, ev.length - 80);
+    }
+    this.tick++;
+  }
+
+  /** Pas du joueur courant : corps, commandes, déplacement, gestes (le monde avance ensuite). */
+  private stepPlayer(cmd: InputCmd): void {
     const q = quantizeInput(cmd);
     const s = this.state;
     const v = this.vitals;
     copyState(this.prev, s);
-    this.phys.ensureAround([s], PHYS_CHUNK_RADIUS, this.tick);
-    this.structPhys.sync(s.x, s.z);
-    if (this.tick % 120 === 0) this.phys.unloadUnused(this.tick, 600);
-    this.time += TICK_DT;
+    this.cur.lastSeq = cmd.seq;
     this.yaw = q.yaw;
     this.pitch = q.pitch;
 
     if (v.state === 'mort') {
       this.deadTime += TICK_DT;
-      this.physicsStep(null);
       if (this.deadTime >= RESPAWN_DELAY) this.respawnAfterDeath();
-      this.tick++;
       return;
     }
 
     this.applyLimits();
     // Tenu par une créature ou pris dans un piège : on ne se déplace plus ; on se débat.
-    const held = this.fauna.grab !== null || this.trappedIn !== null;
-    if (this.fauna.grab && v.state === 'eveille' && (q.buttons & ~s.prevButtons & (BTN_INTERACT | BTN_JUMP)) !== 0) this.fauna.struggle();
+    const held = this.grabbedHere() || this.trappedIn !== null;
+    if (this.grabbedHere() && v.state === 'eveille' && (q.buttons & ~s.prevButtons & (BTN_INTERACT | BTN_JUMP)) !== 0) this.fauna.struggle();
     // Bouger interrompt un geste, fait se lever ou réveille.
     const wantsMove = !held && (q.wx * q.wx + q.wz * q.wz > 0.01 || (q.buttons & BTN_JUMP) !== 0);
     if (wantsMove && v.state === 'eveille') {
@@ -566,7 +949,7 @@ export class LocalSimulation {
     }
     let c = q;
     if (v.state !== 'eveille' || v.posture !== 'debout') c = { ...q, wx: 0, wz: 0, buttons: BTN_CROUCH };
-    else if (this.fauna.grab) c = { ...q, wx: 0, wz: 0, buttons: 0 };
+    else if (this.grabbedHere()) c = { ...q, wx: 0, wz: 0, buttons: 0 };
     else if (this.trappedIn) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_INTERACT };
     else if (this.gesture) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_CROUCH };
 
@@ -626,7 +1009,9 @@ export class LocalSimulation {
           this.push({ type: 'machine', prop: t.id, tick: this.tick });
         } else if (t && (t.kind === 'sac' || t.kind === 'corps' || t.kind === 'foyer' || t.kind === 'coffre' || t.kind === 'forge' || t.kind === 'fourneau' || t.kind === 'etabli')) {
           propPressed &= ~BTN_INTERACT;
-          this.push({ type: 'ouvrir', prop: t.id, tick: this.tick });
+          const deny = this.denied('ouvrir', this.props.defOf(t.id) ?? undefined);
+          if (deny) this.msg(deny, 'alerte');
+          else this.push({ type: 'ouvrir', prop: t.id, tick: this.tick });
         } else if (t && t.kind === 'touffe_herbe') {
           // Les herbes sèches s'arrachent à la main.
           propPressed &= ~BTN_INTERACT;
@@ -649,16 +1034,8 @@ export class LocalSimulation {
         this.props.refusal = null;
       }
       stepMovement(this.phys, this.collider, s, c, TICK_DT);
-      this.physicsStep(null);
     }
-    this.applyImpacts();
-    this.stepFauna();
-    if (this.tick % 6 === 3) this.separateCreaturesFromVehicles();
-    if (this.dead) {
-      this.tick++;
-      return;
-    }
-    if (this.tick % 30 === 0) this.props.rescueFallen();
+    if (this.dead) return;
 
     if (s.impactSeverity > 0) {
       const before = v.state;
@@ -674,7 +1051,6 @@ export class LocalSimulation {
       });
       if (this.dead) {
         this.onDeath();
-        this.tick++;
         return;
       }
       if (before === 'eveille' && v.state === 'inconscient') this.onVital({ type: 'inconscient', reason: 'commotion' });
@@ -690,26 +1066,9 @@ export class LocalSimulation {
     this.extraSpent = 0;
     if (this.useCooldown > 0) this.useCooldown = Math.max(0, this.useCooldown - TICK_DT);
     for (const e of out) this.onVital(e);
-    if (this.dead) {
-      this.tick++;
-      return;
-    }
+    if (this.dead) return;
     this.stepGesture();
-    if (this.tick % 15 === 0) this.stepCollapse();
-    if (this.tick % 30 === 0) {
-      this.stepFires(30 * TICK_DT);
-      this.stepFurnaces(30 * TICK_DT);
-      this.stepBuildFire(30 * TICK_DT);
-      this.stepVehicles(30 * TICK_DT);
-      this.stepMachines(30 * TICK_DT);
-    }
-    if (this.tick % 600 === 0) {
-      this.cleanupBodies();
-      for (const c of this.world.regrow(this.time)) this.phys.rebuildChunk(c.cx, c.cz);
-    }
     if (s.y < KILL_Y || !Number.isFinite(s.x + s.y + s.z)) this.respawn();
-    if (this.events.length > 80) this.events.splice(0, this.events.length - 80);
-    this.tick++;
   }
 
   private onVital(e: VitalEvent): void {
@@ -1061,7 +1420,88 @@ export class LocalSimulation {
   // ——— Actions du joueur ———
 
   /** Applique une action ponctuelle (sac, soins, repos…). */
+  /** Refus de ce que veut faire le joueur courant sur cette chose (null : permis). */
+  private denied(use: Use, o?: Owned): string | null {
+    return this.permit ? this.permit(this.cur.id, use, o?.owner, o?.access) : null;
+  }
+
+  /** Propriétaire d'une pièce ou d'un chantier. */
+  private ownedRef(ref: BuildRef): Owned | undefined {
+    return ref.kind === 'site' ? this.build.sites.find((x) => x.id === ref.id) : this.build.structure(ref.s);
+  }
+
+  /** Droits nécessaires pour une action (phase 8). */
+  private actionDenied(a: PlayerAction): string | null {
+    const prop = (id: string) => this.props.defOf(id) ?? undefined;
+    switch (a.type) {
+      case 'planifier':
+        return this.denied('construire');
+      case 'chantier':
+        return this.denied('construire');
+      case 'annuler_chantier':
+        return this.denied('demonter', this.ownedRef(a.target));
+      case 'piece': {
+        const st = this.build.structure(a.s);
+        if (a.op === 'demonter') return this.denied('demonter', st);
+        if (a.op === 'porte') return this.denied('ouvrir', st);
+        if (a.op === 'reparer' || a.op === 'torchis') return this.denied('construire');
+        return null;
+      }
+      case 'prendre_dans':
+      case 'tout_prendre':
+      case 'deposer_dans':
+      case 'prendre_sac':
+      case 'trainer':
+      case 'allumer':
+      case 'alimenter':
+      case 'poser_feu':
+      case 'reprendre_feu':
+      case 'fourneau':
+      case 'machine':
+        return this.denied('ouvrir', prop(a.prop) ?? this.vehicle(a.prop));
+      case 'vehicule': {
+        const v = this.vehicle(a.v);
+        if (a.op === 'monter' || a.op === 'pousser') return this.denied('conduire', v);
+        if (a.op === 'retirer') return this.denied('demonter', v);
+        if (a.op === 'descendre') return null;
+        return this.denied('ouvrir', v);
+      }
+      case 'acces': {
+        const o = this.accessTarget(a.target);
+        if (!o) return 'Introuvable.';
+        return o.owner && o.owner !== this.cur.id ? this.denied('gerer') : null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  private accessTarget(t: AccessRef): Owned | undefined {
+    if (t.kind === 'structure') return this.build.structure(t.s);
+    if (t.kind === 'vehicule') return this.vehicle(t.v);
+    return this.props.defOf(t.prop) ?? undefined;
+  }
+
+  /** Le propriétaire règle l'accès d'une construction, d'une installation ou d'un véhicule. */
+  private setAccess(t: AccessRef, access: Access): ActionResult {
+    const o = this.accessTarget(t);
+    if (!o) return fail('Introuvable.');
+    o.access = access;
+    if (t.kind === 'structure') this.build.touch();
+    return ok(`Accès : ${access === 'prive' ? 'privé' : access === 'public' ? 'public' : 'partagé'}.`);
+  }
+
   act(a: PlayerAction): ActionResult {
+    if (this.replica) {
+      // Copie chez un joueur distant : l'hôte valide et applique ; son verdict revient en message.
+      this.replica.act(a);
+      return ok();
+    }
+    if (this.permit) {
+      const deny = this.actionDenied(a);
+      if (deny) return fail(deny);
+    }
+    if (a.type === 'acces') return this.setAccess(a.target, a.access);
     const v = this.vitals;
     const s = this.state;
     const inv = this.inventory;
@@ -1464,7 +1904,7 @@ export class LocalSimulation {
     if (s.mode === MODE_CLIMB || this.vitals.state !== 'eveille') return null;
     const h = this.heldItem();
     // Phase 6 : tenu par une créature, pris dans un piège, créature visée, carcasse, piège.
-    if (this.fauna.grab) return { action: 'frapper pour vous libérer (ou débattez-vous)', ready: this.useCooldown <= 0, interact: false };
+    if (this.grabbedHere()) return { action: 'frapper pour vous libérer (ou débattez-vous)', ready: this.useCooldown <= 0, interact: false };
     if (this.trappedIn) return { action: this.props.defOf(this.trappedIn)?.kind === 'fosse' ? 'sortir de la fosse' : 'dégager votre pied', ready: true, interact: true };
     if (this.driving) return { action: this.driving.mode === 'pousse' ? 'lâcher les brancards' : 'descendre', ready: true, interact: true };
     const heldTool = h ? ITEMS[h.item].tool : undefined;
@@ -2297,7 +2737,15 @@ export class LocalSimulation {
     if (s.mode !== MODE_WALK || !s.grounded) return fail('Il faut avoir les pieds au sol pour tracer un plan.');
     const pl = this.build.placement({ plan, aim, yaw: this.yaw, turn, onPiece: on, player: { x: s.x, y: s.y, z: s.z } });
     if (!pl.ok) return fail(pl.reason ?? 'Impossible ici.');
-    this.build.apply(pl);
+    const made = this.build.apply(pl);
+    // Phase 8 : le chantier (et la construction qu'il commence) appartient à qui l'a tracé.
+    if (made && 'site' in made) {
+      const site = this.build.sites.find((x) => x.id === made.site);
+      if (site && !site.owner) site.owner = this.cur.id;
+    } else if (made) {
+      const st = this.build.structure(made.s);
+      if (st && !st.owner) st.owner = this.cur.id;
+    }
     return ok(`Plan tracé : ${PLANS[plan].label.toLowerCase()}. Apportez les matériaux (sur vous ou posés à côté), puis « Utiliser » sur le chantier.`);
   }
 
@@ -2361,6 +2809,8 @@ export class LocalSimulation {
         y = site.y > WATER_LEVEL + 0.05 ? top - f.hull!.bottom + 0.04 : WATER_LEVEL + 0.12;
       }
       const made = makeVehicle(`veh${this.nextVehicle++}`, def.vehicle, site.x, y, site.z, site.yaw);
+      if (site.owner) made.owner = site.owner;
+      if (site.access) made.access = site.access;
       this.vehicles.push(made);
       this.settle.set(made.id, this.time + 2);
       this.build.removeSite(site.id);
@@ -2379,6 +2829,8 @@ export class LocalSimulation {
       ...itemShape(kind),
       fixed: true,
       ...(site.on ? { on: { ...site.on } } : {}),
+      ...(site.owner ? { owner: site.owner } : {}),
+      ...(site.access ? { access: site.access } : {}),
     };
     if (kind === 'coffre') prop.container = { pockets: [], bag: [] };
     if (kind === 'forge') prop.fire = { lit: false, fuel: 0, pot: null, cook: 0 };
@@ -2414,6 +2866,8 @@ export class LocalSimulation {
     const s = this.build.structure(sid);
     const p = s?.pieces.find((q) => q.id === pid);
     if (!s || !p || PLANS[p.plan].piece !== 'porte' || !isDone(p)) return fail();
+    const deny = this.denied('ouvrir', s);
+    if (deny) return fail(deny);
     if (!this.nearCenter(pieceTransform(s, p.slot))) return fail('Trop loin de la porte.');
     if (p.open) {
       // Ne pas refermer le battant sur soi.
@@ -2847,6 +3301,7 @@ export class LocalSimulation {
     const weapon = tool && (tool.tags.includes('pointe') || tool.tags.includes('hache') || (tool.tags.includes('tranchant') && tool.reach >= 0.3)) ? Math.min(1, 0.5 + tool.power * 0.3) : 0;
     const meat = countOf(this.inventory, 'viande_crue') + countOf(this.inventory, 'viande_cuite') > 0 || h?.item === 'viande_crue' || h?.item === 'viande_cuite';
     return {
+      id: this.cur.id,
       x: s.x,
       y: s.y,
       z: s.z,
@@ -2916,14 +3371,24 @@ export class LocalSimulation {
     if (!this.fauna.enabled) return;
     if (this.tick % 30 === 0) this.refreshFaunaEnv();
     this.stepProjectiles();
-    this.fauna.step(TICK_DT, this.time, this.faunaPlayer(), this.faunaEnv);
+    const watched: FaunaPlayer[] = [];
+    for (const sl of this.players.values()) if (!sl.shielded) watched.push(this.withPlayer(sl, () => this.faunaPlayer()));
+    this.fauna.step(TICK_DT, this.time, watched, this.faunaEnv);
     for (const e of this.fauna.takeEvents()) {
-      this.onFaunaEvent(e);
-      if (this.dead) return;
+      const pid = 'pid' in e ? e.pid : undefined;
+      const target = pid !== undefined ? this.players.get(pid) : undefined;
+      if (pid !== undefined && !target) continue;
+      this.withPlayer(target ?? this.local, () => this.onFaunaEvent(e));
     }
-    this.applyGrab();
-    this.separateFromCreatures();
-    if (this.tick % 6 === 0) this.stepPlayerTraps();
+    const gr = this.fauna.grab;
+    const held = gr ? (gr.pid !== undefined ? this.players.get(gr.pid) : this.local) : undefined;
+    if (held) this.withPlayer(held, () => this.applyGrab());
+    for (const sl of this.players.values()) {
+      this.withPlayer(sl, () => {
+        this.separateFromCreatures();
+        if (this.tick % 6 === 0) this.stepPlayerTraps();
+      });
+    }
     if (this.tick % 60 === 0) this.stepCarcasses();
     if (this.tick % 60 === 30) this.stepTrappedCreatures();
   }
@@ -3072,7 +3537,7 @@ export class LocalSimulation {
   /** On ne traverse pas une créature : elle repousse le joueur. */
   private separateFromCreatures(): void {
     const s = this.state;
-    if (this.fauna.grab) return;
+    if (this.grabbedHere()) return;
     const nb = this.fauna.nearestBody(s.x, s.y + 0.9, s.z);
     if (!nb || nb.d >= 0.3) return;
     const c = this.fauna.creatures.get(nb.id);
@@ -3484,14 +3949,23 @@ export class LocalSimulation {
   }
 
   /** Un pas de physique : forces et commandes des véhicules, monde, puis position des véhicules. */
-  private physicsStep(input: DriveInput | null): void {
-    const driven = this.driving?.v ?? null;
+  /** Pas physique commun : véhicules (avec la conduite préparée par chaque joueur), objets, constructions. */
+  private physicsStep(): void {
+    const drives = new Map<string, { input: DriveInput | null; slot: PlayerSlot }>();
+    const seated = new Set<string>();
+    for (const sl of this.players.values()) {
+      const d = this.slotValue(sl, 'driving');
+      if (!d) continue;
+      drives.set(d.v, { input: this.slotValue(sl, 'drive'), slot: sl });
+      if (d.mode === 'siege') seated.add(d.v);
+    }
+    this.seatedNow = seated;
     this.vphys.time = this.time;
     if (this.tick % 30 === 0 || this.vphys.wind.speed === 0) this.vphys.wind = this.wind();
     if (this.vehicles.length) {
       // Seul un conducteur assis pèse sur le véhicule (pas celui qui pousse à pied).
-      this.vphys.sync(this.vehicles, this.driving?.mode === 'siege' ? driven : null);
-      for (const v of this.vehicles) if (this.vphys.has(v.id)) this.vphys.preStep(v, v.id === driven ? input : null, TICK_DT);
+      this.vphys.sync(this.vehicles, seated);
+      for (const v of this.vehicles) if (this.vphys.has(v.id)) this.vphys.preStep(v, drives.get(v.id)?.input ?? null, TICK_DT);
     }
     this.phys.step(TICK_DT);
     this.vphys.loads.clear();
@@ -3501,12 +3975,17 @@ export class LocalSimulation {
       const x0 = v.x;
       const y0 = v.y;
       const z0 = v.z;
-      const r = this.vphys.postStep(v, v.id === driven ? input : null);
-      if (v.id === driven) this.lastDrive = r;
+      const dr = drives.get(v.id);
+      const input = dr?.input ?? null;
+      const r = this.vphys.postStep(v, input);
+      if (dr) {
+        if (dr.slot === this.cur) this.lastDrive = r;
+        else dr.slot.lastDrive = r;
+      }
       if (r.dist < 0.0005) continue;
       const u = this.useOf(v.id);
       u.dist += r.dist;
-      if (v.id === driven && input && input.throttle !== 0 && waterDrive(v) && enginePower(v) > 0) u.drive += TICK_DT;
+      if (dr && input && input.throttle !== 0 && waterDrive(v) && enginePower(v) > 0) u.drive += TICK_DT;
       if (r.speed > 2.5 && FRAMES[v.frame].medium === 'terre' && this.fauna.enabled) this.vehicleHits(v, { x: x0, y: y0, z: z0 }, r.speed);
     }
   }
@@ -3523,7 +4002,7 @@ export class LocalSimulation {
     this.vehicleHitAt.set(key, this.time);
     const c = this.fauna.creatures.get(hit.id);
     if (!c) return;
-    const mass = massProps(v, this.driving?.v === v.id).mass;
+    const mass = massProps(v, this.seatedNow.has(v.id)).mass;
     const ke = 0.5 * mass * speed * speed;
     const res = this.fauna.hurt(hit.id, Math.min(220, ke * 0.03), hit.part, { bleed: false, by: 'joueur', x: v.x, z: v.z });
     this.vphys.damp(v.id, 0.55);
@@ -3601,7 +4080,7 @@ export class LocalSimulation {
         const ox = b.hx + r - Math.abs(lx);
         const oz = b.hz + r - Math.abs(lz);
         if (ox <= 0 || oz <= 0 || cr.y > b.y + b.hy + 0.5 || cr.y + SPECIES[cr.sp].height * cr.scale < b.y - b.hy) continue;
-        if (SPECIES[cr.sp].mass >= massProps(v, this.driving?.v === v.id).mass) {
+        if (SPECIES[cr.sp].mass >= massProps(v, this.seatedNow.has(v.id)).mass) {
           // Plus lourd que le véhicule : c'est le véhicule qui s'arrête.
           this.vphys.damp(v.id, 0.3);
           continue;
@@ -3654,7 +4133,6 @@ export class LocalSimulation {
     s.jumpLatch = (c.buttons & BTN_JUMP) !== 0;
     if ((pressed & BTN_INTERACT) !== 0) {
       this.leaveVehicle(null);
-      this.physicsStep(null);
       return;
     }
     const f = FRAMES[v.frame];
@@ -3677,8 +4155,21 @@ export class LocalSimulation {
       seated: d.mode === 'siege',
     };
     this.engineLoad = engine ? Math.abs(input.throttle) : 0;
-    this.physicsStep(input);
-    if (!this.driving) return;
+    this.drive = input;
+  }
+
+  /** Après le pas physique commun : le conducteur suit son véhicule ; effort humain. */
+  private afterDrive(): void {
+    const input = this.drive;
+    this.drive = null;
+    if (!input || !this.driving) return;
+    const s = this.state;
+    const d = this.driving;
+    const v = this.vehicle(d.v);
+    if (!v) return;
+    const f = FRAMES[v.frame];
+    const engine = f.medium === 'terre' ? enginePower(v) > 0 : waterDrive(v) && enginePower(v) > 0;
+    const human = d.mode === 'pousse' || !engine;
     this.placeDriver(v, d.mode);
     // Effort humain (pousser, pagayer) : au-delà d'environ 120 W, l'endurance baisse.
     const r = this.lastDrive;
@@ -3741,6 +4232,8 @@ export class LocalSimulation {
   private boardVehicle(v: VehicleState, mode: 'siege' | 'pousse'): ActionResult {
     const f = FRAMES[v.frame];
     if (this.driving) return fail('Vous êtes déjà aux commandes.');
+    const other = this.driverOf(v.id);
+    if (other && other !== this.cur) return fail(`${other.name || 'Quelqu’un'} est déjà aux commandes.`);
     if (this.props.held) return fail('Posez d’abord ce que vous tenez.');
     if (!this.vphys.has(v.id)) return fail('Trop loin.');
     const missing = missingForRolling(v);
@@ -4088,12 +4581,12 @@ export class LocalSimulation {
     if (!this.vehicles.length) return;
     const out: VehicleEvent[] = [];
     for (const v of [...this.vehicles]) {
-      const driven = this.driving?.v === v.id;
-      if (v.parts.some((p) => p.kind === 'machine_vapeur') || v.engine.heat > 0) stepEngine(v, dt, driven ? this.engineLoad : 0, out);
+      const dsl = this.driverOf(v.id);
+      if (v.parts.some((p) => p.kind === 'machine_vapeur') || v.engine.heat > 0) stepEngine(v, dt, dsl ? this.slotValue(dsl, 'engineLoad') : 0, out);
       const u = this.vehicleUse.get(v.id);
       if (!u) continue;
       this.vehicleUse.delete(v.id);
-      const mass = massProps(v, driven).mass;
+      const mass = massProps(v, !!dsl).mass;
       const shock = Math.max(0, u.force / (mass * 9.81) - 8) / 4;
       v.odo += u.dist;
       wearParts(v, u.dist, mass, shock, u.drive, () => rand(this.vitals), out);
@@ -4126,7 +4619,8 @@ export class LocalSimulation {
 
   /** Véhicule détruit : les pièces tombent au sol, avec quelques débris. */
   private wreckVehicle(v: VehicleState): void {
-    if (this.driving?.v === v.id) this.leaveVehicle(null);
+    const dsl = this.driverOf(v.id);
+    if (dsl) this.withPlayer(dsl, () => this.leaveVehicle(null));
     const f = FRAMES[v.frame];
     v.parts.forEach((p, i) => {
       const st: ItemStack = { item: PARTS[p.kind].item, count: 1, q: Math.round(p.q), d: p.broken ? 0 : Math.max(1, Math.round((1 - p.wear) * 100)), dm: 100 };
@@ -4283,7 +4777,142 @@ export class LocalSimulation {
   }
 
   creatureViews(): ReturnType<Fauna['views']> {
-    return this.fauna.views();
+    return this.replica ? this.remoteCreatures : this.fauna.views();
+  }
+
+  /** Le joueur courant est-il tenu par une créature ? */
+  isGrabbed(): boolean {
+    return this.replica ? this.remoteGrab : this.grabbedHere();
+  }
+
+  // ——— Copie chez un joueur distant (phase 8) ———
+
+  /** Pas d'une copie : seuls les pas du joueur sont prédits ; le reste vient de l'hôte. */
+  private replicaStep(cmd: InputCmd): void {
+    const q = quantizeInput(cmd);
+    const s = this.state;
+    const v = this.vitals;
+    this.phys.ensureAround([s], PHYS_CHUNK_RADIUS, this.tick);
+    this.structPhys.sync(s.x, s.z);
+    if (this.tick % 120 === 0) this.phys.unloadUnused(this.tick, 600);
+    this.time += TICK_DT;
+    copyState(this.prev, s);
+    this.yaw = q.yaw;
+    this.pitch = q.pitch;
+    if (!this.driving && v.state !== 'mort' && !this.remoteGrab) {
+      this.applyLimits();
+      let c = q;
+      if (v.state !== 'eveille' || v.posture !== 'debout') c = { ...q, wx: 0, wz: 0, buttons: BTN_CROUCH };
+      else if (this.trappedIn) c = { ...q, wx: 0, wz: 0, buttons: 0 };
+      else if (this.gesture) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_CROUCH };
+      // L'objet tenu suit les mains (sans prise ni lancer : c'est l'hôte qui décide).
+      if (this.props.held) this.props.update(s, { ...c, buttons: c.buttons & ~(BTN_INTERACT | BTN_THROW) }, 0);
+      stepMovement(this.phys, this.collider, s, c, TICK_DT);
+      this.pending.push({ seq: cmd.seq, cmd: c, after: cloneState(s) });
+      if (this.pending.length > 600) this.pending.shift();
+    }
+    this.phys.step(TICK_DT);
+    this.tick++;
+  }
+
+  /**
+   * Position de l'hôte pour la dernière commande qu'il a appliquée : si la prédiction s'en écarte,
+   * on reprend sa position et on rejoue les commandes suivantes. Renvoie l'écart constaté.
+   */
+  reconcile(server: MoveState, ack: number, time: number): number {
+    if (Number.isFinite(time) && Math.abs(time - this.time) > 0.5) this.time = time;
+    while (this.pending.length && this.pending[0]!.seq < ack) this.pending.shift();
+    const s = this.state;
+    // Aux commandes, tenu par une créature, inconscient ou mort : l'hôte place le joueur.
+    if (this.driving || this.remoteGrab || this.vitals.state !== 'eveille') {
+      copyState(this.prev, s);
+      copyState(s, server);
+      this.pending.length = 0;
+      return 0;
+    }
+    const h = this.pending[0];
+    if (h && h.seq === ack) this.pending.shift();
+    const err = h && h.seq === ack ? positionError(h.after, server) : positionError(s, server);
+    if (err > 0.05 || (h && h.seq !== ack && err > 0.5)) {
+      copyState(s, server);
+      for (const p of this.pending) {
+        stepMovement(this.phys, this.collider, s, p.cmd, TICK_DT);
+        p.after = cloneState(s);
+      }
+      this.corrections++;
+    } else {
+      // Endurance et souffle : ceux de l'hôte font foi.
+      s.stamina = server.stamina;
+      s.breath = server.breath;
+      s.exhausted = server.exhausted;
+    }
+    return err;
+  }
+
+  /** État du joueur reçu de l'hôte (corps, sac, carnet, geste, conduite…). */
+  applySelf(d: SelfState): void {
+    this.vitals = d.vitals;
+    this.inventory = d.inventory;
+    this.knowledge = d.knowledge;
+    this.gesture = d.gesture;
+    this.craft = d.craft;
+    this.driving = d.driving;
+    this.trappedIn = d.trappedIn;
+    this.respawnPoint = d.respawnPoint;
+    this.lastBody = d.lastBody;
+    this.deadTime = d.deadTime;
+    this.effortW = d.effortW;
+    this.lastDrive = d.lastDrive;
+    this.spawn = d.spawn;
+    this.remoteGrab = d.grab;
+    this.props.held = d.held && this.props.livePose(d.held.id) ? d.held : null;
+  }
+
+  /** État du joueur à envoyer à sa copie (côté hôte). */
+  selfState(): SelfState {
+    return {
+      vitals: this.vitals,
+      inventory: this.inventory,
+      knowledge: this.knowledge,
+      gesture: this.gesture,
+      craft: this.craft,
+      driving: this.driving,
+      trappedIn: this.trappedIn,
+      respawnPoint: this.respawnPoint,
+      lastBody: this.lastBody,
+      deadTime: this.deadTime,
+      effortW: this.effortW,
+      lastDrive: this.lastDrive,
+      held: this.props.held,
+      spawn: this.spawn,
+      grab: this.grabbedHere(),
+    };
+  }
+
+  /** Constructions reçues de l'hôte. */
+  applyBuild(raw: unknown, version: number): void {
+    this.build.restore(raw);
+    this.build.version = version;
+    this.structPhys.invalidate();
+  }
+
+  /** Arbres et gisements reçus de l'hôte. */
+  applyWorld(raw: unknown, version: number): void {
+    this.world.reset();
+    this.world.restore(raw);
+    this.world.version = version;
+    for (const c of this.phys.loadedChunks()) this.phys.rebuildChunk(c.cx, c.cz);
+  }
+
+  /** Véhicules reçus de l'hôte (état complet des véhicules proches). */
+  applyVehicles(list: unknown): void {
+    this.vehicles = readVehicles(list);
+  }
+
+  /** Événements reçus de l'hôte pour ce joueur (messages, sons, panneaux à ouvrir…). */
+  pushRemoteEvents(list: SimEvent[]): void {
+    for (const e of list) this.events.push(e);
+    if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
   }
 
   /** Fait apparaître des créatures (outils de test, tests automatiques). */
@@ -4293,24 +4922,15 @@ export class LocalSimulation {
   }
 
   serialize(): SimSave {
-    const s = this.state;
-    let pos = { x: s.x, y: s.y, z: s.z };
-    let vitals = this.vitals;
-    if (this.dead) {
-      const t = this.respawnTarget.point;
-      pos = { x: t.x, y: t.y + 0.15, z: t.z };
-      vitals = makeVitals(this.vitals.rng);
-      vitals.health = VITALS.respawn.health;
-      vitals.energy = VITALS.respawn.energy;
-      vitals.fatigue = VITALS.respawn.fatigue;
-    }
-    // Aux commandes d'un véhicule : on reprendra la partie à côté de lui.
-    const dv = this.driving ? this.vehicle(this.driving.v) : undefined;
-    if (dv && this.driving?.mode === 'siege' && !this.dead) pos = this.exitPoint(dv);
+    const others: Record<string, PlayerSave> = {};
+    for (const [id, ps] of this.absent) others[id] = ps;
+    for (const sl of this.players.values()) if (sl !== this.local) others[sl.id] = this.withPlayer(sl, () => this.playerSave());
+    const player = this.withPlayer(this.local, () => this.playerSave());
     return {
       version: 1,
       time: this.time,
-      player: { ...pos, vitals, inventory: this.inventory, respawn: this.respawnPoint, lastBody: this.lastBody, knowledge: this.knowledge },
+      player,
+      ...(Object.keys(others).length ? { others } : {}),
       props: this.props.serialize(),
       world: this.world.serialize(),
       build: this.build.serialize(),
@@ -4333,21 +4953,23 @@ export class LocalSimulation {
     for (const v of this.vehicles) this.settle.set(v.id, this.time + 2);
     const maxId = this.vehicles.reduce((m, v) => Math.max(m, Number(v.id.replace(/^veh/, '')) || 0), 0);
     this.nextVehicle = Math.max(maxId + 1, typeof r.nextVehicle === 'number' && Number.isInteger(r.nextVehicle) ? Math.min(1e9, r.nextVehicle) : 1);
-    const p = r.player as Record<string, unknown> | undefined;
-    if (!p || typeof p !== 'object') return null;
-    this.vitals = readVitals(p.vitals, this.vitals.rng);
-    this.inventory = readInventory(p.inventory);
-    this.knowledge = readKnowledge(p.knowledge);
-    const pt = (o: unknown): SpawnPoint | null => {
-      const q = o as Record<string, unknown> | null;
-      if (!q || typeof q !== 'object') return null;
-      const { x, y, z } = q;
-      return typeof x === 'number' && typeof y === 'number' && typeof z === 'number' && [x, y, z].every(Number.isFinite) && Math.abs(x) < 8000 && Math.abs(z) < 8000 ? { x, y, z } : null;
-    };
-    this.respawnPoint = pt(p.respawn);
-    const lb = p.lastBody as Record<string, unknown> | null;
-    if (lb && typeof lb.id === 'string' && typeof lb.x === 'number' && typeof lb.z === 'number') this.lastBody = { id: lb.id, x: lb.x, z: lb.z };
-    return pt(p);
+    // Phase 8 : les autres joueurs attendent leur retour parmi les absents.
+    if (r.others && typeof r.others === 'object') {
+      let n = 0;
+      for (const [id, raw] of Object.entries(r.others as Record<string, unknown>)) {
+        if (++n > 200 || typeof id !== 'string' || id.length > 64) break;
+        const ps = readPlayerSave(raw, 1);
+        if (ps) this.absent.set(id, toPlayerSave(ps));
+      }
+    }
+    const ps = readPlayerSave(r.player, this.vitals.rng);
+    if (!ps) return null;
+    this.vitals = ps.vitals;
+    this.inventory = ps.inventory;
+    this.knowledge = ps.knowledge;
+    this.respawnPoint = ps.respawn;
+    this.lastBody = ps.lastBody;
+    return ps.pos;
   }
 
   dispose(): void {

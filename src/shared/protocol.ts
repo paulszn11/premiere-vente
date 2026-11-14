@@ -1,17 +1,25 @@
 // Messages échangés entre le client et le serveur du monde, avec leur validation.
 // Le serveur ne fait jamais confiance au client : tout message est vérifié avant usage.
 
-import type { InputCmd, MoveState } from './movement';
+import { type PlayerAction, readAction } from './actions';
+import type { InputCmd } from './movement';
+import type { Perm, Role, WorldRules } from './permissions';
 
-export type RejectReason = 'bad_code' | 'full' | 'no_world' | 'rate_limited' | 'protocol' | 'replaced' | 'invalid';
+export type RejectReason = 'bad_code' | 'full' | 'no_world' | 'rate_limited' | 'protocol' | 'replaced' | 'invalid' | 'identity' | 'kicked';
 
-export interface PlayerInfo {
-  /** Identifiant public (jamais l'identifiant local secret du joueur). */
-  id: string;
-  name: string;
-  color: number;
-}
+export const REJECT_LABELS: Record<RejectReason, string> = {
+  bad_code: 'Code du monde incorrect.',
+  full: 'Ce monde est complet (10 joueurs au maximum).',
+  no_world: 'Aucun monde ouvert avec ce code.',
+  rate_limited: 'Trop de tentatives : réessayez dans une minute.',
+  protocol: 'Version du jeu différente de celle de l’hôte : rechargez la page.',
+  replaced: 'Vous vous êtes connecté ailleurs.',
+  invalid: 'Échange invalide.',
+  identity: 'Identité refusée : ce joueur existe déjà avec une autre clé (utilisez votre clé de récupération).',
+  kicked: 'L’hôte vous a retiré de la partie.',
+};
 
+/** Ancienne forme (phase 1), gardée pour la prédiction de test. */
 export interface NetPlayer {
   id: string;
   x: number;
@@ -21,36 +29,42 @@ export interface NetPlayer {
   pitch: number;
 }
 
-export interface WelcomeWorld {
+export interface RosterEntry {
   id: string;
   name: string;
-  seed: number;
+  role: Role;
+  online: boolean;
 }
 
+/** Messages du joueur vers l'hôte. */
 export type ClientMessage =
-  | { t: 'hello'; protocol: number; playerId: string; name: string; code: string }
-  | { t: 'input'; cmds: InputCmd[] }
+  /** Réponse au défi de l'hôte : son propre défi et la preuve qu'il connaît le code. */
+  | { t: 'hello'; protocol: number; id: string; name: string; pc: string; proof: string }
+  /** Preuve d'identité (joueur connu) ou vérificateur (première venue). */
+  | { t: 'ident'; proof?: string; verifier?: string }
+  | { t: 'in'; c: InputCmd[] }
+  | { t: 'act'; n: number; a: PlayerAction }
   | { t: 'ping'; id: number; ct: number }
   | { t: 'bye' };
 
-export type ServerMessage =
+/** Messages de contrôle de l'hôte vers le joueur (la réplication du monde est dans replication.ts). */
+export type ControlMessage =
+  | { t: 'defi'; hc: string; protocol: number }
+  | { t: 'hote'; proof: string; known: boolean }
   | {
       t: 'welcome';
-      protocol: number;
-      you: string;
-      world: WelcomeWorld;
-      tick: number;
-      tickRate: number;
-      snapshotInterval: number;
-      state: MoveState;
-      players: PlayerInfo[];
+      you: { id: string; name: string; role: Role };
+      world: { name: string; seed: number };
+      start: { x: number; y: number; z: number; yaw: number };
+      perms: Record<Perm, boolean>;
+      rules: WorldRules;
     }
-  | { t: 'reject'; reason: RejectReason; retryAfterMs?: number; serverProtocol?: number }
-  | { t: 'snap'; tick: number; ack: number; you: MoveState; players: NetPlayer[] }
-  | { t: 'joined'; player: PlayerInfo }
-  | { t: 'left'; id: string }
-  | { t: 'pong'; id: number; ct: number; st: number }
-  | { t: 'paused'; reason: 'host_stopped' | 'host_left' };
+  | { t: 'reject'; reason: RejectReason; retryAfterMs?: number }
+  | { t: 'res'; n: number; ok: boolean; m?: string }
+  | { t: 'pong'; id: number; ct: number }
+  | { t: 'roster'; players: RosterEntry[] }
+  | { t: 'perms'; role: Role; perms: Record<Perm, boolean>; rules: WorldRules }
+  | { t: 'stop'; reason: 'host_left' | 'kicked' | 'host_stopped' };
 
 export const MAX_INPUTS_PER_MESSAGE = 32;
 export const PLAYER_NAME_MAX = 20;
@@ -104,27 +118,47 @@ function parseInput(v: unknown): InputCmd | null {
   return { seq: v.seq, wx: v.wx, wz: v.wz, yaw: v.yaw, pitch: v.pitch, buttons: v.buttons };
 }
 
-/** Valide un message reçu d'un client. Retourne null s'il est mal formé. */
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX32 = /^[0-9a-f]{32}$/;
+
+/** Valide un message reçu d'un joueur. Retourne null s'il est mal formé. */
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isObj(raw) || typeof raw.t !== 'string') return null;
   switch (raw.t) {
     case 'hello': {
       if (!isInt(raw.protocol, 0, 1_000_000)) return null;
-      if (!isPlayerId(raw.playerId)) return null;
+      if (!isPlayerId(raw.id)) return null;
       const name = sanitizePlayerName(raw.name);
       if (!name) return null;
-      if (typeof raw.code !== 'string' || raw.code.length > 64) return null;
-      return { t: 'hello', protocol: raw.protocol, playerId: raw.playerId.toLowerCase(), name, code: raw.code };
+      if (typeof raw.pc !== 'string' || !HEX32.test(raw.pc) || typeof raw.proof !== 'string' || !HEX64.test(raw.proof)) return null;
+      return { t: 'hello', protocol: raw.protocol, id: raw.id.toLowerCase(), name, pc: raw.pc, proof: raw.proof };
     }
-    case 'input': {
-      if (!Array.isArray(raw.cmds) || raw.cmds.length < 1 || raw.cmds.length > MAX_INPUTS_PER_MESSAGE) return null;
-      const cmds: InputCmd[] = [];
-      for (const c of raw.cmds) {
-        const parsed = parseInput(c);
-        if (!parsed) return null;
-        cmds.push(parsed);
+    case 'ident': {
+      const out: { t: 'ident'; proof?: string; verifier?: string } = { t: 'ident' };
+      if (raw.proof !== undefined) {
+        if (typeof raw.proof !== 'string' || !HEX64.test(raw.proof)) return null;
+        out.proof = raw.proof;
       }
-      return { t: 'input', cmds };
+      if (raw.verifier !== undefined) {
+        if (typeof raw.verifier !== 'string' || !HEX64.test(raw.verifier)) return null;
+        out.verifier = raw.verifier;
+      }
+      return out.proof || out.verifier ? out : null;
+    }
+    case 'in': {
+      if (!Array.isArray(raw.c) || raw.c.length < 1 || raw.c.length > MAX_INPUTS_PER_MESSAGE) return null;
+      const c: InputCmd[] = [];
+      for (const x of raw.c) {
+        const parsed = parseInput(x);
+        if (!parsed) return null;
+        c.push(parsed);
+      }
+      return { t: 'in', c };
+    }
+    case 'act': {
+      if (!isInt(raw.n, 0, 2 ** 31 - 1)) return null;
+      const a = readAction(raw.a);
+      return a ? { t: 'act', n: raw.n, a } : null;
     }
     case 'ping':
       if (!isInt(raw.id, 0, 2 ** 31 - 1) || !isNum(raw.ct, 1e15)) return null;

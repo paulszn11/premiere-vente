@@ -29,17 +29,24 @@ describe('code d’accès du monde', () => {
 
 describe('protocole réseau', () => {
   const id = '123e4567-e89b-42d3-a456-426614174000';
+  const pc = 'a'.repeat(32);
+  const proof = 'b'.repeat(64);
   it('accepte les messages valides', () => {
-    expect(parseClientMessage({ t: 'hello', protocol: 1, playerId: id, name: '  Paul  ', code: 'X' })).toEqual({ t: 'hello', protocol: 1, playerId: id, name: 'Paul', code: 'X' });
-    expect(parseClientMessage({ t: 'input', cmds: [{ seq: 1, wx: 0.5, wz: -1, yaw: 3, pitch: 0.2, buttons: 3 }] })).not.toBeNull();
+    expect(parseClientMessage({ t: 'hello', protocol: 2, id, name: '  Paul  ', pc, proof })).toEqual({ t: 'hello', protocol: 2, id, name: 'Paul', pc, proof });
+    expect(parseClientMessage({ t: 'in', c: [{ seq: 1, wx: 0.5, wz: -1, yaw: 3, pitch: 0.2, buttons: 3 }] })).not.toBeNull();
+    expect(parseClientMessage({ t: 'act', n: 3, a: { type: 'ranger' } })).toEqual({ t: 'act', n: 3, a: { type: 'ranger' } });
+    expect(parseClientMessage({ t: 'ident', verifier: 'c'.repeat(64) })).not.toBeNull();
   });
   it('refuse les messages mal formés ou abusifs', () => {
     expect(parseClientMessage(null)).toBeNull();
-    expect(parseClientMessage({ t: 'hello', protocol: 1, playerId: 'pas-un-uuid', name: 'A', code: 'X' })).toBeNull();
-    expect(parseClientMessage({ t: 'hello', protocol: 1, playerId: id, name: '', code: 'X' })).toBeNull();
-    expect(parseClientMessage({ t: 'input', cmds: [{ seq: 1, wx: Number.NaN, wz: 0, yaw: 0, pitch: 0, buttons: 0 }] })).toBeNull();
-    expect(parseClientMessage({ t: 'input', cmds: [{ seq: 1, wx: 5, wz: 0, yaw: 0, pitch: 0, buttons: 0 }] })).toBeNull();
-    expect(parseClientMessage({ t: 'input', cmds: Array(33).fill({ seq: 1, wx: 0, wz: 0, yaw: 0, pitch: 0, buttons: 0 }) })).toBeNull();
+    expect(parseClientMessage({ t: 'hello', protocol: 2, id: 'pas-un-uuid', name: 'A', pc, proof })).toBeNull();
+    expect(parseClientMessage({ t: 'hello', protocol: 2, id, name: '', pc, proof })).toBeNull();
+    expect(parseClientMessage({ t: 'hello', protocol: 2, id, name: 'A', pc, proof: 'court' })).toBeNull();
+    expect(parseClientMessage({ t: 'in', c: [{ seq: 1, wx: Number.NaN, wz: 0, yaw: 0, pitch: 0, buttons: 0 }] })).toBeNull();
+    expect(parseClientMessage({ t: 'in', c: [{ seq: 1, wx: 5, wz: 0, yaw: 0, pitch: 0, buttons: 0 }] })).toBeNull();
+    expect(parseClientMessage({ t: 'in', c: Array(33).fill({ seq: 1, wx: 0, wz: 0, yaw: 0, pitch: 0, buttons: 0 }) })).toBeNull();
+    expect(parseClientMessage({ t: 'act', n: 1, a: { type: 'teleporter', x: 0 } })).toBeNull();
+    expect(parseClientMessage({ t: 'ident' })).toBeNull();
     expect(parseClientMessage({ t: 'teleport', x: 0 })).toBeNull();
   });
   it('nettoie les pseudonymes', () => {
