@@ -92,8 +92,6 @@ export class SoundSystem {
   update(x: number, y: number, z: number, yaw: number, pitch: number, o: { underwater: boolean; danger: number; ombre: number }): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
-    // Une valeur non finie (image très longue, téléportation) ferait lever une exception à l'API audio.
-    if (![x, y, z, yaw, pitch].every(Number.isFinite)) return;
     const l = ctx.listener;
     const fx = Math.sin(yaw) * Math.cos(pitch);
     const fy = -Math.sin(pitch);
