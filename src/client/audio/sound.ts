@@ -10,6 +10,8 @@ type Ctx = AudioContext;
 
 /** Distance de référence (m) : en deçà, volume plein ; au-delà, il décroît. */
 const REF: Partial<Record<SoundKind, number>> = {
+  tonnerre: 400,
+  foudre: 120,
   hyene_cri: 40,
   elephant_barrit: 60,
   elephant_gronde: 40,
@@ -32,6 +34,8 @@ export class SoundSystem {
   private voices = 0;
   private drone: { gain: GainNode; nodes: AudioScheduledSourceNode[] } | null = null;
   private underAmb: { gain: GainNode; src: AudioBufferSourceNode } | null = null;
+  /** Phase 9 : nappes d'ambiance en boucle (pluie, vent, eau, grotte…), réglées à chaque image. */
+  private readonly beds = new Map<string, { gain: GainNode; src: AudioBufferSourceNode; filter: BiquadFilterNode }>();
   private nextBeat = 0;
   private hrtf: boolean;
   volume = 0.8;
@@ -89,7 +93,7 @@ export class SoundSystem {
   }
 
   /** Position et orientation de l'auditeur (la caméra) ; ambiance sous l'eau ; danger (0 à 1). */
-  update(x: number, y: number, z: number, yaw: number, pitch: number, o: { underwater: boolean; danger: number; ombre: number }): void {
+  update(x: number, y: number, z: number, yaw: number, pitch: number, o: { underwater: boolean; danger: number; ombre: number; rain?: number; wind?: number }): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
     const l = ctx.listener;
@@ -115,6 +119,11 @@ export class SoundSystem {
     this.muffle!.frequency.setTargetAtTime(o.underwater ? 550 : 18000, ctx.currentTime, 0.15);
     this.setUnderwater(o.underwater);
     this.setDrone(o.ombre);
+    // Phase 9 : pluie (sifflement aigu, grondement sourd quand elle est forte) et vent.
+    const rain = o.underwater ? 0 : (o.rain ?? 0);
+    this.bed('pluie', 'highpass', 1400, 0.7, rain * 0.22);
+    this.bed('averse', 'lowpass', 500, 0.8, Math.max(0, rain - 0.5) * 0.3);
+    this.bed('vent', 'lowpass', 300 + (o.wind ?? 0) * 25, 1.2, o.underwater ? 0 : Math.max(0, (o.wind ?? 0) - 5) * 0.012);
     // Battements de cœur quand le danger approche.
     if (o.danger > 0.15 && ctx.currentTime >= this.nextBeat) {
       const bpm = 70 + o.danger * 70;
@@ -233,6 +242,17 @@ export class SoundSystem {
         this.burst(t, 0.9, dest, 0.35 * k, 'lowpass', 2400);
         this.osc('sine', 62, 48, t, 0.9, dest, 0.3 * k, 0.1);
         break;
+      case 'tonnerre':
+        // Roulement de tonnerre : grondement grave qui s'étire.
+        this.burst(t, 3.8, dest, 0.9 * k, 'lowpass', 120, 0.7);
+        this.burst(t + 0.15, 2.6, dest, 0.45 * k, 'lowpass', 320, 0.8);
+        this.osc('sine', 44, 28, t, 3.2, dest, 0.45 * k, 0.12);
+        break;
+      case 'foudre':
+        // Claquement sec, tout proche.
+        this.burst(t, 0.22, dest, 1.3 * k, 'highpass', 1800, 0.6);
+        this.burst(t + 0.05, 1.8, dest, 0.9 * k, 'lowpass', 220, 0.8);
+        break;
       case 'ombre_gronde':
         // Un grondement très grave, qu'on sent plus qu'on ne l'entend.
         this.osc('sine', 30, 21, t, 3.2, dest, 0.9 * k, 0.6);
@@ -335,6 +355,35 @@ export class SoundSystem {
     }
   }
 
+  /** Nappe de bruit filtré en boucle, au volume demandé (0 : arrêtée en douceur). */
+  private bed(key: string, type: BiquadFilterType, freq: number, q: number, level: number): void {
+    const ctx = this.ctx!;
+    let b = this.beds.get(key);
+    if (!b && level > 0.002) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.loop = true;
+      src.playbackRate.value = 0.8 + Math.random() * 0.4;
+      const filter = ctx.createBiquadFilter();
+      filter.type = type;
+      filter.frequency.value = freq;
+      filter.Q.value = q;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0001;
+      src.connect(filter).connect(gain).connect(this.muffle!);
+      src.start();
+      b = { gain, src, filter };
+      this.beds.set(key, b);
+    }
+    if (!b) return;
+    b.filter.frequency.setTargetAtTime(freq, ctx.currentTime, 0.5);
+    b.gain.gain.setTargetAtTime(Math.max(0.0001, level), ctx.currentTime, 0.6);
+    if (level <= 0.002 && b.gain.gain.value < 0.003) {
+      b.src.stop(ctx.currentTime + 0.5);
+      this.beds.delete(key);
+    }
+  }
+
   /** Bourdonnement sourd et battant : la créature du lac est là (0 à 1). */
   private setDrone(level: number): void {
     const ctx = this.ctx!;
@@ -367,6 +416,8 @@ export class SoundSystem {
   dispose(): void {
     if (this.drone) for (const n of this.drone.nodes) n.stop();
     this.underAmb?.src.stop();
+    for (const b of this.beds.values()) b.src.stop();
+    this.beds.clear();
     this.drone = null;
     this.underAmb = null;
   }

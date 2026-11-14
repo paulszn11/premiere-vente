@@ -6,11 +6,11 @@
 import type { FoodEffect, ItemId } from './items';
 
 export type Zone = 'tete' | 'torse' | 'bras_g' | 'bras_d' | 'jambe_g' | 'jambe_d';
-export type InjuryKind = 'contusion' | 'entorse' | 'fracture' | 'coupure' | 'commotion';
+export type InjuryKind = 'contusion' | 'entorse' | 'fracture' | 'coupure' | 'commotion' | 'brulure';
 export type Treatment = 'bander' | 'attelle' | 'aloes';
 export type Consciousness = 'eveille' | 'inconscient' | 'critique' | 'mort';
 export type Posture = 'debout' | 'assis' | 'endormi';
-export type DeathCause = 'chute' | 'noyade' | 'hemorragie' | 'infection' | 'abandon' | 'attaque';
+export type DeathCause = 'chute' | 'noyade' | 'hemorragie' | 'infection' | 'abandon' | 'attaque' | 'foudre' | 'feu';
 
 export const ZONES: Zone[] = ['tete', 'torse', 'bras_g', 'bras_d', 'jambe_g', 'jambe_d'];
 export const ZONE_LABELS: Record<Zone, string> = {
@@ -27,6 +27,7 @@ export const INJURY_LABELS: Record<InjuryKind, string> = {
   fracture: 'fracture',
   coupure: 'coupure',
   commotion: 'commotion',
+  brulure: 'brûlure',
 };
 export const TREATMENT_LABELS: Record<Treatment, string> = { bander: 'Bander', attelle: 'Poser une attelle', aloes: "Appliquer de l'aloès" };
 export const DEATH_LABELS: Record<DeathCause, string> = {
@@ -36,6 +37,8 @@ export const DEATH_LABELS: Record<DeathCause, string> = {
   infection: 'une infection',
   abandon: 'vos blessures',
   attaque: 'l’attaque d’un animal',
+  foudre: 'la foudre',
+  feu: 'le feu',
 };
 
 export interface Injury {
@@ -123,7 +126,7 @@ export const VITALS = {
   painReliefSeconds: 300,
 };
 
-const HEAL_SECONDS: Record<InjuryKind, number> = { contusion: 240, entorse: 900, fracture: 1800, coupure: 300, commotion: 240 };
+const HEAL_SECONDS: Record<InjuryKind, number> = { contusion: 240, entorse: 900, fracture: 1800, coupure: 300, commotion: 240, brulure: 720 };
 
 export function makeVitals(seed: number): Vitals {
   return {
@@ -199,6 +202,10 @@ function injuryPain(i: Injury): number {
       break;
     case 'coupure':
       p = i.grave ? 25 : 10;
+      break;
+    case 'brulure':
+      // L'aloès apaise les brûlures.
+      p = (i.grave ? 30 : 14) * (i.disinfected ? 0.5 : 1);
       break;
     default:
       p = 15;
@@ -331,6 +338,8 @@ export function addInjury(v: Vitals, zone: Zone, kind: InjuryKind, grave = false
   }
   const inj = newInjury(v, zone, kind, grave);
   v.injuries.push(inj);
+  // Une brûlure non soignée peut s'infecter.
+  if (kind === 'brulure') rollInfection(v, inj, grave ? 0.35 : 0.15);
   return inj;
 }
 
@@ -432,6 +441,9 @@ export function treatmentOptions(v: Vitals): TreatmentOption[] {
       out.push({ injury: i.id, treatment: 'bander', needs: treatmentNeeds('bander'), seconds: 5 });
     } else if (i.kind === 'fracture' && !i.splinted) {
       out.push({ injury: i.id, treatment: 'attelle', needs: treatmentNeeds('attelle'), seconds: 8 });
+    } else if (i.kind === 'brulure') {
+      if (!i.disinfected) out.push({ injury: i.id, treatment: 'aloes', needs: treatmentNeeds('aloes'), seconds: 3 });
+      if (!i.bandaged) out.push({ injury: i.id, treatment: 'bander', needs: treatmentNeeds('bander'), seconds: 4 });
     }
   }
   return out;
@@ -452,7 +464,7 @@ export function applyTreatment(v: Vitals, injuryId: number, t: Treatment, steril
   const i = v.injuries.find((x) => x.id === injuryId);
   if (!i || v.state === 'mort') return false;
   if (t === 'bander') {
-    if (i.bandaged || (i.kind !== 'coupure' && i.kind !== 'entorse')) return false;
+    if (i.bandaged || (i.kind !== 'coupure' && i.kind !== 'entorse' && i.kind !== 'brulure')) return false;
     i.bandaged = true;
     // Chiffon de vêtement, pas stérile : la plaie peut s'infecter si elle n'est pas désinfectée.
     if (i.kind === 'coupure' && !sterile) rollInfection(v, i, i.disinfected ? 0.03 : i.grave ? 0.3 : 0.15);
@@ -463,7 +475,7 @@ export function applyTreatment(v: Vitals, injuryId: number, t: Treatment, steril
     i.splinted = true;
     return true;
   }
-  if (i.kind !== 'coupure' || i.disinfected) return false;
+  if ((i.kind !== 'coupure' && i.kind !== 'brulure') || i.disinfected) return false;
   i.disinfected = true;
   if (i.infection <= 0) i.infectAt = -1;
   v.painRelief = VITALS.painReliefSeconds;
@@ -580,6 +592,7 @@ export function tickVitals(v: Vitals, dt: number, a: Activity, out: VitalEvent[]
     else if (i.kind === 'entorse') rate = 1 / (HEAL_SECONDS.entorse * (i.bandaged ? 0.5 : 1));
     else if (i.kind === 'fracture') rate = i.splinted ? 1 / HEAL_SECONDS.fracture : 0;
     else if (i.kind === 'coupure') rate = (i.bandaged || i.clotted) && i.infection <= 0 ? 1 / (i.grave ? 900 : HEAL_SECONDS.coupure) : 0;
+    else if (i.kind === 'brulure') rate = i.infection <= 0 ? (i.disinfected ? 2 : 1) / (HEAL_SECONDS.brulure * (i.grave ? 1.6 : 1)) : 0;
     i.heal += rate * healMul * dt;
     if (i.heal >= 1 && i.infection <= 0) {
       v.injuries.splice(k, 1);
@@ -714,7 +727,7 @@ export function tickVitals(v: Vitals, dt: number, a: Activity, out: VitalEvent[]
 
 const num = (x: unknown, lo: number, hi: number, d: number): number => (typeof x === 'number' && Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d);
 const ZONE_SET = new Set<string>(ZONES);
-const KIND_SET = new Set<string>(['contusion', 'entorse', 'fracture', 'coupure', 'commotion']);
+const KIND_SET = new Set<string>(['contusion', 'entorse', 'fracture', 'coupure', 'commotion', 'brulure']);
 
 export function readVitals(raw: unknown, seed: number): Vitals {
   const v = makeVitals(seed);

@@ -118,6 +118,8 @@ import {
 import { MACHINES, type PowerNode, RUNS_AT, TRANSMISSION, boilerPower, newMachine, powerNetwork, waterWheelPower } from './machines';
 import { type DriveInput, type DriveResult, VehiclePhysics } from './vehicle-physics';
 import { type Wind, windAt } from './wind';
+import { daylight, hourOf, moonlight } from './daynight';
+import { type Weather, weatherAt, wetnessAt } from './weather';
 import {
   ENGINE,
   FRAMES,
@@ -150,7 +152,7 @@ import {
   wearParts,
   yawOf,
 } from './vehicles';
-import { GROUP_OBSTACLE, GROUP_TERRAIN, GROUP_VEHICLE, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
+import { GROUP_OBSTACLE, GROUP_TERRAIN, GROUP_VEHICLE, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_SHELTER, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
 import type { Access, Owned, Use } from './permissions';
 import { type FireState, type FurnaceState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
@@ -217,7 +219,9 @@ export type SimEvent =
   /** Phase 7 : le joueur veut voir un véhicule (pièces, chaudière, conduite). */
   | { type: 'vehicule'; v: string; tick: number }
   /** Une machine visée (machine fixe, meule, soufflet, pompe, roue à eau). */
-  | { type: 'machine'; prop: string; tick: number };
+  | { type: 'machine'; prop: string; tick: number }
+  /** Phase 9 : la foudre tombe (vue et entendue par tous). */
+  | { type: 'foudre'; x: number; y: number; z: number; tick: number };
 
 /** Geste en cours (manger, soigner) : il prend du temps et bouger l'interrompt. */
 export interface Gesture {
@@ -390,6 +394,8 @@ export interface SimSave {
   /** Véhicules (phase 7) ; absents des anciennes sauvegardes. */
   vehicles?: VehicleState[];
   nextVehicle?: number;
+  /** Phase 9 : aléa du monde (foudre, événements). */
+  worldRng?: number;
 }
 
 export interface SimulationOptions {
@@ -592,6 +598,12 @@ export class LocalSimulation {
   private readonly pending: Array<{ seq: number; cmd: InputCmd; after: MoveState }> = [];
   /** Copie : corrections de position reçues de l'hôte (diagnostic). */
   corrections = 0;
+  /** Phase 9 : météo imposée (outils de test, ou reçue de l'hôte) ; null : la météo du monde. */
+  weatherOverride: Weather | null = null;
+  private readonly weatherCache = new Map<string, { t: number; w: Weather }>();
+  private readonly wetCache = new Map<string, { t: number; v: number }>();
+  /** Générateur pseudo-aléatoire du monde (foudre, événements), sauvegardé avec lui. */
+  worldRng = 0x9e3779b9;
   private lastDrownEvent = -1e9;
   private yaw = 0;
   private pitch = 0;
@@ -839,7 +851,7 @@ export class LocalSimulation {
   private push(e: SimEvent): void {
     this.events.push(e);
     // Les sons des créatures et des combats sont entendus par tous les joueurs (spatialisés par l'affichage).
-    if (e.type === 'son' && this.players.size > 1) for (const sl of this.players.values()) if (sl !== this.cur) sl.events.push(e);
+    if ((e.type === 'son' || e.type === 'foudre') && this.players.size > 1) for (const sl of this.players.values()) if (sl !== this.cur) sl.events.push(e);
   }
 
   private msg(text: string, tone: Tone = 'info'): void {
@@ -893,6 +905,7 @@ export class LocalSimulation {
     if (this.tick % 6 === 3) this.separateCreaturesFromVehicles();
     if (this.tick % 30 === 0) this.props.rescueFallen();
     if (this.tick % 15 === 0) this.stepCollapse();
+    if (this.tick % 30 === 15) this.stepLightning();
     if (this.tick % 30 === 0) {
       this.stepFires(30 * TICK_DT);
       this.stepFurnaces(30 * TICK_DT);
@@ -1033,6 +1046,7 @@ export class LocalSimulation {
         this.msg(this.props.refusal, 'alerte');
         this.props.refusal = null;
       }
+      this.phys.wetness = this.wetness(s.x, s.z);
       stepMovement(this.phys, this.collider, s, c, TICK_DT);
     }
     if (this.dead) return;
@@ -2544,6 +2558,19 @@ export class LocalSimulation {
       fire.fuel -= dt;
       const pos = this.props.position(def.id);
       const near = pos ? Math.hypot(pos.x - s.x, pos.z - s.z) < 12 : false;
+      // Phase 9 : la pluie noie les feux à découvert (pas sous un toit).
+      if (pos) {
+        const w = this.weather(pos.x, pos.z);
+        const wet = w.rain + w.snow * 0.5;
+        if (wet > 0.15 && !this.sheltered(pos.x, pos.y + 0.3, pos.z)) {
+          fire.fuel -= dt * wet * (def.kind === 'torche' ? 3 : 2);
+          if (wet > (def.kind === 'torche' ? 0.8 : 0.7) && this.worldRand() < wet * 0.2) {
+            fire.lit = false;
+            if (near) this.msg(def.kind === 'torche' ? 'La pluie éteint la torche.' : 'La pluie éteint le feu.', 'alerte');
+            continue;
+          }
+        }
+      }
       if (def.kind === 'torche') {
         if (fire.fuel <= 0) {
           this.props.remove(def.id);
@@ -3300,8 +3327,10 @@ export class LocalSimulation {
     const tool = h ? ITEMS[h.item].tool : undefined;
     const weapon = tool && (tool.tags.includes('pointe') || tool.tags.includes('hache') || (tool.tags.includes('tranchant') && tool.reach >= 0.3)) ? Math.min(1, 0.5 + tool.power * 0.3) : 0;
     const meat = countOf(this.inventory, 'viande_crue') + countOf(this.inventory, 'viande_cuite') > 0 || h?.item === 'viande_crue' || h?.item === 'viande_cuite';
+    const hour = hourOf(this.time);
     return {
       id: this.cur.id,
+      light: Math.min(1, daylight(hour) + 0.12 * moonlight(this.time) * (1 - daylight(hour))),
       x: s.x,
       y: s.y,
       z: s.z,
@@ -3371,6 +3400,11 @@ export class LocalSimulation {
     if (!this.fauna.enabled) return;
     if (this.tick % 30 === 0) this.refreshFaunaEnv();
     this.stepProjectiles();
+    this.faunaEnv.night = 1 - daylight(hourOf(this.time));
+    {
+      const ls = this.local.state;
+      this.faunaEnv.rain = this.weather(ls.x, ls.z).rain;
+    }
     const watched: FaunaPlayer[] = [];
     for (const sl of this.players.values()) if (!sl.shielded) watched.push(this.withPlayer(sl, () => this.faunaPlayer()));
     this.fauna.step(TICK_DT, this.time, watched, this.faunaEnv);
@@ -3923,7 +3957,129 @@ export class LocalSimulation {
 
   /** Vent du moment (vagues, dérive des bateaux). */
   wind(): Wind {
-    return windAt(this.time, this.terrain.seed);
+    const w = windAt(this.time, this.terrain.seed);
+    // Phase 9 : les perturbations et les orages forcent le vent.
+    const s = this.local === this.cur ? this.state : this.local.state;
+    w.speed += this.weather(s.x, s.z).gust;
+    return w;
+  }
+
+  /** Phase 9 : météo en un lieu (cellule de 64 m, recalculée chaque seconde). */
+  weather(x: number, z: number): Weather {
+    if (this.weatherOverride) return this.weatherOverride;
+    const key = `${Math.floor(x / 64)},${Math.floor(z / 64)}`;
+    const c = this.weatherCache.get(key);
+    if (c && Math.abs(this.time - c.t) < 1) return c.w;
+    const w = weatherAt(this.terrain, this.time, x, z);
+    if (this.weatherCache.size > 256) this.weatherCache.clear();
+    this.weatherCache.set(key, { t: this.time, w });
+    return w;
+  }
+
+  /** Phase 9 : sol mouillé en un lieu (pluie des dernières minutes). */
+  wetness(x: number, z: number): number {
+    if (this.weatherOverride) return this.weatherOverride.rain;
+    const key = `${Math.floor(x / 64)},${Math.floor(z / 64)}`;
+    const c = this.wetCache.get(key);
+    if (c && Math.abs(this.time - c.t) < 10) return c.v;
+    const v = wetnessAt(this.terrain, this.time, x, z);
+    if (this.wetCache.size > 256) this.wetCache.clear();
+    this.wetCache.set(key, { t: this.time, v });
+    return v;
+  }
+
+  /** Phase 9 : un toit, un plafond ou une voûte au-dessus de ce point (à moins de 12 m). */
+  sheltered(x: number, y: number, z: number): boolean {
+    const hit = this.phys.world.castRay(new RAPIER.Ray({ x, y: y + 0.2, z }, { x: 0, y: 1, z: 0 }), 12, true, undefined, QUERY_SHELTER);
+    return hit !== null;
+  }
+
+  /** Tirage pseudo-aléatoire du monde (0 à 1). */
+  private worldRand(): number {
+    let t = (this.worldRng = (this.worldRng + 0x6d2b79f5) >>> 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  /** Phase 9 : orages — la foudre frappe les points hauts près des joueurs (toutes les 0,5 s). */
+  private stepLightning(): void {
+    for (const sl of this.players.values()) {
+      if (sl.away) continue;
+      const ps = sl.state;
+      const w = this.weather(ps.x, ps.z);
+      if (w.storm < 0.25 || this.worldRand() > w.storm * 0.035) continue;
+      // Points candidats : on garde le plus haut (les éclairs cherchent les sommets).
+      let best = { x: ps.x, z: ps.z, h: -1e9 };
+      for (let k = 0; k < 5; k++) {
+        const a = this.worldRand() * Math.PI * 2;
+        const r = 60 + this.worldRand() * 500;
+        const x = ps.x + Math.cos(a) * r;
+        const z = ps.z + Math.sin(a) * r;
+        const h = this.terrain.heightAt(x, z);
+        if (h > best.h) best = { x, z, h };
+      }
+      // Un joueur à découvert sur un point haut attire la foudre.
+      const exposed = this.withPlayer(sl, () => !this.sheltered(ps.x, ps.y + 1.6, ps.z) && this.vitals.state !== 'mort' && ps.mode !== MODE_SWIM);
+      const ground = this.terrain.heightAt(ps.x, ps.z);
+      const around = Math.max(this.terrain.heightAt(ps.x + 15, ps.z), this.terrain.heightAt(ps.x - 15, ps.z), this.terrain.heightAt(ps.x, ps.z + 15), this.terrain.heightAt(ps.x, ps.z - 15));
+      const onTop = ground >= around - 0.5;
+      if (exposed && onTop && this.worldRand() < 0.12 * w.storm) best = { x: ps.x, z: ps.z, h: ps.y };
+      this.strike(best.x, best.z);
+    }
+  }
+
+  /** La foudre tombe en (x, z) : joueurs, constructions, arbres secs. */
+  strike(x: number, z: number): void {
+    const top = this.phys.groundHeight(x, z, 900, QUERY_SHELTER) ?? this.terrain.heightAt(x, z);
+    this.push({ type: 'foudre', x, y: top, z, tick: this.tick });
+    // Construction frappée : la pièce la plus haute est abîmée et peut prendre feu.
+    for (const st of this.build.structures) {
+      if (Math.hypot(st.x - x, st.z - z) > 25) continue;
+      let hit: { p: number; y: number } | null = null;
+      for (const p of st.pieces) {
+        if (!isDone(p)) continue;
+        const t = pieceTransform(st, p.slot);
+        if (Math.hypot(t.x - x, t.z - z) < 3 && (!hit || t.y > hit.y)) hit = { p: p.id, y: t.y };
+      }
+      if (hit) {
+        const piece = this.build.piece(st.id, hit.p);
+        if (piece) {
+          if (combustible(piece.mat)) piece.burning = Math.max(piece.burning, 1);
+          if (this.build.damage(st.id, hit.p, damageFor(piece.mat, 'feu', 60))) this.breakPiece(st.id, hit.p, 0.3, null);
+          this.build.touch();
+        }
+        break;
+      }
+    }
+    // Joueurs tout près : touché de plein fouet (à 2 m) ou projeté par le choc (à 6 m), sauf à l'abri.
+    for (const sl of this.players.values()) {
+      const ps = sl.state;
+      const d = Math.hypot(ps.x - x, ps.z - z);
+      if (d > 6) continue;
+      this.withPlayer(sl, () => {
+        const v = this.vitals;
+        if (v.state === 'mort' || this.sheltered(ps.x, ps.y + 1.6, ps.z)) return;
+        if (d < 2) {
+          damage(v, 45);
+          addInjury(v, 'torse', 'brulure', true);
+          addInjury(v, 'tete', 'commotion');
+          knockOut(v, 25);
+          if (v.health <= 0) {
+            die(v, 'foudre');
+            this.onDeath();
+            return;
+          }
+          this.msg('La foudre vous frappe !', 'danger');
+          this.onVital({ type: 'inconscient', reason: 'choc' });
+        } else {
+          damage(v, 8);
+          addInjury(v, rand(v) < 0.5 ? 'bras_g' : 'bras_d', 'brulure');
+          this.msg('La foudre tombe tout près : le choc vous jette à terre.', 'danger');
+          ps.vy = Math.max(ps.vy, 3);
+        }
+      });
+    }
   }
 
   /**
@@ -4807,6 +4963,7 @@ export class LocalSimulation {
       else if (this.gesture) c = { ...q, wx: 0, wz: 0, buttons: q.buttons & BTN_CROUCH };
       // L'objet tenu suit les mains (sans prise ni lancer : c'est l'hôte qui décide).
       if (this.props.held) this.props.update(s, { ...c, buttons: c.buttons & ~(BTN_INTERACT | BTN_THROW) }, 0);
+      this.phys.wetness = this.wetness(s.x, s.z);
       stepMovement(this.phys, this.collider, s, c, TICK_DT);
       this.pending.push({ seq: cmd.seq, cmd: c, after: cloneState(s) });
       if (this.pending.length > 600) this.pending.shift();
@@ -4937,6 +5094,7 @@ export class LocalSimulation {
       fauna: this.fauna.serialize(),
       vehicles: this.vehicles,
       nextVehicle: this.nextVehicle,
+      worldRng: this.worldRng,
     };
   }
 
@@ -4945,6 +5103,7 @@ export class LocalSimulation {
     if (typeof raw !== 'object' || raw === null) return null;
     const r = raw as Record<string, unknown>;
     if (typeof r.time === 'number' && Number.isFinite(r.time) && r.time >= 0) this.time = r.time;
+    if (typeof r.worldRng === 'number' && Number.isInteger(r.worldRng)) this.worldRng = r.worldRng >>> 0;
     this.props.restore(r.props);
     this.world.restore(r.world);
     this.build.restore(r.build);

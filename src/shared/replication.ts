@@ -15,6 +15,7 @@ import type { PropDef, PropKind } from './props';
 import type { LocalSimulation, SelfState, SimEvent } from './simulation';
 import { chunkCoord, chunkKey } from './terrain';
 import type { VehicleState } from './vehicles';
+import type { Weather } from './weather';
 
 /** Un autre joueur, tel que le voit un joueur proche. */
 export interface NetPlayerView {
@@ -39,7 +40,7 @@ export interface NetPlayerView {
 export type PoseTuple = [id: string, x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number];
 
 export type HostMessage =
-  | { t: 'snap'; tick: number; time: number; ack: number; you: MoveState; pl: NetPlayerView[]; cr: CreatureView[]; vp: PoseTuple[] }
+  | { t: 'snap'; tick: number; time: number; ack: number; you: MoveState; pl: NetPlayerView[]; cr: CreatureView[]; vp: PoseTuple[]; wx?: Weather | null }
   | { t: 'self'; d: SelfState }
   | { t: 'props'; area: string[]; ids?: string[]; up?: Array<[PropDef, number, number, number, number, number, number, number]>; pose?: PoseTuple[] }
   | { t: 'veh'; list: VehicleState[] }
@@ -159,7 +160,7 @@ export class Replicator {
     const cr = sim.fauna.enabled ? sim.fauna.views().filter((c) => Math.hypot(c.x - s.x, c.z - s.z) < VIEW_RANGE) : [];
     const vp: PoseTuple[] = [];
     for (const v of sim.vehicles) if (Math.hypot(v.x - s.x, v.z - s.z) < VEHICLE_RANGE) vp.push([v.id, r3(v.x), r3(v.y), r3(v.z), r3(v.qx), r3(v.qy), r3(v.qz), r3(v.qw)]);
-    return { t: 'snap', tick, time: sim.time, ack: me.lastSeq, you: { ...s }, pl, cr, vp };
+    return { t: 'snap', tick, time: sim.time, ack: me.lastSeq, you: { ...s }, pl, cr, vp, wx: sim.weatherOverride };
   }
 
   private props(checkDefs: boolean): HostMessage | null {
@@ -217,6 +218,7 @@ export function applyHostMessage(sim: LocalSimulation, msg: HostMessage): { play
   switch (msg.t) {
     case 'snap': {
       const error = sim.reconcile(msg.you, msg.ack, msg.time);
+      sim.weatherOverride = msg.wx ?? null;
       sim.remoteCreatures = msg.cr;
       for (const [id, x, y, z, qx, qy, qz, qw] of msg.vp) {
         const v = sim.vehicle(id);

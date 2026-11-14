@@ -33,6 +33,10 @@ import { StructureView } from '../render/structure-view';
 import { CreatureView } from '../render/creature-view';
 import { VehicleView } from '../render/vehicle-view';
 import { AvatarView } from '../render/avatar-view';
+import { ambienceAt } from '../render/sky';
+import { PrecipView } from '../render/precip-view';
+import { CLEAR, type Weather } from '../../shared/weather';
+import { hourOf, nextTimeAt } from '../../shared/daynight';
 import type { HostSession } from '../net/multiplayer';
 import type { RemoteClient, Welcome } from '../net/remote-client';
 import type { NetPlayerView } from '../../shared/replication';
@@ -168,6 +172,14 @@ export class GameSession {
   private lastFrame = 0;
   private lastHud = 0;
   private seq = 0;
+  private handLight: PointLight | null = null;
+  /** Phase 9 : pluie, neige, éclairs ; météo et abri au point de vue. */
+  private readonly precip: PrecipView;
+  private flash = 0;
+  private weatherNow: Weather = CLEAR;
+  private windNow = 0;
+  private underRoof = false;
+  private shelterAt = 0;
   private benchRunner: BenchRunner | null = null;
   private lastCpuMs = 0;
   private lastUnlockAt = -1e9;
@@ -297,6 +309,7 @@ export class GameSession {
     this.creatureView = new CreatureView(this.scene);
     this.vehicleView = new VehicleView(this.scene, smat);
     this.avatars = new AvatarView(this.scene);
+    this.precip = new PrecipView(this.scene);
     // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
     opts.onBuildMode?.(false);
     this.applySettings();
@@ -375,6 +388,25 @@ export class GameSession {
     return this.sim?.spawn ?? null;
   }
 
+  /** Outil de test : impose une météo (solo ou hôte) ; null : la météo du monde. */
+  setWeather(w: Weather | null): boolean {
+    if (!this.sim || this.net?.kind === 'client') return false;
+    this.sim.weatherOverride = w;
+    return true;
+  }
+
+  /** Météo au point de vue (tests). */
+  get weather(): Weather {
+    return this.weatherNow;
+  }
+
+  /** Outil de test : avance le temps du monde jusqu'à l'heure voulue (solo ou hôte). */
+  setHour(hour: number): boolean {
+    if (!this.sim || this.net?.kind === 'client' || !Number.isFinite(hour)) return false;
+    this.sim.time = nextTimeAt(this.sim.time, hour);
+    return true;
+  }
+
   /** Outil de test : téléporte le joueur vers une destination prédéfinie. */
   teleport(destId: string): boolean {
     const dest = TEST_DESTINATIONS.find((d) => d.id === destId);
@@ -410,7 +442,7 @@ export class GameSession {
     const swimming = sim.state.mode === MODE_SWIM || y < WATER_LEVEL;
     const ombreLevel = swimming ? ombre : ombre * 0.3;
     this.dread += (Math.max(ombreLevel * 0.8, danger * 0.35) - this.dread) * Math.min(1, dt * 1.5);
-    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: y < WATER_LEVEL, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel });
+    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: y < WATER_LEVEL, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel, rain: this.weatherNow.rain * (this.underRoof ? 0.55 : 1), wind: this.windNow });
     // Frôlements et pas des animaux proches qu'on ne voit pas forcément.
     if (now - this.lastRustle > 450) {
       this.lastRustle = now;
@@ -692,6 +724,19 @@ export class GameSession {
     this.deadBack += ((v.state === 'mort' ? 2.2 : 0) - this.deadBack) * Math.min(1, dt * 2);
     this.camera.position.set(x + Math.cos(this.yaw) * bobX - Math.sin(this.yaw) * this.deadBack, camY, z - Math.sin(this.yaw) * bobX - Math.cos(this.yaw) * this.deadBack);
     this.camera.rotation.set(this.pitch + shakeP, this.yaw, shakeR + this.roll);
+    // Phase 9 : heure, météo (au point de vue), abri sous un toit.
+    const w = sim.weather(x, z);
+    if (now - this.shelterAt > 250) {
+      this.shelterAt = now;
+      this.underRoof = sim.sheltered(x, baseY + 1.5, z);
+    }
+    this.flash = Math.max(0, this.flash - dt * 2.5);
+    this.weatherNow = w;
+    this.world.setAmbience(ambienceAt(hourOf(sim.time), sim.time, { cloud: w.cloud, rain: Math.min(1, w.rain + w.snow * 0.5), fog: w.fog, flash: this.flash }, 0));
+    const windNow = sim.wind();
+    this.windNow = windNow.speed;
+    const dry = this.underRoof || this.world.isUnderwater;
+    this.precip.update(x, camY, z, dry ? 0 : w.rain, dry ? 0 : w.snow, windNow.speed, windNow.dir, dt, now);
     this.world.update(x, camY, z, this.opts.device.mobile ? 4 : 6);
     this.world.updateWater(x, z, sim.time, sim.wind());
     if (sim.world.version !== this.worldVersion) {
@@ -1014,7 +1059,22 @@ export class GameSession {
 
   /** Lumières orangées des feux, des torches et des incendies les plus proches. */
   private updateLights(views: ReturnType<NonNullable<GameSession['sim']>['props']['views']>, x: number, y: number, z: number, now: number): void {
-    const want = this.preset === 'low' ? 0 : 2;
+    // Phase 9 : la torche (ou la lampe) tenue éclaire à toutes les qualités : indispensable la nuit et sous terre.
+    const heldLit = views.find((v) => v.held && v.lit);
+    if (!this.handLight) {
+      const hl = new PointLight('torche tenue', new Vector3(0, -1000, 0), this.scene);
+      hl.diffuse = new Color3(1, 0.68, 0.36);
+      hl.specular = new Color3(0, 0, 0);
+      hl.range = 14;
+      hl.intensity = 0;
+      this.handLight = hl;
+    }
+    const hl = this.handLight;
+    if (heldLit) {
+      hl.position.set(heldLit.x, heldLit.y + 0.15, heldLit.z);
+      hl.intensity = 1.25 + 0.18 * Math.sin(now * 0.017) + 0.08 * Math.sin(now * 0.043);
+    } else hl.intensity = 0;
+    const want = this.preset === 'low' ? (heldLit ? 0 : 1) : 2;
     while (this.lights.length < want) {
       const l = new PointLight(`feu ${this.lights.length}`, new Vector3(0, -1000, 0), this.scene);
       l.diffuse = new Color3(1, 0.62, 0.3);
@@ -1025,7 +1085,7 @@ export class GameSession {
     }
     if (!this.lights.length) return;
     const sources: Array<{ x: number; y: number; z: number; d: number }> = [];
-    for (const v of views) if (v.lit) sources.push({ x: v.x, y: v.y + 0.5, z: v.z, d: Math.hypot(v.x - x, v.y - y, v.z - z) });
+    for (const v of views) if (v.lit && !v.held) sources.push({ x: v.x, y: v.y + 0.5, z: v.z, d: Math.hypot(v.x - x, v.y - y, v.z - z) });
     for (const b of this.structures.burning) sources.push({ ...b, y: b.y + 0.5, d: Math.hypot(b.x - x, b.y - y, b.z - z) });
     sources.sort((a, b) => a.d - b.d);
     this.lights.forEach((l, i) => {
@@ -1047,6 +1107,21 @@ export class GameSession {
   private handleEvent(ev: SimEvent): void {
     const msg = (text: string, tone: Tone) => this.opts.onMessage?.(text, tone);
     switch (ev.type) {
+      case 'foudre': {
+        // Éclair : on le voit aussitôt ; le tonnerre arrive à la vitesse du son.
+        const c = this.camera.position;
+        const d = Math.hypot(ev.x - c.x, ev.z - c.z);
+        if (d > 2500) break;
+        const now = performance.now();
+        this.precip.bolt(ev.x, ev.y, ev.z, now);
+        this.flash = Math.max(this.flash, Math.max(0.15, 1 - d / 1500));
+        const snd = this.opts.sound;
+        if (snd) {
+          if (d < 250) snd.play('foudre', ev.x, ev.y, ev.z, 1);
+          window.setTimeout(() => snd.play('tonnerre', ev.x, ev.y + 30, ev.z, Math.max(0.25, 1 - d / 2500)), (d / 343) * 1000);
+        }
+        break;
+      }
       case 'chute': {
         if (ev.severity >= 4) break;
         const [base, tone] = FALL_MESSAGES[ev.severity]!;
@@ -1275,6 +1350,7 @@ export class GameSession {
     this.world.dispose();
     this.creatureView.dispose();
     this.avatars.dispose();
+    this.precip.dispose();
     this.jobs.dispose();
     this.sim?.dispose();
     this.instr.dispose();

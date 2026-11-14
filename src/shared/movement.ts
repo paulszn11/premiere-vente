@@ -378,7 +378,9 @@ function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   setCrouch(phys, collider, s, (buttons & BTN_CROUCH) !== 0);
   const slope = slopeAt(phys, s.x, s.z);
   const waterDepth = WATER_LEVEL - s.y;
-  const surface: SurfaceId = waterDepth > SWIM.wadeStart ? 'eau' : surfaceOf(phys.terrain.sampleInto(s.x, s.z), slope.ny);
+  let surface: SurfaceId = waterDepth > SWIM.wadeStart ? 'eau' : surfaceOf(phys.terrain.sampleInto(s.x, s.z), slope.ny);
+  // Phase 9 : après la pluie, l'herbe et la terre deviennent de la boue.
+  if (phys.wetness > 0.5 && (surface === 'herbe' || surface === 'terre')) surface = 'boue';
   s.surface = surface;
   const eff = SURFACE_EFFECTS[surface];
 

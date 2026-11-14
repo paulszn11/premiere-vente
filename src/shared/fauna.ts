@@ -42,10 +42,16 @@ export interface FaunaPlayer {
   meat: boolean;
   /** Rayon du bruit des déplacements (m). */
   noise: number;
+  /** Phase 9 : lumière autour du joueur (0 : noir, 1 : plein jour). Absent : plein jour. */
+  light?: number;
 }
 
 export interface FaunaEnv {
   terrain: Terrain;
+  /** Phase 9 : obscurité (0 : jour, 1 : nuit noire) — activité des créatures selon l'heure. */
+  night?: number;
+  /** Phase 9 : pluie (0 à 1) — couvre les bruits, efface les pistes. */
+  rain?: number;
   /** La zone physique est chargée autour de ce point (rayons possibles). */
   physicsAt(x: number, z: number): boolean;
   /** Premier obstacle (sol, rochers, troncs, murs) le long d'une direction unitaire : distance, ou null. */
@@ -75,6 +81,8 @@ export type SoundKind =
   | 'phaco_grogne'
   | 'croco_souffle'
   | 'ombre_gronde'
+  | 'tonnerre'
+  | 'foudre'
   | 'eclaboussure'
   | 'morsure'
   | 'coup'
@@ -822,7 +830,7 @@ export class Fauna {
     let best: Crumb | null = null;
     for (let k = this.trail.length - 1; k >= 0; k--) {
       const cr = this.trail[k]!;
-      const life = cr.blood ? BLOOD_LIFE : TRAIL_LIFE;
+      const life = (cr.blood ? BLOOD_LIFE : TRAIL_LIFE) * (1 - 0.6 * (this.env?.rain ?? 0));
       const age = this.time - cr.t;
       if (age > life) break;
       const reach = d.smell * (cr.blood ? 1.6 : 0.6) * (1 - age / life);
@@ -996,6 +1004,11 @@ export class Fauna {
     else if (speed > 4) f *= 1.3;
     if (p.swimming && !p.underwater) f *= 0.7;
     if (c.mode === 'paitre') f *= 0.6;
+    if (c.mode === 'repos') f *= 0.5;
+    // Phase 9 : dans le noir, chaque espèce garde une part de sa vue ; une torche se voit de loin.
+    const light = p.light ?? 1;
+    if (p.torch) f *= light < 0.5 ? 1 + (0.5 - light) * 1.6 : 1;
+    else f *= light + (1 - light) * (d.nightVision ?? 0.35);
     return f;
   }
 
@@ -1036,7 +1049,7 @@ export class Fauna {
         const ang = Math.abs(wrap(angleTo(c.x, c.z, p.x, p.z) - c.yaw));
         if (ang <= (d.vision.fov * Math.PI) / 360 || dist < 2.5) see = this.lineOfSight(c, d, p);
       }
-      if (p.noise * d.hearing >= dist) hear = true;
+      if (p.noise * d.hearing * (1 - 0.5 * (this.env?.rain ?? 0)) >= dist) hear = true;
       if (d.smell > 0 && !p.underwater && dist < d.smell * (p.bleeding > 0.05 ? 1.8 : 1) * (p.meat ? 1.5 : 1) * 0.5) smell = true;
       // Le crocodile perçoit les remous de qui nage ou marche dans l'eau.
       if (c.sp === 'crocodile' && p.waterDepth > 0.3 && dist < 40) hear = true;
@@ -1088,6 +1101,8 @@ export class Fauna {
     if (p.torch || this.fireNear(p.x, p.z, 6)) v -= 1;
     v += (g.members.length - 3) * 0.08;
     v += (this.traits[g.sp]?.bold ?? 0) * 0.3;
+    // Phase 9 : les prédateurs nocturnes s'enhardissent la nuit.
+    if (SPECIES[g.sp].nocturnal) v += 0.3 * (this.env?.night ?? 0);
     v *= g.morale;
     return v;
   }
@@ -1409,6 +1424,14 @@ export class Fauna {
     }
     // Brouter en restant avec la harde.
     if (c.mode === 'alerte' && this.time - c.modeT < 3) return;
+    // Phase 9 : la nuit, la harde se serre et se repose.
+    if ((this.env?.night ?? 0) > 0.6) {
+      if (c.mode !== 'repos') this.setMode(c, 'repos');
+      const dg = dist2(c.x, c.z, g.gx, g.gz);
+      if (dg > 12) this.goTo(c, d, g.gx, g.gz, d.walk * 0.6, 3);
+      else c.goalSpeed = 0;
+      return;
+    }
     if (c.mode !== 'paitre' && c.mode !== 'errer') this.setMode(c, 'paitre');
     if (this.rand() < 0.04) this.setMode(c, c.mode === 'paitre' ? 'errer' : 'paitre');
     const dc = dist2(c.x, c.z, g.gx, g.gz);

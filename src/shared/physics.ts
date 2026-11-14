@@ -55,6 +55,8 @@ export const QUERY_TARGETS = interactionGroups(0xffff, GROUP_PROP | GROUP_NODE);
 export const NODE_GROUPS = interactionGroups(GROUP_NODE, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
 /** Requête « tout le décor » (sol, obstacles, objets). */
 export const QUERY_SOLID = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE | GROUP_PROP);
+/** Phase 9 : toit ou plafond au-dessus d'un point (abri de la pluie et de la foudre). */
+export const QUERY_SHELTER = interactionGroups(0xffff, GROUP_TERRAIN | GROUP_OBSTACLE);
 
 interface PhysChunk {
   colliders: RAPIER.Collider[];
@@ -96,6 +98,9 @@ export class PhysicsWorld {
   /** Chocs violents (force de contact au-delà du seuil d'un collisionneur) : poignées et force. */
   onContactForce: ((h1: number, h2: number, force: number) => void) | null = null;
   private readonly events = new RAPIER.EventQueue(true);
+
+  /** Phase 9 : sol mouillé (0 à 1) sous le joueur en cours de déplacement (pluie récente). */
+  wetness = 0;
 
   constructor(readonly terrain: Terrain) {
     this.world = new RAPIER.World({ x: 0, y: -MOVE.gravity, z: 0 });

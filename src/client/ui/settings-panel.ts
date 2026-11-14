@@ -26,6 +26,8 @@ export interface SettingsPanelDeps {
         vehicles: Array<{ id: string; label: string }>;
         onVehicle: (id: string) => void;
         onVehicleKit: () => void;
+        /** Phase 9 : outils supplémentaires (heure, météo, lieux…), une liste et un bouton chacun. */
+        extras?: Array<{ id: string; label: string; button: string; options?: Array<{ id: string; label: string }>; run: (value: string) => void }>;
       } | null)
     | undefined;
 }
@@ -84,7 +86,13 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     <button type="button" id="set-lake">Nager au-dessus des eaux profondes du lac (là où rôde la créature)</button>
     <label class="row"><span>Véhicule</span><select id="set-vehicle">${tools.vehicles.map((d) => opt(d.id, d.label, false)).join('')}</select></label>
     <button type="button" id="set-vehicle-go">Faire apparaître ce véhicule devant vous (prêt à rouler ou à naviguer)</button>
-    <button type="button" id="set-vehicle-kit">Recevoir des pièces et des outils pour les véhicules (et tous les plans)</button>`
+    <button type="button" id="set-vehicle-kit">Recevoir des pièces et des outils pour les véhicules (et tous les plans)</button>
+    ${(tools.extras ?? [])
+      .map(
+        (x) =>
+          `${x.options ? `<label class="row"><span>${esc(x.label)}</span><select id="set-x-${x.id}">${x.options.map((o) => opt(o.id, o.label, false)).join('')}</select></label>` : ''}<button type="button" data-extra="${x.id}">${esc(x.button)}</button>`,
+      )
+      .join('')}`
     : '';
 
   deps.root.innerHTML = `
@@ -148,6 +156,12 @@ export function renderSettings(deps: SettingsPanelDeps, capturingAction: Action 
     if (sel && tools) tools.onVehicle(sel.value);
   });
   root.querySelector('#set-vehicle-kit')?.addEventListener('click', () => tools?.onVehicleKit());
+  for (const x of tools?.extras ?? []) {
+    root.querySelector(`[data-extra="${x.id}"]`)?.addEventListener('click', () => {
+      const sel = root.querySelector<HTMLSelectElement>(`#set-x-${x.id}`);
+      x.run(sel?.value ?? '');
+    });
+  }
   live('set-volume', pct, 'volume');
   live('set-scale', pct, 'renderScale');
   live('set-fov', (v) => `${v}°`, 'fov');

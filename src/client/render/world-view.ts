@@ -4,6 +4,7 @@
 // Graphismes volontairement simples pour l'instant.
 
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
+import type { Ambience } from './sky';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
@@ -234,6 +235,10 @@ export class WorldView {
   private vegetationDirty = true;
   private treeCount = 0;
   private underwater = false;
+  private readonly skyLight: HemisphericLight;
+  private readonly sunLight: DirectionalLight;
+  /** Ambiance lumineuse (phase 9) : heure, météo, sous terre. */
+  private ambience: Ambience | null = null;
   private params: QualityParams;
 
   constructor(
@@ -254,6 +259,8 @@ export class WorldView {
     sky.groundColor = new Color3(0.35, 0.32, 0.28);
     const sun = new DirectionalLight('soleil', new Vector3(-0.35, -1, -0.25), scene);
     sun.intensity = 0.55;
+    this.skyLight = sky;
+    this.sunLight = sun;
 
     this.material = new StandardMaterial('sol', scene);
     this.material.diffuseColor = new Color3(1, 1, 1);
@@ -356,6 +363,24 @@ export class WorldView {
     this.scene.fogStart = d * 0.55;
     this.scene.fogEnd = d * 0.95;
     this.buildWater(d * 1.3);
+  }
+
+  /** Phase 9 : heure du jour, météo, sous terre (lumières, ciel, brouillard). */
+  setAmbience(a: Ambience): void {
+    this.ambience = a;
+    const sky = this.skyLight;
+    sky.intensity = a.hemiIntensity;
+    sky.diffuse.set(a.hemiColor[0], a.hemiColor[1], a.hemiColor[2]);
+    sky.groundColor.set(a.hemiGround[0], a.hemiGround[1], a.hemiGround[2]);
+    const sun = this.sunLight;
+    sun.direction.set(a.lightDir[0], a.lightDir[1], a.lightDir[2]);
+    sun.diffuse.set(a.lightColor[0], a.lightColor[1], a.lightColor[2]);
+    sun.intensity = a.lightIntensity;
+    if (!this.underwater) {
+      const d = this.viewDistance;
+      this.scene.fogStart = d * 0.55 * a.fogScale;
+      this.scene.fogEnd = d * 0.95 * Math.max(a.fogScale, 0.2);
+    }
   }
 
   // ——— Surface de l'eau (phase 7 : vagues levées par le vent) ———
@@ -672,12 +697,20 @@ export class WorldView {
       this.scene.fogColor = c.clone();
       this.scene.clearColor = new Color4(c.r, c.g, c.b, 1);
       this.scene.fogMode = under ? Scene.FOGMODE_EXP2 : Scene.FOGMODE_LINEAR;
+      if (!under) this.applyFog();
+    }
+    // Ciel et brouillard de l'heure et de la météo (hors de l'eau).
+    if (!under && this.ambience) {
+      const [r, g, b] = this.ambience.sky;
+      this.scene.fogColor.set(r, g, b);
+      this.scene.clearColor.set(r, g, b, 1);
     }
     if (under) {
       // Plus on descend, plus l'eau est sombre et trouble.
       const depth = WATER_LEVEL - camY;
       this.scene.fogDensity = 0.06 + Math.min(0.12, depth * 0.008);
-      const k = Math.max(0.35, 1 - depth * 0.04);
+      // La nuit, l'eau est noire.
+      const k = Math.max(0.35, 1 - depth * 0.04) * (this.ambience ? 0.1 + 0.9 * this.ambience.day : 1);
       this.scene.fogColor.set(UNDERWATER.r * k, UNDERWATER.g * k, UNDERWATER.b * k);
       this.scene.clearColor.set(UNDERWATER.r * k, UNDERWATER.g * k, UNDERWATER.b * k, 1);
     }

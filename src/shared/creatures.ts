@@ -62,6 +62,10 @@ export interface SpeciesDef {
   /** Pente maximale : composante verticale minimale de la normale du sol. */
   slope: number;
   vision: { range: number; fov: number };
+  /** Phase 9 : part de la vue gardée la nuit (0 : aveugle dans le noir, 1 : voit comme le jour). */
+  nightVision?: number;
+  /** Phase 9 : plus active la nuit (chasse nocturne). */
+  nocturnal?: boolean;
   /** Multiplicateur de l'ouïe et portée de l'odorat (m). */
   hearing: number;
   smell: number;
@@ -110,6 +114,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.74,
     vision: { range: 75, fov: 300 },
+    nightVision: 0.4,
     hearing: 1.3,
     smell: 40,
     flee: 35,
@@ -140,6 +145,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.76,
     vision: { range: 25, fov: 220 },
+    nightVision: 0.35,
     hearing: 1,
     smell: 40,
     flee: 18,
@@ -171,6 +177,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.5,
     vision: { range: 90, fov: 180 },
+    nightVision: 0.25,
     hearing: 1,
     smell: 15,
     flee: 25,
@@ -219,6 +226,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.8,
     vision: { range: 30, fov: 200 },
+    nightVision: 0.45,
     hearing: 1.2,
     smell: 120,
     flee: 22,
@@ -266,6 +274,8 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.72,
     vision: { range: 60, fov: 200 },
+    nightVision: 0.85,
+    nocturnal: true,
     hearing: 1.4,
     smell: 150,
     flee: 12,
@@ -297,6 +307,8 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.45,
     vision: { range: 90, fov: 200 },
+    nightVision: 0.9,
+    nocturnal: true,
     hearing: 1.2,
     smell: 30,
     flee: 30,
@@ -346,6 +358,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0.8,
     vision: { range: 25, fov: 170 },
+    nightVision: 0.6,
     hearing: 1,
     smell: 10,
     flee: 8,
@@ -377,6 +390,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 0,
     slope: 0,
     vision: { range: 400, fov: 360 },
+    nightVision: 0.1,
     hearing: 0.5,
     smell: 0,
     flee: 12,
@@ -407,6 +421,7 @@ export const SPECIES: Record<SpeciesId, SpeciesDef> = {
     minDepth: 3,
     slope: 0,
     vision: { range: 20, fov: 360 },
+    nightVision: 1,
     hearing: 1,
     smell: 120,
     flee: 0,

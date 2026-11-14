@@ -21,6 +21,19 @@ import { HostSession, joinWorld, loadIdentity, saveIdentity } from './net/multip
 import { readRecoveryKey, recoveryKey } from '../shared/net-crypto';
 import { ACCESS_LABELS, PERMS, PERM_LABELS, ROLE_LABELS, type Role } from '../shared/permissions';
 import { formatWorldCode, normalizeWorldCode } from '../shared/worldcode';
+import { hourOf } from '../shared/daynight';
+import type { Weather } from '../shared/weather';
+
+/** Outils de test : météos à imposer. */
+const WEATHER_PRESETS: Record<string, { label: string; w: Weather | null }> = {
+  monde: { label: 'Celle du monde (pas de forçage)', w: null },
+  clair: { label: 'Ciel clair', w: { cloud: 0, rain: 0, storm: 0, fog: 0, snow: 0, gust: 0 } },
+  nuageux: { label: 'Nuageux', w: { cloud: 0.8, rain: 0, storm: 0, fog: 0.05, snow: 0, gust: 1 } },
+  pluie: { label: 'Pluie', w: { cloud: 1, rain: 0.75, storm: 0, fog: 0.25, snow: 0, gust: 2 } },
+  orage: { label: 'Orage', w: { cloud: 1, rain: 0.95, storm: 1, fog: 0.3, snow: 0, gust: 11 } },
+  brouillard: { label: 'Brouillard', w: { cloud: 0.6, rain: 0, storm: 0, fog: 0.95, snow: 0, gust: 0 } },
+  neige: { label: 'Neige', w: { cloud: 1, rain: 0, storm: 0, fog: 0.4, snow: 0.9, gust: 2 } },
+};
 
 /** Outils de test : véhicules prêts à l'emploi. */
 const VEHICLE_TOOLS: Array<{ id: string; label: string; frame: FrameKind; steam: boolean }> = [
@@ -111,6 +124,39 @@ async function boot(): Promise<void> {
   let settings: Settings = loadSettings();
   const getSettings = () => settings;
   let session: GameSession | null = null;
+
+  /** Phase 9 : outils de test supplémentaires (heure du jour…). */
+  const testExtras = (): Array<{ id: string; label: string; button: string; options?: Array<{ id: string; label: string }>; run: (value: string) => void }> => [
+    {
+      id: 'heure',
+      label: 'Heure',
+      button: 'Passer à cette heure',
+      options: [
+        { id: '6', label: 'Aube (6 h)' },
+        { id: '12', label: 'Midi' },
+        { id: '18', label: 'Crépuscule (18 h)' },
+        { id: '23', label: 'Nuit (23 h)' },
+        { id: '3', label: 'Nuit profonde (3 h)' },
+      ],
+      run: (v) => {
+        const ok = session?.setHour(Number(v)) ?? false;
+        show('pause');
+        toast(ok ? `Il est maintenant ${v} h.` : 'Réservé à l’hôte (ou au jeu solo).');
+      },
+    },
+    {
+      id: 'meteo',
+      label: 'Météo',
+      button: 'Imposer cette météo',
+      options: Object.entries(WEATHER_PRESETS).map(([id, p]) => ({ id, label: p.label })),
+      run: (v) => {
+        const p = WEATHER_PRESETS[v];
+        const ok = session?.setWeather(p?.w ?? null) ?? false;
+        show('pause');
+        toast(ok ? `Météo : ${p?.label ?? 'celle du monde'}.` : 'Réservé à l’hôte (ou au jeu solo).');
+      },
+    },
+  ];
 
   setLoading('Chargement du moteur physique…');
   const physicsReady = initPhysics();
@@ -209,6 +255,7 @@ async function boot(): Promise<void> {
           show('pause');
           toast('Pièces, fer et outils reçus ; tous les plans de véhicules et de machines sont connus (onglet « Construire »).');
         },
+        extras: testExtras(),
       };
     },
   };
@@ -930,6 +977,16 @@ async function boot(): Promise<void> {
       return { kind: 'client', role: c.role, perms: c.perms, rtt: c.rtt, connected: c.connected, roster: c.roster, players: c.players.map((p) => ({ id: p.id, name: p.name, x: p.x, y: p.y, z: p.z })), corrections: session.sim.corrections };
     },
     openWorld: () => openWorld(),
+    setHour: (h: number) => session?.setHour(h) ?? false,
+    setWeather: (k: string) => session?.setWeather(WEATHER_PRESETS[k]?.w ?? null) ?? false,
+    weather: () => session?.weather ?? null,
+    strike: (dx: number, dz: number) => {
+      const sim = session?.sim;
+      if (!sim || session?.net?.kind === 'client') return false;
+      sim.strike(sim.state.x + dx, sim.state.z + dz);
+      return true;
+    },
+    hour: () => (session?.sim ? hourOf(session.sim.time) : null),
     pause: (on = true) => session?.setPaused(on),
     joinWorld: (code: string, name: string) => joinGame(code, name),
     otherPlayers: () => session?.otherPlayers() ?? [],
