@@ -5,6 +5,7 @@
 import { CHUNK_SIZE, WATER_LEVEL, WORLD_HALF } from './constants';
 import type { BiomeId } from './geography';
 import { type NodeKind, nodesInChunk } from './resources';
+import { type PlaceKind, type PlaceSite, placesOf } from './places';
 import { mulberry32 } from './rng';
 import { type Terrain, chunkCoord, chunkKey } from './terrain';
 import { type TreeInstance, floraInChunk } from './vegetation';
@@ -116,8 +117,10 @@ export interface TestDestination {
    * Place le joueur dans l'eau profonde, face à une paroi à escalader, devant le gisement le plus proche,
    * ou (phase 9) au pied de la chute d'eau, au bord du ruisseau ou dans le bassin les plus proches.
    */
-  kind?: 'eau' | 'paroi' | 'gisement' | 'chute' | 'ruisseau' | 'bassin';
+  kind?: 'eau' | 'paroi' | 'gisement' | 'chute' | 'ruisseau' | 'bassin' | 'lieu';
   node?: NodeKind;
+  /** Phase 9 : lieu abandonné le plus proche (devant son entrée). */
+  place?: PlaceKind;
 }
 
 export const TEST_DESTINATIONS: TestDestination[] = [
@@ -140,7 +143,49 @@ export const TEST_DESTINATIONS: TestDestination[] = [
   { id: 'chute', label: 'Chute d’eau la plus proche', x: 0, z: 0, kind: 'chute' },
   { id: 'ruisseau', label: 'Ruisseau le plus proche', x: 0, z: 0, kind: 'ruisseau' },
   { id: 'bassin', label: 'Bassin le plus proche (nager)', x: 0, z: 0, kind: 'bassin' },
+  { id: 'lieu_ferme', label: 'Ferme abandonnée la plus proche', x: 0, z: 0, kind: 'lieu', place: 'ferme' },
+  { id: 'lieu_mission', label: 'Mission', x: 0, z: 0, kind: 'lieu', place: 'mission' },
+  { id: 'lieu_gare', label: 'Halte ferroviaire', x: 0, z: 0, kind: 'lieu', place: 'gare' },
+  { id: 'lieu_station', label: 'Station de recherche du lac', x: 0, z: 0, kind: 'lieu', place: 'station' },
+  { id: 'lieu_mine', label: 'Mine de la Colline Rouge', x: 0, z: 0, kind: 'lieu', place: 'mine' },
+  { id: 'lieu_ruines', label: 'Enceinte de pierre sèche la plus proche', x: 0, z: 0, kind: 'lieu', place: 'ruines' },
+  { id: 'lieu_cercle', label: 'Les Pierres Debout', x: 0, z: 0, kind: 'lieu', place: 'cercle' },
 ];
+
+/** Phase 9 : devant l'entrée du lieu abandonné le plus proche (outil de test). */
+function nearestPlace(terrain: Terrain, kind: PlaceKind, x0: number, z0: number): ResolvedDestination | null {
+  let best: PlaceSite | null = null;
+  let bd = Infinity;
+  for (const p of placesOf(terrain)) {
+    if (p.kind !== kind) continue;
+    const d = Math.hypot(p.x - x0, p.z - z0);
+    if (d < bd) {
+      bd = d;
+      best = p;
+    }
+  }
+  if (!best) return null;
+  // Les portes donnent sur le côté −z du lieu : on se place à 45 m devant (un lieu n’apparaît pas sous les
+  // pieds d’un joueur), tourné vers lui.
+  const c = Math.cos(best.yaw);
+  const n = Math.sin(best.yaw);
+  // Devant d'abord, puis sur les côtés et derrière (la station du lac a sa porte face à l'eau).
+  for (const [lx, lz] of [
+    [0, -1],
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+  ] as const) {
+    for (const back of [45, 55]) {
+      const x = best.x + (lx * c + lz * n) * back;
+      const z = best.z + (-lx * n + lz * c) * back;
+      const h = terrain.heightAt(x, z);
+      if (terrain.waterLevelAt(x, z) > h - 0.1) continue;
+      return { x, y: h + 0.3, z, yaw: Math.atan2(best.x - x, best.z - z) };
+    }
+  }
+  return null;
+}
 
 /** Phase 9 : chute d'eau, ruisseau ou bassin le plus proche (outil de test). */
 function nearestWater(terrain: Terrain, kind: 'chute' | 'ruisseau' | 'bassin', x0: number, z0: number): ResolvedDestination | null {
@@ -257,6 +302,10 @@ export interface ResolvedDestination {
 /** Trouve un point précis pour une destination de test. */
 export function resolveDestination(terrain: Terrain, d: TestDestination, from: { x: number; z: number } = { x: d.x, z: d.z }): ResolvedDestination {
   if (d.kind === 'eau') return { x: d.x, y: WATER_LEVEL - 1.3, z: d.z, yaw: null };
+  if (d.kind === 'lieu' && d.place) {
+    const r = nearestPlace(terrain, d.place, from.x, from.z);
+    return r ?? { x: from.x, y: terrain.heightAt(from.x, from.z) + 0.2, z: from.z, yaw: null };
+  }
   if (d.kind === 'chute' || d.kind === 'ruisseau' || d.kind === 'bassin') {
     const r = nearestWater(terrain, d.kind, from.x, from.z);
     return r ?? { x: from.x, y: terrain.heightAt(from.x, from.z) + 0.2, z: from.z, yaw: null };

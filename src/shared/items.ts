@@ -51,7 +51,17 @@ export type ItemId =
   | 'essieu'
   | 'machine_vapeur'
   | 'roue_aubes'
-  | 'gouvernail';
+  | 'gouvernail'
+  // Phase 9 : objets trouvés dans les lieux abandonnés
+  | 'document'
+  | 'cle'
+  | 'fil_cuivre'
+  | 'ampoule'
+  | 'bidon_essence'
+  | 'lanterne'
+  | 'fusil'
+  | 'cartouche'
+  | 'moteur_essence';
 
 /** Usages d'un outil. */
 export type ToolTag = 'tranchant' | 'hache' | 'percuteur' | 'fouir' | 'batee' | 'feu' | 'recipient' | 'pointe';
@@ -600,6 +610,114 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     pocket: false,
     stack: 1,
     description: 'Pour diriger un radeau sans effort, surtout lancé à la vapeur.',
+  },
+  // Phase 9 : objets abandonnés (lieux, bâtiments).
+  document: {
+    id: 'document',
+    label: 'document',
+    plural: 'documents',
+    feminine: false,
+    mass: 0.02,
+    volume: 0.05,
+    pocket: true,
+    stack: 1,
+    description: 'Papier écrit à la main ou à la machine. Se lit depuis le sac ; il est alors recopié dans le carnet.',
+  },
+  cle: {
+    id: 'cle',
+    label: 'clé',
+    plural: 'clés',
+    feminine: true,
+    mass: 0.05,
+    volume: 0.01,
+    pocket: true,
+    stack: 1,
+    description: 'Une clé de fer, avec une étiquette. Elle ouvre une porte fermée, quelque part.',
+  },
+  fil_cuivre: {
+    id: 'fil_cuivre',
+    label: 'bobine de fil de cuivre',
+    plural: 'bobines de fil de cuivre',
+    feminine: true,
+    mass: 0.6,
+    volume: 0.3,
+    pocket: false,
+    stack: 4,
+    rarity: 'rare',
+    description: 'Récupérée dans un bâtiment. Le cuivre conduit le courant : dynamo, lampes.',
+  },
+  ampoule: {
+    id: 'ampoule',
+    label: 'ampoule',
+    plural: 'ampoules',
+    feminine: true,
+    mass: 0.03,
+    volume: 0.1,
+    pocket: true,
+    stack: 6,
+    rarity: 'rare',
+    description: 'Fragile. Elle brille quand le courant d’une dynamo la traverse.',
+  },
+  bidon_essence: {
+    id: 'bidon_essence',
+    label: 'bidon d’essence',
+    plural: 'bidons d’essence',
+    feminine: false,
+    mass: 4.5,
+    volume: 6,
+    pocket: false,
+    stack: 1,
+    rarity: 'rare',
+    description: 'Cinq litres d’essence. Fait tourner un moteur à essence, remplit une lanterne ; s’enflamme très facilement.',
+  },
+  lanterne: {
+    id: 'lanterne',
+    label: 'lanterne',
+    plural: 'lanternes',
+    feminine: true,
+    mass: 0.9,
+    volume: 2,
+    pocket: false,
+    stack: 1,
+    rarity: 'rare',
+    description: 'Lanterne tempête : elle éclaire plus loin qu’une torche et ne s’éteint pas sous la pluie. Elle brûle de l’essence.',
+  },
+  fusil: {
+    id: 'fusil',
+    label: 'fusil',
+    plural: 'fusils',
+    feminine: false,
+    mass: 3.8,
+    volume: 4,
+    pocket: false,
+    stack: 1,
+    rarity: 'tres_rare',
+    tool: { tags: ['percuteur'], durability: 400, reach: 1.1, balance: 0.4, power: 0.8 },
+    description: 'Vieux fusil de chasse à un coup. Très puissant, mais il faut viser juste, recharger lentement, et le bruit porte très loin.',
+  },
+  cartouche: {
+    id: 'cartouche',
+    label: 'cartouche',
+    plural: 'cartouches',
+    feminine: true,
+    mass: 0.03,
+    volume: 0.01,
+    pocket: true,
+    stack: 12,
+    rarity: 'tres_rare',
+    description: 'Une seule balle. Chaque coup compte.',
+  },
+  moteur_essence: {
+    id: 'moteur_essence',
+    label: 'moteur à essence',
+    plural: 'moteurs à essence',
+    feminine: false,
+    mass: 28,
+    volume: 45,
+    pocket: false,
+    stack: 1,
+    rarity: 'tres_rare',
+    description: 'Petit moteur à essence, récupéré. Il démarre aussitôt et tire fort, mais il boit l’essence et s’entend de loin. Se monte sur un chariot ou un radeau.',
   },
 };
 

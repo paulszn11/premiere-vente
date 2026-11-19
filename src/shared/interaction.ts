@@ -199,6 +199,24 @@ function colliderFor(def: PropDef): RAPIER.ColliderDesc {
       return RAPIER.ColliderDesc.cylinder(def.length / 2, r).setRotation(LOG_ROT).setMass(m);
     case 'gouvernail':
       return RAPIER.ColliderDesc.cuboid(def.length / 2, 0.05, r).setMass(m);
+    // Phase 9 : objets abandonnés.
+    case 'document':
+      return RAPIER.ColliderDesc.cuboid(0.105, 0.004, 0.145).setMass(m);
+    case 'cle':
+      return RAPIER.ColliderDesc.cuboid(0.045, 0.006, 0.015).setMass(m);
+    case 'fil_cuivre':
+      return RAPIER.ColliderDesc.cylinder(0.035, 0.07).setMass(m);
+    case 'ampoule':
+    case 'cartouche':
+      return RAPIER.ColliderDesc.roundCuboid(r * 0.6, r * 0.6, r * 0.6, r * 0.3).setMass(m);
+    case 'bidon_essence':
+      return RAPIER.ColliderDesc.cuboid(0.15, 0.17, 0.07).setMass(m);
+    case 'lanterne':
+      return RAPIER.ColliderDesc.cylinder(0.14, 0.07).setMass(m);
+    case 'fusil':
+      return RAPIER.ColliderDesc.cuboid(def.length / 2, 0.035, 0.03).setMass(m);
+    case 'moteur_essence':
+      return RAPIER.ColliderDesc.cuboid(0.3, 0.2, 0.22).setMass(m);
     case 'pot_cru':
     case 'pot':
     case 'batee':
@@ -286,6 +304,19 @@ export class PropSystem {
     const full: PropDef = { ...def, id, dynamic: true };
     this.spawn(full, full.x, full.y, full.z, yawQuat(full.rot), false);
     if (vel) this.live.get(id)?.body.setLinvel(vel, true);
+    return id;
+  }
+
+  /**
+   * Phase 9 : crée un objet là où la physique n'est peut-être pas encore chargée (lieux abandonnés, loin du
+   * joueur) : il attend, rangé, que sa zone se charge, au lieu de tomber dans le vide.
+   */
+  placeDynamic(def: Omit<PropDef, 'id'>): string {
+    const id = `d${this.nextDyn++}`;
+    const full: PropDef = { ...def, id, dynamic: true };
+    const q = yawQuat(full.rot);
+    if (this.phys.hasChunk(chunkCoord(full.x), chunkCoord(full.z))) this.spawn(full, full.x, full.y, full.z, q, false);
+    else this.stored.set(id, { def: full, x: full.x, y: full.y, z: full.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w });
     return id;
   }
 

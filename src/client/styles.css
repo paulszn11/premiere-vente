@@ -72,6 +72,48 @@ body {
   width: min(760px, 100%);
 }
 
+/* Phase 9 : un document trouvé (papier jauni, écriture sombre). */
+.panel.doc {
+  background: #ece2c6;
+  color: #2b261d;
+  border-color: #b9a77c;
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+.panel.doc h2 {
+  font-size: 1.2rem;
+}
+
+.panel.doc .doc-kind {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6d5f43;
+}
+
+.panel.doc .doc-text p {
+  margin: 0 0 10px;
+  line-height: 1.55;
+}
+
+.panel.doc button {
+  color: #2b261d;
+  background: #d8caa2;
+  border-color: #a8956a;
+}
+
+.carnet .docs button.link {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 .panel-head {
   display: flex;
   align-items: center;

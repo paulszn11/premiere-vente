@@ -59,6 +59,8 @@ export type PlayerAction =
   | { type: 'demonter'; from: HandOrSlot }
   /** Remplir un pot d'eau (dans l'eau). */
   | { type: 'remplir'; from: HandOrSlot }
+  /** Phase 9 : lire un document (il est recopié dans le carnet). */
+  | { type: 'lire'; from: HandOrSlot }
   /** Foyer : allumer, ajouter du bois, poser ou reprendre un pot. */
   | { type: 'allumer'; prop: string }
   | { type: 'alimenter'; prop: string }
@@ -115,6 +117,7 @@ const TYPES = new Set([
   'ameliorer',
   'demonter',
   'remplir',
+  'lire',
   'allumer',
   'alimenter',
   'poser_feu',
@@ -195,7 +198,8 @@ export function readAction(raw: unknown): PlayerAction | null {
       return r.repeat === true ? { type: 'utiliser', repeat: true } : { type: 'utiliser' };
     case 'etabli_poser':
     case 'demonter':
-    case 'remplir': {
+    case 'remplir':
+    case 'lire': {
       const from = readSlot(r.from, true);
       return from ? { type: r.type, from } : null;
     }

@@ -21,10 +21,12 @@ export interface ItemStack {
   fx?: number;
   /** Pot : 0 vide, 1 eau, 2 eau bouillie. */
   w?: number;
+  /** Phase 9 : document (lequel) ou clé (ce qu'elle ouvre). */
+  tag?: string;
 }
 
 /** Propriétés propres à un exemplaire (un objet qui en a ne se regroupe pas). */
-export const META_KEYS = ['mass', 'radius', 'length', 'q', 'd', 'dm', 'fx', 'w'] as const;
+export const META_KEYS = ['mass', 'radius', 'length', 'q', 'd', 'dm', 'fx', 'w', 'tag'] as const;
 export type ItemMeta = Partial<Pick<ItemStack, (typeof META_KEYS)[number]>>;
 
 export const FX_DURCI = 1;
@@ -33,9 +35,12 @@ export const FX_LIGATURE_LACHE = 4;
 export const FX_MANCHE_FENDU = 8;
 
 export function metaOf(st: ItemStack): ItemMeta {
-  const m: ItemMeta = {};
-  for (const k of META_KEYS) if (st[k] !== undefined) m[k] = st[k];
-  return m;
+  const m: Record<string, number | string> = {};
+  for (const k of META_KEYS) {
+    const v = st[k];
+    if (v !== undefined) m[k] = v;
+  }
+  return m as ItemMeta;
 }
 
 function hasMeta(st: ItemStack): boolean {
@@ -284,6 +289,7 @@ function readStack(raw: unknown): ItemStack | null {
   if (d !== undefined) st.d = d;
   if (fx !== undefined) st.fx = Math.round(fx);
   if (w !== undefined) st.w = Math.round(w);
+  if (typeof r.tag === 'string' && /^[a-z0-9_]{1,40}$/.test(r.tag)) st.tag = r.tag;
   if (hasMeta(st) && st.count > 1 && !MASS_ITEMS.has(st.item) && (st.q !== undefined || st.d !== undefined)) st.count = 1;
   return st;
 }

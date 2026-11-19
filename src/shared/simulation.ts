@@ -23,6 +23,7 @@ import {
   pieceBoxes,
   pieceTransform,
   plansFrom,
+  toWorld as buildToWorld,
   rayBuild,
   repairNeeds,
   salvage,
@@ -155,9 +156,11 @@ import {
 import { GROUP_OBSTACLE, GROUP_TERRAIN, GROUP_VEHICLE, type HeightProvider, PLAYER_GROUPS, PhysicsWorld, QUERY_SHELTER, QUERY_TERRAIN, QUERY_VEHICLES, RAPIER, initPhysics, interactionGroups } from './physics';
 import { IMPACT_THRESHOLD, StructurePhysics } from './structure-physics';
 import type { Access, Owned, Use } from './permissions';
-import { type FireState, type FurnaceState, INSTALL_HALF, type InstallPropKind, ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
+import { type FireState, type FurnaceState, INSTALL_HALF, INSTALL_PROP_KINDS, type InstallPropKind, ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, type PropDef, type PropKind, QUICK_PICK, TRAP_KINDS, itemShape, propWithArticle } from './props';
 import { NODE_SPECS, type NodeKind, type TreePart, WorldState, treeKey, treeSpec } from './resources';
 import { type SpawnPoint, chooseSpawn, findSpawnNear } from './spawn';
+import { type LootSpec, type PlaceSite, placeLayout, placesOf } from './places';
+import { DOCS, KEYS, isDocId } from './lore';
 import { Terrain, chunkCoord } from './terrain';
 import {
   type DeathCause,
@@ -221,7 +224,9 @@ export type SimEvent =
   /** Une machine visée (machine fixe, meule, soufflet, pompe, roue à eau). */
   | { type: 'machine'; prop: string; tick: number }
   /** Phase 9 : la foudre tombe (vue et entendue par tous). */
-  | { type: 'foudre'; x: number; y: number; z: number; tick: number };
+  | { type: 'foudre'; x: number; y: number; z: number; tick: number }
+  /** Phase 9 : le joueur lit un document (l'affichage l'ouvre). */
+  | { type: 'lire'; doc: string; tick: number };
 
 /** Geste en cours (manger, soigner) : il prend du temps et bouger l'interrompt. */
 export interface Gesture {
@@ -396,6 +401,8 @@ export interface SimSave {
   nextVehicle?: number;
   /** Phase 9 : aléa du monde (foudre, événements). */
   worldRng?: number;
+  /** Phase 9 : lieux abandonnés déjà créés dans le monde. */
+  places?: string[];
 }
 
 export interface SimulationOptions {
@@ -604,6 +611,8 @@ export class LocalSimulation {
   private readonly wetCache = new Map<string, { t: number; v: number }>();
   /** Générateur pseudo-aléatoire du monde (foudre, événements), sauvegardé avec lui. */
   worldRng = 0x9e3779b9;
+  /** Phase 9 : lieux abandonnés déjà créés par l'hôte. */
+  readonly placesDone = new Set<string>();
   private lastDrownEvent = -1e9;
   private yaw = 0;
   private pitch = 0;
@@ -906,6 +915,7 @@ export class LocalSimulation {
     if (this.tick % 30 === 0) this.props.rescueFallen();
     if (this.tick % 15 === 0) this.stepCollapse();
     if (this.tick % 30 === 15) this.stepLightning();
+    if (this.tick % 60 === 30) this.stepPlaces();
     if (this.tick % 30 === 0) {
       this.stepFires(30 * TICK_DT);
       this.stepFurnaces(30 * TICK_DT);
@@ -1755,6 +1765,8 @@ export class LocalSimulation {
         return this.startDismantle(a.from);
       case 'remplir':
         return this.fillPot(a.from);
+      case 'lire':
+        return this.readDocument(a.from);
       case 'vehicule':
         return this.vehicleOp(a.v, a.op, a.slot);
       case 'machine':
@@ -2550,6 +2562,100 @@ export class LocalSimulation {
     return ok('Le pot est plein d’eau. Posez-le sur un feu allumé pour la faire bouillir.');
   }
 
+  /** Phase 9 : le joueur a sur lui (main, poches, sac) la clé qui ouvre cette serrure. */
+  private hasKey(lock: string): boolean {
+    const inv = this.inventory;
+    const held = this.props.held ? this.props.defOf(this.props.held.id) : null;
+    if (held?.kind === 'cle' && held.meta?.tag === lock) return true;
+    for (const st of [...inv.pockets, ...(inv.bag ?? [])]) if (st?.item === 'cle' && st.tag === lock) return true;
+    return false;
+  }
+
+  /** Phase 9 : lit un document (main, poche, sac) ; il est recopié dans le carnet. */
+  private readDocument(from: HandOrSlot): ActionResult {
+    let tag: string | undefined;
+    if (from.zone === 'main') {
+      const held = this.props.held ? this.props.defOf(this.props.held.id) : null;
+      if (held?.kind === 'document') tag = held.meta?.tag;
+    } else {
+      const ref = this.stackRef(from);
+      if (ref?.st.item === 'document') tag = ref.st.tag;
+    }
+    if (!tag || !isDocId(tag)) return fail('Rien à lire.');
+    const k = this.knowledge;
+    const first = !k.docs.includes(tag);
+    if (first) k.docs.push(tag);
+    this.push({ type: 'lire', doc: tag, tick: this.tick });
+    return ok(first ? `« ${DOCS[tag]!.title} » : recopié dans le carnet.` : undefined);
+  }
+
+  /** Phase 9 : lieux abandonnés du monde, identiques partout (les calculer prend un moment : au chargement). */
+  placeSites(): PlaceSite[] {
+    return placesOf(this.terrain);
+  }
+
+  /** L'hôte crée un lieu quand un joueur approche (jamais quand quelqu'un est déjà dessus). */
+  private stepPlaces(): void {
+    if (!this.terrain.floraEnabled) return;
+    for (const site of this.placeSites()) {
+      if (this.placesDone.has(site.id)) continue;
+      let near = false;
+      let onTop = false;
+      for (const p of this.players.values()) {
+        const d = Math.hypot(p.state.x - site.x, p.state.z - site.z);
+        if (d < 300) near = true;
+        if (d < 40) onTop = true;
+      }
+      if (near && !onTop) this.generatePlace(site);
+    }
+  }
+
+  /** Crée un lieu dans le monde : constructions (sans toucher à celles des joueurs) et objets. */
+  generatePlace(site: PlaceSite): void {
+    if (this.placesDone.has(site.id)) return;
+    this.placesDone.add(site.id);
+    const layout = placeLayout(site, this.terrain.seed);
+    // Les constructions des joueurs passent avant : une pièce qui en toucherait une n'est pas créée.
+    const taken: Array<{ x: number; y: number; z: number }> = [];
+    for (const s of this.build.structures) {
+      for (const p of s.pieces) {
+        const t = pieceTransform(s, p.slot);
+        if (Math.hypot(t.x - site.x, t.z - site.z) < 70) taken.push(t);
+      }
+    }
+    for (const st of layout.structs) {
+      const o = buildToWorld(site, st.lx, 0, st.lz);
+      const origin = { x: o.x, y: site.y, z: o.z, yaw: site.yaw + st.yaw };
+      const probe = { id: '', ...origin, pieces: [], nextId: 1 };
+      const pieces = st.pieces.filter((p) => {
+        const t = pieceTransform(probe, p.slot);
+        return !taken.some((q) => Math.abs(q.x - t.x) < 1.8 && Math.abs(q.z - t.z) < 1.8 && Math.abs(q.y - t.y) < 2.4);
+      });
+      this.build.addPrebuilt(origin, pieces);
+    }
+    for (const l of layout.loot) this.spawnLoot(site, l);
+  }
+
+  /** Un objet d'un lieu : posé au sol (ou sur le dallage), coffre rempli, puits, établi. */
+  private spawnLoot(site: PlaceSite, l: LootSpec): void {
+    const w = buildToWorld(site, l.lx, 0, l.lz);
+    const ground = Math.max(this.terrain.heightAt(w.x, w.z), site.y + 0.1);
+    const shape = itemShape(l.kind);
+    const rot = ((((l.rot ?? 0) + site.yaw / (Math.PI * 2)) % 1) + 1) % 1;
+    if (INSTALL_PROP_KINDS.has(l.kind)) {
+      const prop: Omit<PropDef, 'id'> = { kind: l.kind, x: w.x, y: ground + INSTALL_HALF[l.kind as InstallPropKind], z: w.z, rot, ...shape, fixed: true };
+      if (l.kind === 'coffre') prop.container = { pockets: [], bag: (l.chest ?? []).map((s) => ({ ...s })) };
+      this.props.placeDynamic(prop);
+      return;
+    }
+    const meta: NonNullable<PropDef['meta']> = {};
+    if (l.tag) meta.tag = l.tag;
+    if (l.q !== undefined) meta.q = l.q;
+    if (l.d !== undefined) meta.d = l.d;
+    if (l.dm !== undefined) meta.dm = l.dm;
+    this.props.placeDynamic({ kind: l.kind, x: w.x, y: ground + Math.max(0.04, shape.radius) + 0.1, z: w.z, rot, ...shape, ...(Object.keys(meta).length ? { meta } : {}) });
+  }
+
   /** Le feu brûle son bois ; l'eau bout ; l'argile cuit. */
   private stepFires(dt: number): void {
     const s = this.state;
@@ -2896,6 +3002,14 @@ export class LocalSimulation {
     const deny = this.denied('ouvrir', s);
     if (deny) return fail(deny);
     if (!this.nearCenter(pieceTransform(s, p.slot))) return fail('Trop loin de la porte.');
+    // Phase 9 : porte fermée à clé. Ouverte une fois avec sa clé, elle le reste.
+    if (p.lock) {
+      const k = KEYS[p.lock];
+      if (!this.hasKey(p.lock)) return fail('La porte est fermée à clé.');
+      delete p.lock;
+      this.build.touch();
+      this.msg(`Vous ouvrez avec la clé ${k?.label ?? ''}.`.replace(' .', '.'), 'info');
+    }
     if (p.open) {
       // Ne pas refermer le battant sur soi.
       const leaf = pieceBoxes(s, { ...p, open: false }, true).at(-1)!;
@@ -5095,6 +5209,7 @@ export class LocalSimulation {
       vehicles: this.vehicles,
       nextVehicle: this.nextVehicle,
       worldRng: this.worldRng,
+      places: [...this.placesDone],
     };
   }
 
@@ -5104,6 +5219,7 @@ export class LocalSimulation {
     const r = raw as Record<string, unknown>;
     if (typeof r.time === 'number' && Number.isFinite(r.time) && r.time >= 0) this.time = r.time;
     if (typeof r.worldRng === 'number' && Number.isInteger(r.worldRng)) this.worldRng = r.worldRng >>> 0;
+    if (Array.isArray(r.places)) for (const id of r.places.slice(0, 200)) if (typeof id === 'string' && /^[a-z]{1,12}\d{1,2}$/.test(id)) this.placesDone.add(id);
     this.props.restore(r.props);
     this.world.restore(r.world);
     this.build.restore(r.build);

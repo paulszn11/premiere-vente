@@ -95,6 +95,8 @@ export interface SessionOptions {
   onHud?: (text: string | null) => void;
   onStatus?: (hud: HudState) => void;
   onMessage?: (text: string, tone: Tone) => void;
+  /** Phase 9 : un document à lire (ouvrir la page). */
+  onDocument?: (id: string) => void;
   /** Vue du sac (créée par l'interface). */
   bag?: BagView;
   /** Le sac s'ouvre ou se ferme (curseur, commandes tactiles). */
@@ -217,6 +219,9 @@ export class GameSession {
       ...(start ? { start: { x: start.x, y: start.y, z: start.z } } : {}),
       ...(save !== undefined ? { save } : {}),
     });
+    // Phase 9 : emplacement des lieux abandonnés (un moment de calcul, pendant le chargement).
+    onProgress?.('Préparation des lieux…');
+    sim.placeSites();
     const session = new GameSession(opts, sim.terrain, sim, jobs);
     if (start) {
       session.yaw = start.yaw;
@@ -1185,6 +1190,9 @@ export class GameSession {
         break;
       case 'vehicule':
         this.openVehicle(ev.v);
+        break;
+      case 'lire':
+        this.opts.onDocument?.(ev.doc);
         break;
       case 'machine':
         this.openBag(ev.prop);

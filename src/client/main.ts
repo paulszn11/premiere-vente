@@ -23,6 +23,7 @@ import { ACCESS_LABELS, PERMS, PERM_LABELS, ROLE_LABELS, type Role } from '../sh
 import { formatWorldCode, normalizeWorldCode } from '../shared/worldcode';
 import { hourOf } from '../shared/daynight';
 import type { Weather } from '../shared/weather';
+import { DOCS, DOC_KIND_LABELS } from '../shared/lore';
 
 /** Outils de test : météos à imposer. */
 const WEATHER_PRESETS: Record<string, { label: string; w: Weather | null }> = {
@@ -362,6 +363,37 @@ async function boot(): Promise<void> {
   giveUpBtn.addEventListener('click', () => session?.giveUp());
   // Au doigt, l'écran de sommeil couvre le joystick : un bouton permet de se réveiller.
   wakeBtn.addEventListener('click', () => session?.act({ type: 'lever' }));
+  // Phase 9 : lecture d'un document trouvé (page de papier ; « Fermer » ou Échap).
+  const docView = $('#doc-view');
+  const closeDocument = () => {
+    docView.hidden = true;
+  };
+  const showDocument = (id: string) => {
+    const d = DOCS[id];
+    if (!d) return;
+    (docView.querySelector('.doc-title') as HTMLElement).textContent = d.title;
+    (docView.querySelector('.doc-kind') as HTMLElement).textContent = DOC_KIND_LABELS[d.kind];
+    const text = docView.querySelector('.doc-text') as HTMLElement;
+    text.replaceChildren(
+      ...d.text.map((t) => {
+        const p = document.createElement('p');
+        p.textContent = t;
+        return p;
+      }),
+    );
+    docView.hidden = false;
+    (docView.querySelector('.doc-close') as HTMLButtonElement).focus();
+  };
+  (docView.querySelector('.doc-close') as HTMLButtonElement).addEventListener('click', closeDocument);
+  docView.addEventListener('click', (e) => {
+    if (e.target === docView) closeDocument();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (!docView.hidden && e.key === 'Escape') {
+      closeDocument();
+      e.stopPropagation();
+    }
+  }, true);
   const showMessage = (text: string, tone: 'info' | 'alerte' | 'danger') => {
     if (!text) return;
     const el = $('#message');
@@ -379,6 +411,7 @@ async function boot(): Promise<void> {
     onClose: () => session?.closeBag(),
     onMessage: showMessage,
     onBuild: (plan) => session?.startBuild(plan),
+    onDocument: (id) => showDocument(id),
   });
   const rotateHint = $('#rotate-hint');
   const updateRotateHint = () => {
@@ -423,6 +456,7 @@ async function boot(): Promise<void> {
     onTogglePerf: () => update({ showPerf: !settings.showPerf }),
     onStatus: showStatus,
     onMessage: showMessage,
+    onDocument: (id) => showDocument(id),
     onHud: (text) => {
       const el = $('#perf');
       el.hidden = text === null;

@@ -336,6 +336,25 @@ export function itemShape(kind: PropKind): { radius: number; length: number } {
       return { radius: 0.5, length: 0.4 };
     case 'pompe':
       return { radius: 0.35, length: 0.6 };
+    // Phase 9 : objets abandonnés.
+    case 'document':
+      return { radius: 0.11, length: 0 };
+    case 'cle':
+      return { radius: 0.015, length: 0.09 };
+    case 'fil_cuivre':
+      return { radius: 0.08, length: 0 };
+    case 'ampoule':
+      return { radius: 0.03, length: 0 };
+    case 'bidon_essence':
+      return { radius: 0.12, length: 0.3 };
+    case 'lanterne':
+      return { radius: 0.09, length: 0.3 };
+    case 'fusil':
+      return { radius: 0.03, length: 1.1 };
+    case 'cartouche':
+      return { radius: 0.02, length: 0 };
+    case 'moteur_essence':
+      return { radius: 0.3, length: 0.45 };
     case 'viande_crue':
     case 'viande_cuite':
       return { radius: 0.08, length: 0.16 };

@@ -81,6 +81,16 @@ const ITEM_RENDER_KINDS: PropKind[] = [
   'machine_vapeur',
   'roue_aubes',
   'gouvernail',
+  // Phase 9 : objets abandonnés.
+  'document',
+  'cle',
+  'fil_cuivre',
+  'ampoule',
+  'bidon_essence',
+  'lanterne',
+  'fusil',
+  'cartouche',
+  'moteur_essence',
   // Machines.
   'roue_eau',
   'machine_fixe',

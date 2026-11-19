@@ -633,6 +633,8 @@ export interface Piece {
   burning: number;
   /** Stabilité calculée (0 à 1), non sauvegardée. */
   support: number;
+  /** Phase 9 : porte fermée à clé (identifiant de la clé) ; ouverte une fois avec la clé, elle le reste. */
+  lock?: string;
 }
 
 export interface Structure extends Owned {
@@ -1281,6 +1283,37 @@ export class BuildState {
     return { s: s.id, p: p.id };
   }
 
+  /**
+   * Phase 9 : construction toute faite (lieux abandonnés) : pièces terminées, éventuellement abîmées
+   * (`hp` : fraction des points de vie), portes éventuellement fermées à clé. Les pièces du niveau 0
+   * reposent sur le sol (sauf les toits).
+   */
+  addPrebuilt(origin: { x: number; y: number; z: number; yaw: number }, pieces: ReadonlyArray<{ plan: PlanId; slot: SlotRef; hp?: number; lock?: string; mat?: Material; stilts?: number }>): Structure | null {
+    const s: Structure = { id: `s${this.nextStructure++}`, x: origin.x, y: origin.y, z: origin.z, yaw: origin.yaw, pieces: [], nextId: 1 };
+    const seen = new Set<string>();
+    for (const q of pieces) {
+      const def = PLANS[q.plan];
+      if (def.piece === null || def.slot !== q.slot.t) continue;
+      const key = slotKey(q.slot);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const mat: Material = q.mat === 'torchis' && q.plan === 'mur_clayonnage' ? 'torchis' : def.material;
+      const stilts = def.piece === 'sol' && q.slot.k === 0 ? Math.max(0, Math.min(4, Math.round(q.stilts ?? 0))) : 0;
+      const p: Piece = { id: s.nextId++, plan: q.plan, slot: { ...q.slot }, step: stepsOf(q.plan, stilts).length, hp: 0, mat, iron: false, stilts, ground: q.slot.k === 0 && q.slot.t !== 'r', open: false, burning: 0, support: 0 };
+      p.hp = Math.max(1, Math.round(maxHp(p) * Math.max(0.05, Math.min(1, q.hp ?? 1))));
+      if (q.lock) p.lock = q.lock;
+      s.pieces.push(p);
+    }
+    if (!s.pieces.length) {
+      this.nextStructure--;
+      return null;
+    }
+    computeSupport(s);
+    this.structures.push(s);
+    this.touch();
+    return s;
+  }
+
   /** Termine une étape d'un chantier de pièce ; renvoie vrai si la pièce est terminée. */
   advance(sid: string, pid: number, iron: boolean): boolean {
     const s = this.structure(sid);
@@ -1420,7 +1453,8 @@ export class BuildState {
             const max = maxHp({ plan, mat, iron });
             const hp = step >= nSteps ? (num(q.hp) ? Math.max(1, Math.min(max, q.hp)) : max) : 0;
             const id = q.id;
-            s.pieces.push({ id, plan, slot, step, hp, mat, iron, stilts, ground: q.ground === true, open: q.open === true, burning: num(q.burning, 1e5) && q.burning > 0 ? q.burning : 0, support: 0 });
+            const lock = typeof q.lock === 'string' && /^[a-z0-9_]{1,40}$/.test(q.lock) ? { lock: q.lock } : {};
+            s.pieces.push({ id, plan, slot, step, hp, mat, iron, stilts, ground: q.ground === true, open: q.open === true, burning: num(q.burning, 1e5) && q.burning > 0 ? q.burning : 0, support: 0, ...lock });
             if (id >= s.nextId) s.nextId = id + 1;
           }
         }

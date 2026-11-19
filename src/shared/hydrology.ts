@@ -119,6 +119,9 @@ const DIRS: ReadonlyArray<readonly [number, number]> = [
   [0.9238795325112867, -0.3826834323650898],
 ];
 
+/** Les seize directions, pour les autres calculs partagés (lieux). */
+export const DIRS16 = DIRS;
+
 function widthAt(dist: number): number {
   return Math.min(7, 1.4 + dist / 900);
 }

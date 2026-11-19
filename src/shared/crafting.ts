@@ -5,6 +5,7 @@
 import { type PlanId, readPlans, startingPlans } from './building';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type ItemStack, unitMass } from './inventory';
 import { ITEMS, type ItemId, type ToolTag } from './items';
+import { isDocId } from './lore';
 
 export type RecipeId =
   | 'fibres'
@@ -458,10 +459,12 @@ export interface Knowledge {
   xp: number;
   /** Plans de construction connus (phase 5). */
   plans: PlanId[];
+  /** Phase 9 : documents lus (recopiés dans le carnet), dans l'ordre de lecture. */
+  docs: string[];
 }
 
 export function makeKnowledge(): Knowledge {
-  return { known: RECIPE_IDS.filter((id) => RECIPES[id].known), hinted: [], xp: 0, plans: startingPlans() };
+  return { known: RECIPE_IDS.filter((id) => RECIPES[id].known), hinted: [], xp: 0, plans: startingPlans(), docs: [] };
 }
 
 /** Niveau de 0 à 10 : 10, 40, 90, 160… points d'expérience. */
@@ -504,6 +507,7 @@ export function readKnowledge(raw: unknown): Knowledge {
   for (const id of ids(r.hinted)) if (!k.known.includes(id) && !k.hinted.includes(id)) k.hinted.push(id);
   if (typeof r.xp === 'number' && Number.isFinite(r.xp)) k.xp = Math.max(0, Math.min(1e6, r.xp));
   k.plans = readPlans(r.plans);
+  if (Array.isArray(r.docs)) for (const d of r.docs.slice(0, 200)) if (isDocId(d) && !k.docs.includes(d)) k.docs.push(d);
   return k;
 }
 

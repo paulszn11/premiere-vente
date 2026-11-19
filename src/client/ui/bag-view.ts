@@ -11,6 +11,7 @@ import { ENGINE, FRAMES, FRAME_REPAIR, PARTS, isAfloat, partAt, partName, uprigh
 import { RECIPES, RECIPE_IDS, canDismantle, conditionOf, experimentHint, improveOptions, repairOptions, skillLevel } from '../../shared/crafting';
 import { FX_DURCI, FX_LIGATURE_LACHE, FX_MANCHE_FENDU, FX_RESINE, type Container, type ItemStack, type Slot, bagContentMass, bagVolume, BAG_CAPACITY_L, carriedMass, POCKET_COUNT, stackAt, unitMass } from '../../shared/inventory';
 import { ITEMS, type ItemId, itemName } from '../../shared/items';
+import { DOCS, DOC_KIND_LABELS, taggedName } from '../../shared/lore';
 import { ITEM_OF_PROP, MACHINE_KINDS, type MachinePropKind, PROP_LABELS } from '../../shared/props';
 import { type LocalSimulation, TOOL_NEEDS, type Tone } from '../../shared/simulation';
 import {
@@ -36,6 +37,8 @@ export interface BagViewDeps {
   onMessage: (text: string, tone: Tone) => void;
   /** Tracer un plan (mode construction). */
   onBuild: (plan: PlanId) => void;
+  /** Phase 9 : relire un document recopié dans le carnet. */
+  onDocument?: (id: string) => void;
 }
 
 interface ActionButton {
@@ -139,6 +142,11 @@ export class BagView {
     this.zoneButtons_ = document.createElement('div');
     this.zoneButtons_.className = 'zone-buttons';
     this.el.zoneDetail!.append(this.zoneLines, this.zoneButtons_);
+    // Phase 9 : les documents du carnet se relisent d'un clic.
+    this.el.carnet!.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>('[data-doc]');
+      if (b?.dataset.doc) deps.onDocument?.(b.dataset.doc);
+    });
     this.zones = new Map();
     deps.root.querySelectorAll<SVGElement>('[data-zone]').forEach((z) => {
       const zone = z.dataset.zone as Zone;
@@ -470,10 +478,12 @@ export class BagView {
         if (sel.item) out.push({ label: 'Ranger', run: () => this.act({ type: 'ranger' }) });
         out.push({ label: 'Poser au sol', run: () => this.act({ type: 'poser', from: { zone: 'main' } }) });
         toolButtons({ zone: 'main' });
+        if (sel.item === 'document') out.push({ label: 'Lire', run: () => this.act({ type: 'lire', from: { zone: 'main' } }) });
       } else if (s.zone === 'poche' || s.zone === 'sac') {
         const from: Slot = { zone: s.zone, index: s.index };
         const item = sel.item!;
         if (ITEMS[item].food) out.push({ label: 'Manger', run: () => this.act({ type: 'manger', from }) });
+        if (item === 'document') out.push({ label: 'Lire', run: () => this.act({ type: 'lire', from }) });
         out.push({ label: 'Prendre en main', run: () => this.act({ type: 'sortir', from }) });
         if (s.zone === 'poche' && sim.inventory.bag) out.push({ label: 'Mettre dans le sac', run: () => this.act({ type: 'deplacer', from, to: 'sac' }) });
         if (s.zone === 'sac' && ITEMS[item].pocket) out.push({ label: 'Mettre en poche', run: () => this.act({ type: 'deplacer', from, to: 'poche' }) });
@@ -755,7 +765,8 @@ export class BagView {
 
     // Objet choisi.
     if (sel) {
-      this.setText(this.el.itemName!, `${cap(sel.item ? itemName(sel.item, sel.count) : `${sel.kindLabel}`)} · ${fmtKg(sel.mass)}`);
+      const tagged = sel.item ? taggedName(sel.item, sel.st?.tag) : null;
+      this.setText(this.el.itemName!, `${cap(tagged ?? (sel.item ? itemName(sel.item, sel.count) : `${sel.kindLabel}`))} · ${fmtKg(sel.mass)}`);
       const tool = this.toolText(sel.st);
       this.setText(this.el.itemDesc!, `${tool ? `${cap(tool)}. ` : ''}${sel.item ? ITEMS[sel.item].description : 'Trop grand pour le sac : on le porte ou on le traîne.'}`);
     } else {
@@ -893,6 +904,13 @@ export class BagView {
       `<p>Fabrication : niveau ${lvl} (${Math.round(k.xp)} points). Plus le niveau monte, meilleurs sont les objets et plus les gestes sont rapides.</p>` +
         `<h4>Recettes connues</h4><ul>${known.join('')}</ul>` +
         `<h4>Plans de construction</h4><ul>${this.knownPlans().map((id) => `<li><strong>${PLANS[id].label}</strong> : ${PLANS[id].description}</li>`).join('')}</ul>` +
+        // Phase 9 : documents lus, recopiés ; un clic les rouvre.
+        (k.docs.length
+          ? `<h4>Documents</h4><ul class="docs">${k.docs
+              .filter((id) => DOCS[id])
+              .map((id) => `<li><button type="button" class="link" data-doc="${id}">${DOC_KIND_LABELS[DOCS[id]!.kind]} — ${DOCS[id]!.title}</button></li>`)
+              .join('')}</ul>`
+          : '') +
         (hinted.length ? `<h4>Idées</h4><ul>${hinted.join('')}</ul>` : '') +
         (unknown > 0 ? `<p class="note">${unknown} recette${unknown > 1 ? 's' : ''} encore inconnue${unknown > 1 ? 's' : ''} : ramassez de nouveaux matériaux, expérimentez sur le plan de travail.</p>` : ''),
     );
