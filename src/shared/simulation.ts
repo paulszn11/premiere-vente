@@ -1020,6 +1020,17 @@ export class LocalSimulation {
           const def = this.props.defOf(t.id);
           const k = def?.carcass;
           if (k) this.msg(k.meat > 0 && this.time - k.at < CARCASS_ROT ? `Carcasse ${SPECIES[k.sp].feminine ? 'd’une' : 'd’un'} ${SPECIES[k.sp].label} : une lame en main (Utiliser) pour la dépecer.` : 'Il n’y a plus rien de bon à prendre.', 'info');
+        } else if (t && t.kind === 'peinture') {
+          // Phase 9 : regarder une peinture rupestre (elle se lit comme un document).
+          propPressed &= ~BTN_INTERACT;
+          const tag = this.props.defOf(t.id)?.meta?.tag;
+          if (tag && isDocId(tag)) {
+            if (!this.knowledge.docs.includes(tag)) {
+              this.knowledge.docs.push(tag);
+              this.msg('Recopiée dans le carnet.', 'info');
+            }
+            this.push({ type: 'lire', doc: tag, tick: this.tick });
+          }
         } else if (t && t.kind === 'puits') {
           propPressed &= ~BTN_INTERACT;
           const pot = this.findPot();
@@ -2634,6 +2645,14 @@ export class LocalSimulation {
       this.build.addPrebuilt(origin, pieces);
     }
     for (const l of layout.loot) this.spawnLoot(site, l);
+    // Phase 9 : une échelle descend le long de la paroi du puits de la mine, jusqu'aux galeries.
+    const shaft = site.kind === 'mine' ? this.terrain.caves.nets.find((n) => n.kind === 'mine')?.shaft : undefined;
+    if (shaft) {
+      const o = buildToWorld({ x: shaft.x, y: 0, z: shaft.z, yaw: site.yaw }, -1, 0, -1.15);
+      const count = Math.ceil((shaft.top - shaft.bottom + 0.6) / 2.4);
+      const rungs = Array.from({ length: count }, (_, k) => ({ plan: 'echelle' as const, slot: { t: 'e' as const, d: 'x' as const, i: 0, j: 0, k } }));
+      this.build.addPrebuilt({ x: o.x, y: shaft.bottom, z: o.z, yaw: site.yaw }, rungs);
+    }
   }
 
   /** Un objet d'un lieu : posé au sol (ou sur le dallage), coffre rempli, puits, établi. */

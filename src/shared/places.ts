@@ -463,6 +463,16 @@ function mine(r: Rand): PlaceLayout {
     [0, 4],
   ] as const)
     if (r() > 0.25) headframe.push({ plan: 'toit_chaume', slot: { t: 'r', i, j, k: 0 } });
+  // Barrière autour de l'ouverture du puits, avec un passage au sud vers l'échelle.
+  headframe.push(
+    { plan: 'cloture', slot: edgeX(0, 3) },
+    { plan: 'cloture', slot: edgeX(-1, 5) },
+    { plan: 'cloture', slot: edgeX(0, 5) },
+    { plan: 'cloture', slot: edgeZ(-1, 3) },
+    { plan: 'cloture', slot: edgeZ(-1, 4) },
+    { plan: 'cloture', slot: edgeZ(1, 3) },
+    { plan: 'cloture', slot: edgeZ(1, 4) },
+  );
   const [ox, oz] = cell(-3, 0);
   const [sx, sz] = cell(3, 0);
   return {
@@ -471,7 +481,6 @@ function mine(r: Rand): PlaceLayout {
       { lx: 0, lz: 0, yaw: 0, pieces: headframe },
     ],
     loot: [
-      { kind: 'puits', lx: 0, lz: 8 },
       { kind: 'etabli', lx: -6.4, lz: 1, rot: 0.25 },
       { kind: 'coffre', lx: ox, lz: oz, rot: 0, chest: [doc('mi_rapport'), key('reserve'), stack('corde', 2)] },
       { kind: 'document', lx: 2.2, lz: 9.6, tag: 'mi_note_mineur', rot: r() },

@@ -101,6 +101,8 @@ export class PhysicsWorld {
 
   /** Phase 9 : sol mouillé (0 à 1) sous le joueur en cours de déplacement (pluie récente). */
   wetness = 0;
+  /** Phase 9 : collisionneurs des échelles (on s'y tient sans s'épuiser comme sur la roche). */
+  readonly ladders = new Set<number>();
 
   constructor(readonly terrain: Terrain) {
     this.world = new RAPIER.World({ x: 0, y: -MOVE.gravity, z: 0 });
@@ -174,7 +176,36 @@ export class PhysicsWorld {
       }
     }
     if (created > 0) this.needsRefresh = true;
+    this.ensureCaves(points, now);
     return created;
+  }
+
+  /** Phase 9 : roche des grottes (un maillage par bloc de 16 m), chargée à moins de 40 m des joueurs. */
+  private readonly caveBlocks = new Map<number, { collider: RAPIER.Collider | null; lastNeeded: number }>();
+
+  private ensureCaves(points: ReadonlyArray<{ x: number; z: number }>, now: number): void {
+    if (!this.terrain.floraEnabled) return;
+    const caves = this.terrain.caves;
+    for (const p of points) {
+      for (const k of caves.blocksNear(p.x, p.z, 40)) {
+        const e = this.caveBlocks.get(k);
+        if (e) {
+          e.lastNeeded = now;
+          continue;
+        }
+        const m = caves.blockMesh(k);
+        const collider = m ? this.world.createCollider(RAPIER.ColliderDesc.trimesh(m.positions, m.indices).setCollisionGroups(TERRAIN_GROUPS)) : null;
+        this.caveBlocks.set(k, { collider, lastNeeded: now });
+        this.needsRefresh = true;
+      }
+    }
+  }
+
+  /** Nombre de blocs de roche chargés (tests). */
+  get caveBlockCount(): number {
+    let n = 0;
+    for (const e of this.caveBlocks.values()) if (e.collider) n++;
+    return n;
   }
 
   /** Décharge les chunks inutilisés depuis plus de graceMs. */
@@ -191,6 +222,12 @@ export class PhysicsWorld {
         this.chunks.delete(key);
         removed++;
       }
+    }
+    for (const [k, e] of this.caveBlocks) {
+      if (now - e.lastNeeded <= graceMs) continue;
+      if (e.collider) this.world.removeCollider(e.collider, false);
+      this.caveBlocks.delete(k);
+      removed++;
     }
     if (removed > 0) this.needsRefresh = true;
     return removed;
@@ -270,9 +307,34 @@ export class PhysicsWorld {
       for (let ix = 0; ix < n; ix++) heights[ix * n + iz] = rowMajor[iz * n + ix]!;
     }
     const half = CHUNK_SIZE / 2;
-    const ground = RAPIER.ColliderDesc.heightfield(PHYS_CELLS, PHYS_CELLS, heights, { x: CHUNK_SIZE, y: 1, z: CHUNK_SIZE })
-      .setTranslation(cx * CHUNK_SIZE + half, 0, cz * CHUNK_SIZE + half)
-      .setCollisionGroups(TERRAIN_GROUPS);
+    // Phase 9 : là où une grotte débouche, le sol est un maillage de triangles privé des cellules du trou
+    // (même triangulation que le champ de hauteur : diagonale (x+1, z)–(x, z+1)).
+    const holes = this.terrain.floraEnabled ? this.terrain.caves.holesInChunk(cx, cz) : null;
+    let ground: RAPIER.ColliderDesc;
+    if (holes) {
+      const verts = new Float32Array(n * n * 3);
+      for (let iz = 0; iz < n; iz++) {
+        for (let ix = 0; ix < n; ix++) {
+          const k = (iz * n + ix) * 3;
+          verts[k] = cx * CHUNK_SIZE + (ix * CHUNK_SIZE) / PHYS_CELLS;
+          verts[k + 1] = rowMajor[iz * n + ix]!;
+          verts[k + 2] = cz * CHUNK_SIZE + (iz * CHUNK_SIZE) / PHYS_CELLS;
+        }
+      }
+      const idx: number[] = [];
+      for (let iz = 0; iz < PHYS_CELLS; iz++) {
+        for (let ix = 0; ix < PHYS_CELLS; ix++) {
+          if (holes[iz * PHYS_CELLS + ix]) continue;
+          const a = iz * n + ix;
+          idx.push(a, a + 1, a + n, a + 1, a + n + 1, a + n);
+        }
+      }
+      ground = RAPIER.ColliderDesc.trimesh(verts, Uint32Array.from(idx)).setCollisionGroups(TERRAIN_GROUPS);
+    } else {
+      ground = RAPIER.ColliderDesc.heightfield(PHYS_CELLS, PHYS_CELLS, heights, { x: CHUNK_SIZE, y: 1, z: CHUNK_SIZE })
+        .setTranslation(cx * CHUNK_SIZE + half, 0, cz * CHUNK_SIZE + half)
+        .setCollisionGroups(TERRAIN_GROUPS);
+    }
     const colliders = [this.world.createCollider(ground)];
     const flora = floraInChunk(this.terrain, cx, cz);
     flora.trees.forEach((t, index) => {

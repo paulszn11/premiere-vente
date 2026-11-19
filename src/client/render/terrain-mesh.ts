@@ -24,6 +24,8 @@ interface DetailedSource extends HeightSource {
   sampleInto?: (x: number, z: number) => Readonly<GeoSample>;
   /** Phase 9 : lits des ruisseaux creusés, à partir de l'altitude d'origine du détail. */
   carveAt?: (x: number, z: number, raw: number) => number;
+  /** Phase 9 : cellules (1 m) retirées là où une grotte débouche (64 × 64), ou null. */
+  caves?: { holesInChunk(cx: number, cz: number): Uint8Array | null };
 }
 
 function mix(c: number[], r: number, g: number, b: number, t: number): void {
@@ -157,9 +159,22 @@ export function buildTerrainMesh(terrain: DetailedSource, cx: number, cz: number
   const skirtIdx = 4 * cells * 12;
   const indices = vertexCount > 65535 ? new Uint32Array(gridIdx + skirtIdx) : new Uint16Array(gridIdx + skirtIdx);
   let p = 0;
+  // Phase 9 : entrée de grotte — les cellules du trou ne sont pas dessinées (triangles réduits à un point).
+  // Seulement au plus fin détail (1 m, comme la physique) : de loin, le relief recouvre l'entrée.
+  const holes = cells === 64 ? (terrain.caves?.holesInChunk(cx, cz) ?? null) : null;
+  const per = 64 / cells;
+  const holeAt = (ix: number, iz: number): boolean => {
+    if (!holes) return false;
+    for (let dz = 0; dz < per; dz++) for (let dx = 0; dx < per; dx++) if (holes[(iz * per + dz) * 64 + ix * per + dx]) return true;
+    return false;
+  };
   for (let iz = 0; iz < cells; iz++) {
     for (let ix = 0; ix < cells; ix++) {
       const a = iz * n + ix;
+      if (holes && holeAt(ix, iz)) {
+        for (let k = 0; k < 6; k++) indices[p++] = a;
+        continue;
+      }
       const b = a + 1;
       const d = a + n;
       const c = d + 1;

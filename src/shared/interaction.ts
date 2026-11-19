@@ -14,6 +14,7 @@ import { readMachine } from './machines';
 import { BODY_MASS, DENSITY, type FireState, type FurnaceState, type Handling, ITEM_OF_PROP, PROP_LABELS, type PropDef, type PropKind, handlingFor, propMass, propsInChunk, regrowDelay, TRAP_KINDS, MACHINE_KINDS } from './props';
 import { nodesInChunk } from './resources';
 import { chunkCoord } from './terrain';
+import { caveSpotsInChunk } from './caves';
 
 interface LiveProp {
   def: PropDef;
@@ -184,6 +185,9 @@ function colliderFor(def: PropDef): RAPIER.ColliderDesc {
       return RAPIER.ColliderDesc.cuboid(0.4, 0.4, 0.6);
     case 'pompe':
       return RAPIER.ColliderDesc.cuboid(0.3, 0.6, 0.3);
+    // Phase 9 : peinture sur une paroi de grotte (plaque fine, on la vise pour la regarder).
+    case 'peinture':
+      return RAPIER.ColliderDesc.cuboid(0.9, 0.6, 0.05);
     case 'carcasse':
       return RAPIER.ColliderDesc.cuboid(Math.max(0.3, def.length / 2), Math.max(0.15, r * 0.6), Math.max(0.2, r));
     case 'viande_crue':
@@ -377,6 +381,11 @@ export class PropSystem {
       const def: PropDef = { id: n.id, kind: n.kind, x: n.x, y: n.y, z: n.z, rot: n.rot, radius: n.size / 2, length: 0, fixed: true, size: n.size };
       const lift = SOLID_NODES.has(n.kind) ? n.size * 0.25 : 0.02;
       this.spawn(def, n.x, n.y + lift, n.z, yawQuat(n.rot), true);
+    }
+    // Phase 9 : gisements et peintures des grottes.
+    for (const def of caveSpotsInChunk(this.phys.terrain, cx, cz)) {
+      if (this.live.has(def.id)) continue;
+      this.spawn(def, def.x, def.y, def.z, yawQuat(def.rot), true);
     }
     for (const [id, st] of this.stored) {
       if (this.live.has(id) || chunkCoord(st.x) !== cx || chunkCoord(st.z) !== cz) continue;
@@ -584,7 +593,8 @@ export class PropSystem {
     for (const lp of this.live.values()) {
       const t = lp.body.translation();
       const ground = this.phys.terrain.heightAt(t.x, t.z);
-      if (t.y < ground - 3) {
+      // Sous terre, dans une grotte, c'est normal (phase 9).
+      if (t.y < ground - 3 && !(this.phys.terrain.floraEnabled && this.phys.terrain.caves.sdf(t.x, t.y, t.z) < 1.5)) {
         lp.body.setTranslation({ x: t.x, y: ground + 1, z: t.z }, true);
         lp.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       }

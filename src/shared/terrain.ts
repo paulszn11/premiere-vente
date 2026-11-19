@@ -4,6 +4,7 @@
 
 import { CHUNK_SIZE, WATER_LEVEL } from './constants';
 import { Hydrology } from './hydrology';
+import { Caves } from './caves';
 import { type GeoSample, Geography, type SurfaceId, surfaceOf } from './geography';
 
 export interface HeightSource {
@@ -76,6 +77,14 @@ export class Terrain implements HeightSource {
   }
 
   private hydroInst: Hydrology | null = null;
+  private cavesInst: Caves | null = null;
+  private cavePools = false;
+
+  /** Phase 9 : grottes et galeries de mine (calculées à la demande). */
+  get caves(): Caves {
+    if (!this.cavesInst) this.cavesInst = new Caves(this);
+    return this.cavesInst;
+  }
 
   /** Phase 9 : ruisseaux, chutes, bassins et plans d'eau souterrains (calculés à la demande). */
   get hydro(): Hydrology {
@@ -89,6 +98,11 @@ export class Terrain implements HeightSource {
    */
   waterLevelAt(x: number, z: number, y?: number): number {
     if (!this.floraEnabled) return WATER_LEVEL;
+    // Les lacs souterrains comptent dès qu'on demande l'eau à une altitude précise.
+    if (y !== undefined && !this.cavePools) {
+      this.cavePools = true;
+      for (const n of this.caves.nets) for (const p of n.pools) this.hydro.addPool(p);
+    }
     const s = this.hydro.surfaceAt(x, z, y);
     return s > WATER_LEVEL ? s : WATER_LEVEL;
   }

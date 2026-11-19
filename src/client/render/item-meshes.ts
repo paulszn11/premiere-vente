@@ -344,6 +344,18 @@ export function itemParts(kind: PropKind): Part[] {
         [box(0.6, 0.04, 0.45, 0.45, 0, 0), ...WOOD],
         [rod(1.2, 0.05, 6, -0.3), ...WOOD],
       ];
+    // Phase 9 : peinture rupestre (plaque de roche claire, créature sinueuse à l'ocre, points blancs).
+    case 'peinture': {
+      const parts: Part[] = [[box(1.8, 1.2, 0.06, 0, 0, 0), 0.62, 0.55, 0.47]];
+      for (let k = 0; k < 9; k++) {
+        const x = -0.75 + k * 0.19;
+        const y = Math.sin(k * 0.9) * 0.18 + 0.1;
+        parts.push([box(0.2, 0.09, 0.02, x, y, -0.035, 0, Math.cos(k * 0.9) * 0.6), 0.48, 0.17, 0.1]);
+        parts.push([box(0.03, 0.03, 0.02, x, y + 0.07, -0.045), 0.92, 0.9, 0.84]);
+      }
+      for (let k = 0; k < 4; k++) parts.push([box(0.04, 0.22, 0.02, -0.5 + k * 0.3, -0.32, -0.035), 0.48, 0.17, 0.1]);
+      return parts;
+    }
     // Phase 9 : objets abandonnés.
     case 'document':
       return [

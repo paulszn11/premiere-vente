@@ -6,6 +6,7 @@ import { CHUNK_SIZE, WATER_LEVEL, WORLD_HALF } from './constants';
 import type { BiomeId } from './geography';
 import { type NodeKind, nodesInChunk } from './resources';
 import { type PlaceKind, type PlaceSite, placesOf } from './places';
+import type { CaveKind } from './caves';
 import { mulberry32 } from './rng';
 import { type Terrain, chunkCoord, chunkKey } from './terrain';
 import { type TreeInstance, floraInChunk } from './vegetation';
@@ -117,8 +118,10 @@ export interface TestDestination {
    * Place le joueur dans l'eau profonde, face à une paroi à escalader, devant le gisement le plus proche,
    * ou (phase 9) au pied de la chute d'eau, au bord du ruisseau ou dans le bassin les plus proches.
    */
-  kind?: 'eau' | 'paroi' | 'gisement' | 'chute' | 'ruisseau' | 'bassin' | 'lieu';
+  kind?: 'eau' | 'paroi' | 'gisement' | 'chute' | 'ruisseau' | 'bassin' | 'lieu' | 'grotte';
   node?: NodeKind;
+  /** Phase 9 : grotte (devant l'entrée, ou dans la grande caverne). */
+  cave?: CaveKind | 'caverne';
   /** Phase 9 : lieu abandonné le plus proche (devant son entrée). */
   place?: PlaceKind;
 }
@@ -150,7 +153,46 @@ export const TEST_DESTINATIONS: TestDestination[] = [
   { id: 'lieu_mine', label: 'Mine de la Colline Rouge', x: 0, z: 0, kind: 'lieu', place: 'mine' },
   { id: 'lieu_ruines', label: 'Enceinte de pierre sèche la plus proche', x: 0, z: 0, kind: 'lieu', place: 'ruines' },
   { id: 'lieu_cercle', label: 'Les Pierres Debout', x: 0, z: 0, kind: 'lieu', place: 'cercle' },
+  { id: 'grotte_granite', label: 'Entrée de la grotte des collines de granit', x: 0, z: 0, kind: 'grotte', cave: 'granite' },
+  { id: 'grotte_escarpement', label: 'Entrée de la grotte de l’escarpement', x: 0, z: 0, kind: 'grotte', cave: 'escarpement' },
+  { id: 'grotte_caverne', label: 'Dans la grande caverne (lac souterrain)', x: 0, z: 0, kind: 'grotte', cave: 'caverne' },
+  { id: 'grotte_mine', label: 'Puits de la mine', x: 0, z: 0, kind: 'grotte', cave: 'mine' },
 ];
+
+/** Phase 9 : devant l'entrée d'une grotte, au bord du puits de la mine, ou dans la grande caverne. */
+function caveDestination(terrain: Terrain, which: CaveKind | 'caverne'): ResolvedDestination | null {
+  if (!terrain.floraEnabled) return null;
+  const nets = terrain.caves.nets;
+  if (which === 'caverne') {
+    const n = nets.find((x) => x.kind === 'escarpement');
+    const big = n?.prims.reduce<null | (typeof n.prims)[number]>((b, p) => (p.room && (!b || p.r > b.r) ? p : b), null);
+    if (!big || !n) return null;
+    // Sur la rive, du côté opposé au lac, tourné vers l'eau.
+    const lake = n.pools[0];
+    let dx = 0;
+    let dz = 1;
+    if (lake) {
+      const l = Math.hypot(big.ax - lake.x, big.az - lake.z) || 1;
+      dx = (big.ax - lake.x) / l;
+      dz = (big.az - lake.z) / l;
+    }
+    const x = big.ax + dx * 8;
+    const z = big.az + dz * 8;
+    return { x, y: big.fa + 1, z, yaw: Math.atan2(-dx, -dz) };
+  }
+  const n = nets.find((x) => x.kind === which);
+  if (!n) return null;
+  if (which === 'mine' && n.shaft) {
+    // Devant le passage de la barrière (côté −z du lieu), tourné vers l'ouverture.
+    const yaw = placesOf(terrain).find((p) => p.kind === 'mine')?.yaw ?? 0;
+    const x = n.shaft.x - 4.5 * Math.sin(yaw);
+    const z = n.shaft.z - 4.5 * Math.cos(yaw);
+    return { x, y: terrain.heightAt(x, z) + 0.3, z, yaw };
+  }
+  const x = n.mouth.x - n.mouth.dx * 7;
+  const z = n.mouth.z - n.mouth.dz * 7;
+  return { x, y: terrain.heightAt(x, z) + 0.3, z, yaw: Math.atan2(n.mouth.dx, n.mouth.dz) };
+}
 
 /** Phase 9 : devant l'entrée du lieu abandonné le plus proche (outil de test). */
 function nearestPlace(terrain: Terrain, kind: PlaceKind, x0: number, z0: number): ResolvedDestination | null {
@@ -302,6 +344,10 @@ export interface ResolvedDestination {
 /** Trouve un point précis pour une destination de test. */
 export function resolveDestination(terrain: Terrain, d: TestDestination, from: { x: number; z: number } = { x: d.x, z: d.z }): ResolvedDestination {
   if (d.kind === 'eau') return { x: d.x, y: WATER_LEVEL - 1.3, z: d.z, yaw: null };
+  if (d.kind === 'grotte' && d.cave) {
+    const r = caveDestination(terrain, d.cave);
+    return r ?? { x: from.x, y: terrain.heightAt(from.x, from.z) + 0.2, z: from.z, yaw: null };
+  }
   if (d.kind === 'lieu' && d.place) {
     const r = nearestPlace(terrain, d.place, from.x, from.z);
     return r ?? { x: from.x, y: terrain.heightAt(from.x, from.z) + 0.2, z: from.z, yaw: null };

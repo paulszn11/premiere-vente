@@ -17,7 +17,7 @@ import type { EngineState, PartState } from './vehicles';
 
 /** Objets transportables : leur type est aussi leur identifiant dans le catalogue. */
 export type ItemPropKind = Exclude<ItemId, never>;
-export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer' | InstallPropKind | 'carcasse';
+export type PropKind = ItemPropKind | 'tronc' | 'sac' | 'corps' | NodeKind | 'foyer' | InstallPropKind | 'carcasse' | 'peinture';
 
 /** Installations construites (phase 5) et pièges (phase 6) : objets fixes. */
 export type InstallPropKind = 'coffre' | 'etabli' | 'puits' | 'fourneau' | 'forge' | TrapKind | MachinePropKind;
@@ -141,6 +141,7 @@ const OTHER_LABELS = {
   meule: 'meule',
   soufflet_meca: 'soufflet mécanique',
   pompe: 'pompe',
+  peinture: 'peinture rupestre',
 } as const;
 
 export const PROP_LABELS: Record<PropKind, string> = {
@@ -220,6 +221,7 @@ export function propMass(p: Pick<PropDef, 'kind' | 'radius' | 'length' | 'contai
     case 'meule':
     case 'soufflet_meca':
     case 'pompe':
+    case 'peinture':
       return 0;
     case 'sac':
       return bagTotalMass(p.container?.bag ?? []);
@@ -336,6 +338,8 @@ export function itemShape(kind: PropKind): { radius: number; length: number } {
       return { radius: 0.5, length: 0.4 };
     case 'pompe':
       return { radius: 0.35, length: 0.6 };
+    case 'peinture':
+      return { radius: 0.9, length: 0.6 };
     // Phase 9 : objets abandonnés.
     case 'document':
       return { radius: 0.11, length: 0 };

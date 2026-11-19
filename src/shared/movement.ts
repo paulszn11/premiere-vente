@@ -314,6 +314,19 @@ function probeWall(phys: PhysicsWorld, s: MoveState, dirX: number, dirZ: number)
   return null;
 }
 
+/** Une échelle juste devant le joueur (à hauteur de poitrine ou de genoux). */
+function onLadder(phys: PhysicsWorld, s: MoveState, dirX: number, dirZ: number): boolean {
+  if (!phys.ladders.size) return false;
+  for (const h of [1.2, 0.5]) {
+    const ray = new RAPIER.Ray({ x: s.x, y: s.y + h, z: s.z }, { x: dirX, y: 0, z: dirZ });
+    const hit = phys.world.castRay(ray, PLAYER_RADIUS + CLIMB.reach + 0.2, true, undefined, QUERY_TERRAIN);
+    if (hit && phys.ladders.has(hit.collider.handle)) return true;
+  }
+  return false;
+}
+
+const FLAT = { gx: 0, gz: 0, ny: 1 };
+
 function slopeAt(phys: PhysicsWorld, x: number, z: number): { gx: number; gz: number; ny: number } {
   const t = phys.terrain;
   const e = 0.75;
@@ -375,9 +388,11 @@ function land(s: MoveState, vyBefore: number, eff: SurfaceEffect, crouching: boo
 function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, cmd: InputCmd, dt: number, pressed: number, waterLevel: number): void {
   const buttons = cmd.buttons;
   setCrouch(phys, collider, s, (buttons & BTN_CROUCH) !== 0);
-  const slope = slopeAt(phys, s.x, s.z);
+  // Phase 9 : sous terre, le sol est de la roche (ni la pente ni le sol de la surface au-dessus).
+  const under = phys.terrain.floraEnabled && phys.terrain.caves.underground(s.x, s.y + 0.5, s.z) > 0;
+  const slope = under ? FLAT : slopeAt(phys, s.x, s.z);
   const waterDepth = waterLevel - s.y;
-  let surface: SurfaceId = waterDepth > SWIM.wadeStart ? 'eau' : surfaceOf(phys.terrain.sampleInto(s.x, s.z), slope.ny);
+  let surface: SurfaceId = waterDepth > SWIM.wadeStart ? 'eau' : under ? 'roche' : surfaceOf(phys.terrain.sampleInto(s.x, s.z), slope.ny);
   // Phase 9 : après la pluie, l'herbe et la terre deviennent de la boue.
   if (phys.wetness > 0.5 && (surface === 'herbe' || surface === 'terre')) surface = 'boue';
   s.surface = surface;
@@ -623,7 +638,9 @@ function climbStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, 
   const mx = cos * cmd.wx - sin * cmd.wz;
   const my = sin * cmd.wx + cos * cmd.wz;
   const moving = mx * mx + my * my > 0.01;
-  drain(s, (STAMINA.climbDrain + (moving ? STAMINA.climbMoveDrain : 0)) * dt);
+  // Phase 9 : sur une échelle, on se tient sans peine (trois fois moins d'effort que sur la roche).
+  const ladder = onLadder(phys, s, -nx / hl, -nz / hl);
+  drain(s, ((STAMINA.climbDrain + (moving ? STAMINA.climbMoveDrain : 0)) * dt) / (ladder ? 5 : 1));
   if (s.stamina <= 0) {
     exitClimb(s);
     return;

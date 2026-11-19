@@ -66,7 +66,8 @@ describe('emplacement des lieux', () => {
       }
       for (const s of l.structs) for (const pc of s.pieces) if (pc.lock) locks.push(pc.lock);
     }
-    expect([...docs].sort()).toEqual([...DOC_IDS].sort());
+    // Les peintures rupestres sont dans les grottes, pas dans les lieux.
+    expect([...docs].sort()).toEqual(DOC_IDS.filter((id) => DOCS[id]!.place !== 'grotte').sort());
     expect([...keys].sort()).toEqual(Object.keys(KEYS).sort());
     expect([...locks].sort()).toEqual(Object.keys(KEYS).sort());
     for (const id of DOC_IDS) expect(DOCS[id]!.text.join(' ').length).toBeGreaterThan(40);

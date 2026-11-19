@@ -15,14 +15,14 @@
 
 import type { PlaceKind } from './places';
 
-export type DocKind = 'lettre' | 'journal' | 'carnet' | 'releve' | 'note' | 'registre' | 'telegramme';
+export type DocKind = 'lettre' | 'journal' | 'carnet' | 'releve' | 'note' | 'registre' | 'telegramme' | 'peinture';
 
 export interface LoreDoc {
   id: string;
   title: string;
   kind: DocKind;
-  /** Où on le trouve (genre de lieu). */
-  place: PlaceKind;
+  /** Où on le trouve (genre de lieu, ou une grotte pour les peintures). */
+  place: PlaceKind | 'grotte';
   /** Paragraphes. */
   text: string[];
   /** Lieux que le document évoque (une note approximative s'ajoute à la carte). */
@@ -37,6 +37,7 @@ export const DOC_KIND_LABELS: Record<DocKind, string> = {
   note: 'Note',
   registre: 'Registre',
   telegramme: 'Télégramme',
+  peinture: 'Peinture rupestre',
 };
 
 const docs: LoreDoc[] = [
@@ -257,6 +258,49 @@ const docs: LoreDoc[] = [
       'Vibration du sol perceptible à la main, la nuit seulement, par cycles réguliers.',
       'Lumières basses entre les pierres vers 2 h. Pas de source visible. Dans la brume, un son grave, très long, comme une respiration.',
       'Je n’ai pas terminé le relevé.',
+    ],
+  },
+  // ——— Peintures rupestres (grottes) : on les « lit » en les regardant ———
+  {
+    id: 'p_abri',
+    title: 'Peintures de l’abri',
+    kind: 'peinture',
+    place: 'grotte',
+    text: [
+      'Des silhouettes à l’ocre rouge et blanche : des chasseurs, des élands, une file de femmes qui portent l’eau.',
+      'Au-dessus d’eux, sur toute la longueur de la paroi, une forme sombre et sinueuse, plus grande que tout le reste. Des points blancs la suivent d’un bout à l’autre, comme des yeux.',
+      'Les chasseurs lui tournent le dos. Ils ont posé leurs arcs.',
+    ],
+  },
+  {
+    id: 'p_salle_cachee',
+    title: 'La paroi de la salle cachée',
+    kind: 'peinture',
+    place: 'grotte',
+    text: [
+      'Ici, la même forme sinueuse, enroulée sur elle-même au milieu de cercles concentriques peints en blanc.',
+      'Autour des cercles, des personnages se tiennent par la main. Leurs bouches sont ouvertes : ils chantent.',
+      'Un seul personnage est à l’intérieur des cercles, couché, les bras le long du corps.',
+    ],
+  },
+  {
+    id: 'p_siphon',
+    title: 'Gravure au-delà du siphon',
+    kind: 'peinture',
+    place: 'grotte',
+    text: [
+      'Gravée plutôt que peinte, très ancienne, à demi effacée par l’humidité : la créature traverse une ligne ondulée, l’eau, et plonge sous une ligne brisée, la roche.',
+      'Sous la roche, des dizaines de petits traits verticaux, serrés. Des dents, ou des gens.',
+    ],
+  },
+  {
+    id: 'p_cavite',
+    title: 'Les marques de la cavité',
+    kind: 'peinture',
+    place: 'grotte',
+    text: [
+      'Ce ne sont pas des peintures de mineurs. Les traits sont recouverts d’une fine couche de calcite : ils sont là depuis des siècles, bien avant la mine.',
+      'Trois cercles. Dans le cercle du centre, l’empreinte d’une main, doigts écartés, et à côté, quelqu’un a ajouté à la craie, récemment : « 3 coups — 3 coups ».',
     ],
   },
 ];

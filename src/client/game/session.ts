@@ -36,6 +36,7 @@ import { AvatarView } from '../render/avatar-view';
 import { ambienceAt } from '../render/sky';
 import { PrecipView } from '../render/precip-view';
 import { StreamView } from '../render/stream-view';
+import { CaveView } from '../render/cave-view';
 import { CLEAR, type Weather } from '../../shared/weather';
 import { hourOf, nextTimeAt } from '../../shared/daynight';
 import type { HostSession } from '../net/multiplayer';
@@ -185,6 +186,9 @@ export class GameSession {
   private shelterAt = 0;
   /** Phase 9 : ruisseaux, chutes, bassins ; niveaux sonores de l'eau proche. */
   private readonly streamView: StreamView;
+  /** Phase 9 : roche des grottes ; sous terre (0 à 1) au point de vue. */
+  private readonly caveView: CaveView;
+  private underground = 0;
   private fallLevel = 0;
   private streamLevel = 0;
   private benchRunner: BenchRunner | null = null;
@@ -321,6 +325,7 @@ export class GameSession {
     this.avatars = new AvatarView(this.scene);
     this.precip = new PrecipView(this.scene);
     this.streamView = new StreamView(this.scene, terrain);
+    this.caveView = new CaveView(this.scene, terrain);
     // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
     opts.onBuildMode?.(false);
     this.applySettings();
@@ -451,6 +456,11 @@ export class GameSession {
     return { ...this.streamView.stats, fall: this.fallLevel, stream: this.streamLevel, level: this.world.localWater };
   }
 
+  /** Outil de test : sous terre au point de vue, blocs de roche affichés. */
+  get caveInfo(): { underground: number; blocks: number } {
+    return { underground: this.underground, blocks: this.caveView.shown };
+  }
+
   /** Créatures, sons proches, peur (phase 6). */
   private updateFauna(sim: LocalSimulation, views: ReturnType<LocalSimulation['props']['views']>, x: number, y: number, z: number, now: number, dt: number): void {
     const creatures = sim.creatureViews();
@@ -474,7 +484,7 @@ export class GameSession {
     const swimming = sim.state.mode === MODE_SWIM || this.world.isUnderwater;
     const ombreLevel = swimming ? ombre : ombre * 0.3;
     this.dread += (Math.max(ombreLevel * 0.8, danger * 0.35) - this.dread) * Math.min(1, dt * 1.5);
-    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: this.world.isUnderwater, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel, rain: this.weatherNow.rain * (this.underRoof ? 0.55 : 1), wind: this.windNow, fall: this.fallLevel, stream: this.streamLevel });
+    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: this.world.isUnderwater, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel, rain: this.weatherNow.rain * (this.underRoof ? 0.55 : 1) * (1 - this.underground * 0.9), wind: this.windNow * (1 - this.underground), fall: this.fallLevel, stream: this.streamLevel });
     // Frôlements et pas des animaux proches qu'on ne voit pas forcément.
     if (now - this.lastRustle > 450) {
       this.lastRustle = now;
@@ -732,8 +742,12 @@ export class GameSession {
       bobY = Math.sin(this.bobPhase * 2) * amp * 0.5;
       bobX = Math.sin(this.bobPhase) * amp * 0.6;
     }
-    this.landVel += (-60 * this.landOffset - 11 * this.landVel) * dt;
-    this.landOffset += this.landVel * dt;
+    // Ressort de l'atterrissage, par petits pas (une image longue ne doit pas le rendre instable).
+    for (let left = Math.min(dt, 0.5); left > 0; left -= 0.02) {
+      const h = Math.min(0.02, left);
+      this.landVel += (-60 * this.landOffset - 11 * this.landVel) * h;
+      this.landOffset += this.landVel * h;
+    }
     let shakeP = 0;
     let shakeR = 0;
     if (s.stumble > 0) {
@@ -765,7 +779,9 @@ export class GameSession {
     }
     this.flash = Math.max(0, this.flash - dt * 2.5);
     this.weatherNow = w;
-    this.world.setAmbience(ambienceAt(hourOf(sim.time), sim.time, { cloud: w.cloud, rain: Math.min(1, w.rain + w.snow * 0.5), fog: w.fog, flash: this.flash }, 0));
+    // Sous terre : noir, sauf ce qu'éclairent la torche, la lanterne et les feux.
+    this.underground = this.terrain.floraEnabled ? this.terrain.caves.underground(x, camY, z) : 0;
+    this.world.setAmbience(ambienceAt(hourOf(sim.time), sim.time, { cloud: w.cloud, rain: Math.min(1, w.rain + w.snow * 0.5), fog: w.fog, flash: this.flash * (1 - this.underground) }, this.underground));
     const windNow = sim.wind();
     this.windNow = windNow.speed;
     const dry = this.underRoof || this.world.isUnderwater;
@@ -781,6 +797,9 @@ export class GameSession {
       }
     }
     this.streamView.update(x, z, Math.min(this.world.viewDistance, 4 * CHUNK_SIZE), now, this.world.daylight);
+    // Phase 9 : grottes — les blocs de roche proches sont préparés à l'avance, puis affichés.
+    if (this.terrain.floraEnabled) this.terrain.caves.warm(x, z, 90, this.opts.device.mobile ? 2 : 4);
+    this.caveView.update(x, z, 64, now, 4);
     if (sim.world.version !== this.worldVersion) {
       this.worldVersion = sim.world.version;
       this.world.invalidateVegetation();
@@ -1397,6 +1416,7 @@ export class GameSession {
     this.avatars.dispose();
     this.precip.dispose();
     this.streamView.dispose();
+    this.caveView.dispose();
     this.jobs.dispose();
     this.sim?.dispose();
     this.instr.dispose();

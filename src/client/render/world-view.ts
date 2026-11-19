@@ -91,6 +91,8 @@ const ITEM_RENDER_KINDS: PropKind[] = [
   'fusil',
   'cartouche',
   'moteur_essence',
+  // Phase 9 : peintures rupestres (grottes).
+  'peinture',
   // Machines.
   'roue_eau',
   'machine_fixe',
@@ -513,8 +515,10 @@ export class WorldView {
     this.water.updateVerticesData('normal', nor);
   }
 
-  private lodCells(dist: number, water = false): number {
+  private lodCells(dist: number, water = false, cave = false): number {
     const near = this.params.nearCells;
+    // Phase 9 : l'entrée d'une grotte est découpée dans le maillage le plus fin (1 m, comme la physique).
+    if (cave && dist <= 3.5) return 64;
     // Phase 9 : près d'un ruisseau ou d'un bassin, le maillage est aussi fin que le sol physique (1 m),
     // sinon le lit creusé est mal suivi et des bandes d'herbe passent par-dessus l'eau.
     if (water && dist <= 1.5) return 64;
@@ -522,11 +526,16 @@ export class WorldView {
     return Math.max(8, cells);
   }
 
-  /** Un ruisseau ou un bassin passe dans ce chunk (affichage plus fin). */
+  /** Un ruisseau, un bassin ou l'entrée d'une grotte passe dans ce chunk (affichage plus fin). */
   private hasWater(cx: number, cz: number): boolean {
     if (!this.terrain.floraEnabled) return false;
     const h = this.terrain.hydro;
     return h.poolsIn(cx, cz).length > 0 || h.segmentsIn(cx, cz).some((s) => s.water);
+  }
+
+  /** L'entrée d'une grotte (sol troué) est dans ce chunk. */
+  private hasCave(cx: number, cz: number): boolean {
+    return this.terrain.floraEnabled && this.terrain.caves.holesInChunk(cx, cz) !== null;
   }
 
   private recompute(ccx: number, ccz: number): void {
@@ -539,7 +548,7 @@ export class WorldView {
         if (dist > r + 0.5) continue;
         const cx = ccx + dx;
         const cz = ccz + dz;
-        desired.set(chunkKey(cx, cz), { cx, cz, cells: this.lodCells(dist, dist <= 3.5 && this.hasWater(cx, cz)), dist, flora: dist <= vr + 0.5 });
+        desired.set(chunkKey(cx, cz), { cx, cz, cells: this.lodCells(dist, dist <= 3.5 && this.hasWater(cx, cz), dist <= 3.5 && this.hasCave(cx, cz)), dist, flora: dist <= vr + 0.5 });
       }
     }
     this.desired = desired;
@@ -741,7 +750,7 @@ export class WorldView {
       const depth = wl - camY;
       this.scene.fogDensity = 0.06 + Math.min(0.12, depth * 0.008);
       // La nuit, l'eau est noire.
-      const k = Math.max(0.35, 1 - depth * 0.04) * (this.ambience ? 0.1 + 0.9 * this.ambience.day : 1);
+      const k = Math.max(0.35, 1 - depth * 0.04) * (this.ambience ? (0.1 + 0.9 * this.ambience.day) * (1 - 0.92 * this.ambience.underground) : 1);
       this.scene.fogColor.set(UNDERWATER.r * k, UNDERWATER.g * k, UNDERWATER.b * k);
       this.scene.clearColor.set(UNDERWATER.r * k, UNDERWATER.g * k, UNDERWATER.b * k, 1);
     }

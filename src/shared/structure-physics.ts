@@ -57,6 +57,7 @@ export class StructurePhysics {
           const c = world.createCollider(desc);
           this.colliders.push(c);
           this.byHandle.set(c.handle, { s: s.id, p: p.id });
+          if (ladder) this.phys.ladders.add(c.handle);
         }
         for (const post of stiltPosts(s, p, (px, pz) => this.phys.terrain.heightAt(px, pz))) {
           const half = (post.top - post.bottom) / 2;
@@ -81,7 +82,10 @@ export class StructurePhysics {
   }
 
   private clear(): void {
-    for (const c of this.colliders) this.phys.world.removeCollider(c, false);
+    for (const c of this.colliders) {
+      this.phys.ladders.delete(c.handle);
+      this.phys.world.removeCollider(c, false);
+    }
     this.colliders = [];
     this.byHandle.clear();
   }
