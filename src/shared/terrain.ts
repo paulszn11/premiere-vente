@@ -2,7 +2,8 @@
 // Le client (affichage + prédiction) et le serveur (physique de référence) appellent
 // exactement les mêmes fonctions : le monde n'a jamais besoin d'être envoyé sur le réseau.
 
-import { CHUNK_SIZE } from './constants';
+import { CHUNK_SIZE, WATER_LEVEL } from './constants';
+import { Hydrology } from './hydrology';
 import { type GeoSample, Geography, type SurfaceId, surfaceOf } from './geography';
 
 export interface HeightSource {
@@ -21,12 +22,29 @@ export class Terrain implements HeightSource {
     this.geo = new Geography(this.seed);
   }
 
-  /** Altitude du sol (en mètres) au point (x, z). */
+  /** Altitude du sol (en mètres) au point (x, z), lits des ruisseaux et bassins creusés (phase 9). */
   heightAt(x: number, z: number): number {
-    return this.geo.heightAt(x, z);
+    const h = this.geo.heightAt(x, z);
+    return this.floraEnabled ? this.hydro.carveAt(x, z, h) : h;
   }
 
-  /** Détails du point (biome, masques) dans un tampon réutilisé : à lire aussitôt. */
+  /**
+   * Relief d'origine, avant le creusement des lits (phase 9). Sert aux décisions de placement de la flore et
+   * des objets : elles ne changent pas, et les identifiants enregistrés dans les sauvegardes restent valables.
+   */
+  rawHeightAt(x: number, z: number): number {
+    return this.floraEnabled ? this.geo.heightAt(x, z) : this.heightAt(x, z);
+  }
+
+  /** Altitude du sol à partir de l'altitude d'origine `raw` déjà connue (évite de la recalculer). */
+  carveAt(x: number, z: number, raw: number): number {
+    return this.floraEnabled ? this.hydro.carveAt(x, z, raw) : raw;
+  }
+
+  /**
+   * Détails du point (biome, masques) dans un tampon réutilisé : à lire aussitôt. Son `height` est
+   * l'altitude d'origine (sans les lits creusés) : pour le sol, utiliser heightAt.
+   */
   sampleInto(x: number, z: number): Readonly<GeoSample> {
     return this.geo.sampleInto(x, z);
   }
@@ -50,9 +68,29 @@ export class Terrain implements HeightSource {
     return surfaceOf(this.sampleInto(x, z), ny);
   }
 
-  /** Courant de l'eau au point (m/s). */
+  /** Courant de l'eau au point (m/s) : fleuves, puis ruisseaux (phase 9). */
   currentAt(x: number, z: number): { x: number; z: number } {
-    return this.geo.currentAt(x, z);
+    const c = this.geo.currentAt(x, z);
+    if (c.x !== 0 || c.z !== 0 || !this.floraEnabled) return c;
+    return this.hydro.currentAt(x, z);
+  }
+
+  private hydroInst: Hydrology | null = null;
+
+  /** Phase 9 : ruisseaux, chutes, bassins et plans d'eau souterrains (calculés à la demande). */
+  get hydro(): Hydrology {
+    if (!this.hydroInst) this.hydroInst = new Hydrology(this.geo);
+    return this.hydroInst;
+  }
+
+  /**
+   * Phase 9 : surface de l'eau en (x, z) — le niveau des fleuves et du lac, ou plus haut dans un ruisseau,
+   * un bassin ou (avec l'altitude `y`) un lac souterrain.
+   */
+  waterLevelAt(x: number, z: number, y?: number): number {
+    if (!this.floraEnabled) return WATER_LEVEL;
+    const s = this.hydro.surfaceAt(x, z, y);
+    return s > WATER_LEVEL ? s : WATER_LEVEL;
   }
 
   /**

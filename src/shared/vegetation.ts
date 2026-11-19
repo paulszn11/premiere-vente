@@ -162,9 +162,10 @@ function pickSpecies(biome: BiomeId, u: number): Species {
 }
 
 function slopeOk(terrain: Terrain, x: number, z: number, maxSlope2: number): boolean {
+  // Relief d'origine (phase 9) : les lits creusés ne changent pas où poussent les arbres.
   const e = 1.5;
-  const dx = terrain.heightAt(x + e, z) - terrain.heightAt(x - e, z);
-  const dz = terrain.heightAt(x, z + e) - terrain.heightAt(x, z - e);
+  const dx = terrain.rawHeightAt(x + e, z) - terrain.rawHeightAt(x - e, z);
+  const dz = terrain.rawHeightAt(x, z + e) - terrain.rawHeightAt(x, z - e);
   return (dx * dx + dz * dz) / (4 * e * e) <= maxSlope2;
 }
 
@@ -204,7 +205,7 @@ export function floraInChunk(terrain: Terrain, cx: number, cz: number): ChunkFlo
           if (slopeOk(terrain, x, z, 0.36)) {
             out.trees.push({
               x,
-              y: height,
+              y: terrain.carveAt(x, z, height),
               z,
               scale: 0.75 + ((h1 & 0xffff) / 65536) * 0.7,
               species: pickSpecies(biome, ((h1 >>> 16) & 0xffff) / 65536),
@@ -217,7 +218,7 @@ export function floraInChunk(terrain: Terrain, cx: number, cz: number): ChunkFlo
           const top = biome === 'matobo' && ((h1 >>> 8) & 0xff) < 46 ? r * (0.6 + (((h1 >>> 16) & 0xff) / 255) * 0.3) : 0;
           out.rocks.push({ x, y, z, r, top });
         } else if (p < treeChance + rockChance + moundChance) {
-          out.mounds.push({ x, y: height, z, height: 1.2 + ((h1 & 0xff) / 255) * 2, radius: 0.8 + (((h1 >>> 8) & 0xff) / 255) * 0.8 });
+          out.mounds.push({ x, y: terrain.carveAt(x, z, height), z, height: 1.2 + ((h1 & 0xff) / 255) * 2, radius: 0.8 + (((h1 >>> 8) & 0xff) / 255) * 0.8 });
         }
       }
 
@@ -226,11 +227,11 @@ export function floraInChunk(terrain: Terrain, cx: number, cz: number): ChunkFlo
       if ((hb & 0xffff) / 65536 < BUSH_DENSITY[biome] && kopje < 0.6) {
         const bx = (wx + (((hb >>> 16) & 0xff) / 256)) * FLORA_CELL;
         const bz = (wz + (((hb >>> 24) & 0xff) / 256)) * FLORA_CELL;
-        const by = terrain.heightAt(bx, bz);
-        if (by > WATER_LEVEL + 0.3) {
+        const byRaw = terrain.rawHeightAt(bx, bz);
+        if (byRaw > WATER_LEVEL + 0.3) {
           out.bushes.push({
             x: bx,
-            y: by,
+            y: terrain.carveAt(bx, bz, byRaw),
             z: bz,
             scale: 0.6 + ((h1 >>> 24) / 255) * 0.9,
             rot: ((hb >>> 8) & 0xff) / 256,

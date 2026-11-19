@@ -22,6 +22,8 @@ export interface TerrainMeshData {
 /** Source de relief avec détails de biome (le Terrain du jeu ; les terrains de test peuvent s'en passer). */
 interface DetailedSource extends HeightSource {
   sampleInto?: (x: number, z: number) => Readonly<GeoSample>;
+  /** Phase 9 : lits des ruisseaux creusés, à partir de l'altitude d'origine du détail. */
+  carveAt?: (x: number, z: number, raw: number) => number;
 }
 
 function mix(c: number[], r: number, g: number, b: number, t: number): void {
@@ -88,11 +90,17 @@ export function buildTerrainMesh(terrain: DetailedSource, cx: number, cz: number
   const normals = new Float32Array(vertexCount * 3);
   const colors = new Float32Array(vertexCount * 4);
   const samples: Array<GeoSample | null> = new Array(gridCount).fill(null);
+  /** Profondeur creusée (lit d'un ruisseau, bassin) : le sol y est plus sombre et mouillé. */
+  const carved = new Float32Array(gridCount);
   if (detailed) {
     for (let iz = 0; iz < n; iz++) {
       for (let ix = 0; ix < n; ix++) {
-        const s = terrain.sampleInto!(x0 + ix * step, z0 + iz * step);
-        h[(iz + 1) * m + ix + 1] = s.height;
+        const wx = x0 + ix * step;
+        const wz = z0 + iz * step;
+        const s = terrain.sampleInto!(wx, wz);
+        const hh = terrain.carveAt ? terrain.carveAt(wx, wz, s.height) : s.height;
+        h[(iz + 1) * m + ix + 1] = hh;
+        carved[iz * n + ix] = s.height - hh;
         samples[iz * n + ix] = { ...s };
       }
     }
@@ -116,6 +124,14 @@ export function buildTerrainMesh(terrain: DetailedSource, cx: number, cz: number
       normals[k * 3 + 1] = ny;
       normals[k * 3 + 2] = nz;
       groundColor(samples[k] ?? null, hc, ny, x0 + ix * step, z0 + iz * step, colors, k * 4);
+      const wet = carved[k]!;
+      if (wet > 0.03) {
+        // Lit et rives d'un ruisseau : terre humide, galets.
+        const t = Math.min(1, wet / 0.5) * 0.75;
+        colors[k * 4] = colors[k * 4]! + (0.3 - colors[k * 4]!) * t;
+        colors[k * 4 + 1] = colors[k * 4 + 1]! + (0.29 - colors[k * 4 + 1]!) * t;
+        colors[k * 4 + 2] = colors[k * 4 + 2]! + (0.24 - colors[k * 4 + 2]!) * t;
+      }
     }
   }
 

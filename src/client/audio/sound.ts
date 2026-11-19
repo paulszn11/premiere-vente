@@ -93,7 +93,7 @@ export class SoundSystem {
   }
 
   /** Position et orientation de l'auditeur (la caméra) ; ambiance sous l'eau ; danger (0 à 1). */
-  update(x: number, y: number, z: number, yaw: number, pitch: number, o: { underwater: boolean; danger: number; ombre: number; rain?: number; wind?: number }): void {
+  update(x: number, y: number, z: number, yaw: number, pitch: number, o: { underwater: boolean; danger: number; ombre: number; rain?: number; wind?: number; fall?: number; stream?: number }): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
     const l = ctx.listener;
@@ -124,6 +124,11 @@ export class SoundSystem {
     this.bed('pluie', 'highpass', 1400, 0.7, rain * 0.22);
     this.bed('averse', 'lowpass', 500, 0.8, Math.max(0, rain - 0.5) * 0.3);
     this.bed('vent', 'lowpass', 300 + (o.wind ?? 0) * 25, 1.2, o.underwater ? 0 : Math.max(0, (o.wind ?? 0) - 5) * 0.012);
+    // Phase 9 : grondement des chutes d'eau (assourdi sous l'eau), clapotis des ruisseaux.
+    const fall = o.fall ?? 0;
+    this.bed('chute', 'lowpass', o.underwater ? 300 : 650, 0.7, fall * (o.underwater ? 0.4 : 0.3));
+    this.bed('chute-embruns', 'bandpass', 1900, 0.6, o.underwater ? 0 : fall * 0.09);
+    this.bed('ruisseau', 'bandpass', 2600, 1.4, o.underwater ? 0 : (o.stream ?? 0) * 0.06);
     // Battements de cœur quand le danger approche.
     if (o.danger > 0.15 && ctx.currentTime >= this.nextBeat) {
       const bpm = 70 + o.danger * 70;

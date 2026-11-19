@@ -1894,10 +1894,10 @@ export class LocalSimulation {
     return needs;
   }
 
-  /** Dans l'eau (fleuve, lac) : on peut remplir un pot. */
+  /** Dans l'eau (fleuve, lac, ruisseau, bassin) : on peut remplir un pot. */
   inWater(): boolean {
     const s = this.state;
-    return s.mode === MODE_SWIM || WATER_LEVEL - s.y > 0.2;
+    return s.mode === MODE_SWIM || this.terrain.waterLevelAt(s.x, s.z, s.y) - s.y > 0.2;
   }
 
   /** Dépose un objet récolté au sol, à l'endroit donné. */
@@ -3338,7 +3338,7 @@ export class LocalSimulation {
       vz: s.vz,
       crouched: s.crouched,
       swimming: s.mode === MODE_SWIM,
-      underwater: s.y + (s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT) < WATER_LEVEL,
+      underwater: s.y + (s.crouched ? EYE_HEIGHT_CROUCH : EYE_HEIGHT) < this.terrain.waterLevelAt(s.x, s.z, s.y),
       climbing: s.mode === MODE_CLIMB,
       waterDepth: Math.max(0, WATER_LEVEL - this.terrain.heightAt(s.x, s.z)),
       yaw: this.yaw,

@@ -341,6 +341,14 @@ export class WorldView {
     return this.params.viewChunks * CHUNK_SIZE;
   }
 
+  /** Lumière du jour (0 la nuit, 1 en plein jour). */
+  get daylight(): number {
+    return this.ambience ? this.ambience.day : 1;
+  }
+
+  /** Surface de l'eau au point de vue (fleuve, lac, ou eau locale plus haute). */
+  localWater = WATER_LEVEL;
+
   get isUnderwater(): boolean {
     return this.underwater;
   }
@@ -495,10 +503,20 @@ export class WorldView {
     this.water.updateVerticesData('normal', nor);
   }
 
-  private lodCells(dist: number): number {
+  private lodCells(dist: number, water = false): number {
     const near = this.params.nearCells;
-    const cells = dist <= 1.5 ? near : dist <= 3.5 ? near / 2 : near / 4;
+    // Phase 9 : près d'un ruisseau ou d'un bassin, le maillage est aussi fin que le sol physique (1 m),
+    // sinon le lit creusé est mal suivi et des bandes d'herbe passent par-dessus l'eau.
+    if (water && dist <= 1.5) return 64;
+    const cells = dist <= 1.5 ? near : dist <= 3.5 ? (water ? near : near / 2) : near / 4;
     return Math.max(8, cells);
+  }
+
+  /** Un ruisseau ou un bassin passe dans ce chunk (affichage plus fin). */
+  private hasWater(cx: number, cz: number): boolean {
+    if (!this.terrain.floraEnabled) return false;
+    const h = this.terrain.hydro;
+    return h.poolsIn(cx, cz).length > 0 || h.segmentsIn(cx, cz).some((s) => s.water);
   }
 
   private recompute(ccx: number, ccz: number): void {
@@ -511,7 +529,7 @@ export class WorldView {
         if (dist > r + 0.5) continue;
         const cx = ccx + dx;
         const cz = ccz + dz;
-        desired.set(chunkKey(cx, cz), { cx, cz, cells: this.lodCells(dist), dist, flora: dist <= vr + 0.5 });
+        desired.set(chunkKey(cx, cz), { cx, cz, cells: this.lodCells(dist, dist <= 3.5 && this.hasWater(cx, cz)), dist, flora: dist <= vr + 0.5 });
       }
     }
     this.desired = desired;
@@ -690,7 +708,10 @@ export class WorldView {
     this.water.position.x = wx;
     this.water.position.z = wz;
 
-    const under = camY < WATER_LEVEL - 0.05;
+    // Phase 9 : l'eau locale (ruisseau, bassin, lac souterrain) compte aussi.
+    const wl = this.terrain.waterLevelAt(camX, camZ, camY);
+    this.localWater = wl;
+    const under = camY < wl - 0.05;
     if (under !== this.underwater) {
       this.underwater = under;
       const c = under ? UNDERWATER : SKY;
@@ -707,7 +728,7 @@ export class WorldView {
     }
     if (under) {
       // Plus on descend, plus l'eau est sombre et trouble.
-      const depth = WATER_LEVEL - camY;
+      const depth = wl - camY;
       this.scene.fogDensity = 0.06 + Math.min(0.12, depth * 0.008);
       // La nuit, l'eau est noire.
       const k = Math.max(0.35, 1 - depth * 0.04) * (this.ambience ? 0.1 + 0.9 * this.ambience.day : 1);

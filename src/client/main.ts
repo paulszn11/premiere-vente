@@ -987,6 +987,7 @@ async function boot(): Promise<void> {
       return true;
     },
     hour: () => (session?.sim ? hourOf(session.sim.time) : null),
+    streams: () => session?.waterInfo ?? null,
     pause: (on = true) => session?.setPaused(on),
     joinWorld: (code: string, name: string) => joinGame(code, name),
     otherPlayers: () => session?.otherPlayers() ?? [],

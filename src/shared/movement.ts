@@ -15,7 +15,6 @@ import {
   PLAYER_RADIUS,
   STAMINA,
   SWIM,
-  WATER_LEVEL,
 } from './constants';
 import { SURFACE_EFFECTS, type SurfaceEffect, type SurfaceId, surfaceOf } from './geography';
 import { PLAYER_GROUPS, type PhysicsWorld, QUERY_TERRAIN, RAPIER } from './physics';
@@ -373,11 +372,11 @@ function land(s: MoveState, vyBefore: number, eff: SurfaceEffect, crouching: boo
 
 // ——— Modes ———
 
-function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, cmd: InputCmd, dt: number, pressed: number): void {
+function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, cmd: InputCmd, dt: number, pressed: number, waterLevel: number): void {
   const buttons = cmd.buttons;
   setCrouch(phys, collider, s, (buttons & BTN_CROUCH) !== 0);
   const slope = slopeAt(phys, s.x, s.z);
-  const waterDepth = WATER_LEVEL - s.y;
+  const waterDepth = waterLevel - s.y;
   let surface: SurfaceId = waterDepth > SWIM.wadeStart ? 'eau' : surfaceOf(phys.terrain.sampleInto(s.x, s.z), slope.ny);
   // Phase 9 : après la pluie, l'herbe et la terre deviennent de la boue.
   if (phys.wetness > 0.5 && (surface === 'herbe' || surface === 'terre')) surface = 'boue';
@@ -506,7 +505,7 @@ function walkStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   s.breath = Math.min(100, s.breath + SWIM.breathRegen * dt);
 }
 
-function swimStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, cmd: InputCmd, dt: number): void {
+function swimStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, cmd: InputCmd, dt: number, waterLevel: number): void {
   const buttons = cmd.buttons;
   setCrouch(phys, collider, s, false);
   s.surface = 'eau';
@@ -534,7 +533,7 @@ function swimStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   }
   if ((buttons & BTN_JUMP) !== 0) vyWish += SWIM.verticalSpeed;
   if ((buttons & BTN_CROUCH) !== 0) vyWish -= SWIM.verticalSpeed;
-  const floatY = WATER_LEVEL - SWIM.floatDepth;
+  const floatY = waterLevel - SWIM.floatDepth;
   let tvy: number;
   if (vyWish !== 0) tvy = vyWish;
   else if (s.y > floatY - 0.6) tvy = clamp((floatY - s.y) * 2, -1, 1);
@@ -567,7 +566,7 @@ function swimStep(phys: PhysicsWorld, collider: RAPIER.Collider, s: MoveState, c
   s.balance = 0;
 
   // Souffle : 30 s la tête sous l'eau.
-  if (s.y + EYE_HEIGHT < WATER_LEVEL - 0.05) {
+  if (s.y + EYE_HEIGHT < waterLevel - 0.05) {
     s.breath -= (100 / SWIM.breathSeconds) * dt;
     if (s.breath <= 0) {
       s.breath = 0;
@@ -671,7 +670,9 @@ export function stepMovement(phys: PhysicsWorld, collider: RAPIER.Collider, s: M
   s.spent = 0;
   if (s.stumble > 0) s.stumble = Math.max(0, s.stumble - dt);
 
-  const waterDepth = WATER_LEVEL - s.y;
+  // Phase 9 : niveau de l'eau propre à chaque lieu (fleuve, lac, ruisseau, bassin, lac souterrain).
+  const waterLevel = phys.terrain.waterLevelAt(s.x, s.z, s.y);
+  const waterDepth = waterLevel - s.y;
   if (s.mode !== MODE_SWIM && waterDepth > SWIM.startDepth) {
     // Entrée dans l'eau profonde (éventuellement après une chute : l'eau amortit).
     if (s.mode === MODE_WALK && !s.grounded && s.vy < 0) land(s, s.vy, SURFACE_EFFECTS.eau, false);
@@ -683,8 +684,8 @@ export function stepMovement(phys: PhysicsWorld, collider: RAPIER.Collider, s: M
   }
 
   if (s.mode === MODE_CLIMB) climbStep(phys, collider, s, cmd, dt, pressed);
-  else if (s.mode === MODE_SWIM) swimStep(phys, collider, s, cmd, dt);
-  else walkStep(phys, collider, s, cmd, dt, pressed);
+  else if (s.mode === MODE_SWIM) swimStep(phys, collider, s, cmd, dt, waterLevel);
+  else walkStep(phys, collider, s, cmd, dt, pressed, waterLevel);
 
   s.prevButtons = cmd.buttons;
   s.jumpLatch = (cmd.buttons & BTN_JUMP) !== 0;

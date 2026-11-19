@@ -7,7 +7,7 @@ import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
 import { SceneInstrumentation } from '@babylonjs/core/Instrumentation/sceneInstrumentation';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Scene } from '@babylonjs/core/scene';
-import { EYE_HEIGHT, EYE_HEIGHT_CROUCH, TICK_DT, WATER_LEVEL } from '../../shared/constants';
+import { CHUNK_SIZE, EYE_HEIGHT, EYE_HEIGHT_CROUCH, TICK_DT, WATER_LEVEL } from '../../shared/constants';
 import { BIOME_LABELS, type BiomeId, SURFACE_LABELS } from '../../shared/geography';
 import type { BuildRef, PlayerAction } from '../../shared/actions';
 import { PLANS, type PlanId } from '../../shared/building';
@@ -35,6 +35,7 @@ import { VehicleView } from '../render/vehicle-view';
 import { AvatarView } from '../render/avatar-view';
 import { ambienceAt } from '../render/sky';
 import { PrecipView } from '../render/precip-view';
+import { StreamView } from '../render/stream-view';
 import { CLEAR, type Weather } from '../../shared/weather';
 import { hourOf, nextTimeAt } from '../../shared/daynight';
 import type { HostSession } from '../net/multiplayer';
@@ -180,6 +181,10 @@ export class GameSession {
   private windNow = 0;
   private underRoof = false;
   private shelterAt = 0;
+  /** Phase 9 : ruisseaux, chutes, bassins ; niveaux sonores de l'eau proche. */
+  private readonly streamView: StreamView;
+  private fallLevel = 0;
+  private streamLevel = 0;
   private benchRunner: BenchRunner | null = null;
   private lastCpuMs = 0;
   private lastUnlockAt = -1e9;
@@ -310,6 +315,7 @@ export class GameSession {
     this.vehicleView = new VehicleView(this.scene, smat);
     this.avatars = new AvatarView(this.scene);
     this.precip = new PrecipView(this.scene);
+    this.streamView = new StreamView(this.scene, terrain);
     // Une nouvelle partie commence hors du mode construction (libellés des boutons tactiles).
     opts.onBuildMode?.(false);
     this.applySettings();
@@ -419,6 +425,27 @@ export class GameSession {
     return true;
   }
 
+  /** Phase 9 : grondement de la chute la plus forte à portée d'oreille, clapotis du ruisseau le plus proche. */
+  private updateWaterSounds(x: number, z: number): void {
+    if (!this.terrain.floraEnabled) return;
+    const hydro = this.terrain.hydro;
+    let fall = 0;
+    for (const f of hydro.fallsNear(x, z, 170)) {
+      const d = Math.hypot((f.x + f.x2) / 2 - x, (f.z + f.z2) / 2 - z);
+      const k = Math.max(0, 1 - d / 170);
+      fall = Math.max(fall, k * k * Math.min(1, (f.top - f.bottom) / 10) * Math.min(1, 0.4 + f.width / 5));
+    }
+    this.fallLevel = fall;
+    const ds = hydro.streamDistance(x, z, 22);
+    const ks = Math.max(0, 1 - ds / 22);
+    this.streamLevel = ks * ks;
+  }
+
+  /** Outil de test : eau proche (ruisseaux, chutes, bassins affichés ; niveaux sonores). */
+  get waterInfo(): { streams: number; falls: number; pools: number; fall: number; stream: number; level: number } {
+    return { ...this.streamView.stats, fall: this.fallLevel, stream: this.streamLevel, level: this.world.localWater };
+  }
+
   /** Créatures, sons proches, peur (phase 6). */
   private updateFauna(sim: LocalSimulation, views: ReturnType<LocalSimulation['props']['views']>, x: number, y: number, z: number, now: number, dt: number): void {
     const creatures = sim.creatureViews();
@@ -439,10 +466,10 @@ export class GameSession {
       }
     }
     if (sim.isGrabbed()) danger = 1;
-    const swimming = sim.state.mode === MODE_SWIM || y < WATER_LEVEL;
+    const swimming = sim.state.mode === MODE_SWIM || this.world.isUnderwater;
     const ombreLevel = swimming ? ombre : ombre * 0.3;
     this.dread += (Math.max(ombreLevel * 0.8, danger * 0.35) - this.dread) * Math.min(1, dt * 1.5);
-    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: y < WATER_LEVEL, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel, rain: this.weatherNow.rain * (this.underRoof ? 0.55 : 1), wind: this.windNow });
+    this.opts.sound?.update(x, y, z, this.yaw, this.pitch, { underwater: this.world.isUnderwater, danger: Math.max(danger, ombreLevel * 0.8), ombre: ombreLevel, rain: this.weatherNow.rain * (this.underRoof ? 0.55 : 1), wind: this.windNow, fall: this.fallLevel, stream: this.streamLevel });
     // Frôlements et pas des animaux proches qu'on ne voit pas forcément.
     if (now - this.lastRustle > 450) {
       this.lastRustle = now;
@@ -729,6 +756,7 @@ export class GameSession {
     if (now - this.shelterAt > 250) {
       this.shelterAt = now;
       this.underRoof = sim.sheltered(x, baseY + 1.5, z);
+      this.updateWaterSounds(x, z);
     }
     this.flash = Math.max(0, this.flash - dt * 2.5);
     this.weatherNow = w;
@@ -739,6 +767,15 @@ export class GameSession {
     this.precip.update(x, camY, z, dry ? 0 : w.rain, dry ? 0 : w.snow, windNow.speed, windNow.dir, dt, now);
     this.world.update(x, camY, z, this.opts.device.mobile ? 4 : 6);
     this.world.updateWater(x, z, sim.time, sim.wind());
+    // Phase 9 : ruisseaux et chutes d'eau ; les sources voisines (et celles des autres joueurs, chez l'hôte)
+    // sont préparées par petits morceaux pour éviter un à-coup quand on change de zone.
+    if (this.terrain.floraEnabled) {
+      const budget = this.opts.device.mobile ? 1.5 : 3;
+      if (!this.terrain.hydro.warm(x, z, budget) && this.net?.kind === 'host') {
+        for (const p of sim.players.values()) if (p !== sim.local && this.terrain.hydro.warm(p.state.x, p.state.z, budget)) break;
+      }
+    }
+    this.streamView.update(x, z, Math.min(this.world.viewDistance, 4 * CHUNK_SIZE), now, this.world.daylight);
     if (sim.world.version !== this.worldVersion) {
       this.worldVersion = sim.world.version;
       this.world.invalidateVegetation();
@@ -778,7 +815,7 @@ export class GameSession {
         staminaMax: s.staminaMax,
         breath: s.breath,
         exhausted: s.exhausted,
-        underwater: camY < WATER_LEVEL,
+        underwater: this.world.isUnderwater,
         prompt: this.prompt(),
         health: v.health,
         bleeding: lim.bleeding > 0,
@@ -1351,6 +1388,7 @@ export class GameSession {
     this.creatureView.dispose();
     this.avatars.dispose();
     this.precip.dispose();
+    this.streamView.dispose();
     this.jobs.dispose();
     this.sim?.dispose();
     this.instr.dispose();

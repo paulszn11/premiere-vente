@@ -112,8 +112,11 @@ export interface TestDestination {
   biome?: BiomeId;
   x: number;
   z: number;
-  /** Place le joueur dans l'eau profonde, face à une paroi à escalader, ou devant le gisement le plus proche. */
-  kind?: 'eau' | 'paroi' | 'gisement';
+  /**
+   * Place le joueur dans l'eau profonde, face à une paroi à escalader, devant le gisement le plus proche,
+   * ou (phase 9) au pied de la chute d'eau, au bord du ruisseau ou dans le bassin les plus proches.
+   */
+  kind?: 'eau' | 'paroi' | 'gisement' | 'chute' | 'ruisseau' | 'bassin';
   node?: NodeKind;
 }
 
@@ -134,7 +137,88 @@ export const TEST_DESTINATIONS: TestDestination[] = [
   { id: 'argile', label: 'Gisement d’argile le plus proche', x: 0, z: 0, kind: 'gisement', node: 'gisement_argile' },
   { id: 'fer', label: 'Affleurement de fer le plus proche', x: 0, z: 0, kind: 'gisement', node: 'filon_fer' },
   { id: 'or', label: 'Gravier aurifère le plus proche', x: 0, z: 0, kind: 'gisement', node: 'gravier_or' },
+  { id: 'chute', label: 'Chute d’eau la plus proche', x: 0, z: 0, kind: 'chute' },
+  { id: 'ruisseau', label: 'Ruisseau le plus proche', x: 0, z: 0, kind: 'ruisseau' },
+  { id: 'bassin', label: 'Bassin le plus proche (nager)', x: 0, z: 0, kind: 'bassin' },
 ];
+
+/** Phase 9 : chute d'eau, ruisseau ou bassin le plus proche (outil de test). */
+function nearestWater(terrain: Terrain, kind: 'chute' | 'ruisseau' | 'bassin', x0: number, z0: number): ResolvedDestination | null {
+  if (!terrain.floraEnabled) return null;
+  const hydro = terrain.hydro;
+  hydro.ensure(x0, z0);
+  const dry = (x: number, z: number) => {
+    const h = terrain.heightAt(x, z);
+    return terrain.waterLevelAt(x, z) < h - 0.05 ? h : null;
+  };
+  if (kind === 'chute') {
+    // Les grandes chutes comptent comme plus proches (20 m de distance par mètre de hauteur).
+    let best = null;
+    let bd = Infinity;
+    for (const f of hydro.falls.values()) {
+      const d = Math.hypot(f.x2 - x0, f.z2 - z0) - (f.top - f.bottom) * 20;
+      if (d < bd) {
+        bd = d;
+        best = f;
+      }
+    }
+    if (!best) return null;
+    // Au pied, un peu en aval et sur le côté, face à la chute.
+    const mx = (best.x + best.x2) / 2;
+    const mz = (best.z + best.z2) / 2;
+    for (const back of [8, 12, 16, 22]) {
+      for (const side of [1, -1]) {
+        const off = best.width * 0.5 + 3;
+        const x = best.x2 + best.dx * back - best.dz * side * off;
+        const z = best.z2 + best.dz * back + best.dx * side * off;
+        const h = dry(x, z);
+        if (h !== null) return { x, y: h + 0.2, z, yaw: Math.atan2(mx - x, mz - z) };
+      }
+    }
+    return null;
+  }
+  if (kind === 'bassin') {
+    let best = null;
+    let bd = Infinity;
+    for (const p of hydro.pools.values()) {
+      if (p.depth === undefined || p.floor !== undefined) continue;
+      const d = Math.hypot(p.x - x0, p.z - z0);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    return best ? { x: best.x, y: best.surface - 1.3, z: best.z, yaw: null } : null;
+  }
+  // Ruisseau : au bord d'un tronçon assez profond pour y marcher dans l'eau, face au courant.
+  let best: { x: number; z: number; dx: number; dz: number; w: number } | null = null;
+  let bd = Infinity;
+  for (const st of hydro.streams.values()) {
+    const pts = st.points;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i]!;
+      const b = pts[i + 1]!;
+      if (a.fall || a.seep || a.width < 2) continue;
+      const x = (a.x + b.x) / 2;
+      const z = (a.z + b.z) / 2;
+      const d = Math.hypot(x - x0, z - z0);
+      if (d >= bd) continue;
+      const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+      bd = d;
+      best = { x, z, dx: (b.x - a.x) / l, dz: (b.z - a.z) / l, w: a.width };
+    }
+  }
+  if (!best) return null;
+  for (const side of [1, -1]) {
+    for (const off of [1.5, 2.5, 4]) {
+      const x = best.x - best.dz * side * (best.w * 0.5 + off);
+      const z = best.z + best.dx * side * (best.w * 0.5 + off);
+      const h = dry(x, z);
+      if (h !== null) return { x, y: h + 0.2, z, yaw: Math.atan2(best.x - x, best.z - z) };
+    }
+  }
+  return null;
+}
 
 /** Gisement d'un type donné le plus proche d'un point (recherche par anneaux de chunks, 4 km au plus). */
 export function nearestNode(terrain: Terrain, kind: NodeKind, x0: number, z0: number, maxRings = 64): { x: number; z: number; y: number } | null {
@@ -173,6 +257,10 @@ export interface ResolvedDestination {
 /** Trouve un point précis pour une destination de test. */
 export function resolveDestination(terrain: Terrain, d: TestDestination, from: { x: number; z: number } = { x: d.x, z: d.z }): ResolvedDestination {
   if (d.kind === 'eau') return { x: d.x, y: WATER_LEVEL - 1.3, z: d.z, yaw: null };
+  if (d.kind === 'chute' || d.kind === 'ruisseau' || d.kind === 'bassin') {
+    const r = nearestWater(terrain, d.kind, from.x, from.z);
+    return r ?? { x: from.x, y: terrain.heightAt(from.x, from.z) + 0.2, z: from.z, yaw: null };
+  }
   if (d.kind === 'gisement' && d.node) {
     const n = nearestNode(terrain, d.node, from.x, from.z);
     if (n) {
